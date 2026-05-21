@@ -121,4 +121,44 @@ struct TranscriptDisplayTests {
         let bad = ToolCallSummary(toolName: "Read", inputJSON: "{not json")
         #expect(bad.displayLabel == "Read")
     }
+
+    @Test("awaySummary turn passes through as its own display item")
+    func awaySummaryTurnPassesThroughAsOwnItem() {
+        let turn = ConversationTurn.awaySummary(text: "recap", timestamp: t(0))
+        let items = TranscriptDisplay.build([turn])
+        #expect(items.count == 1)
+        guard case .awaySummaryTurn(let extracted) = items[0] else {
+            Issue.record("expected .awaySummaryTurn")
+            return
+        }
+        #expect(extracted == turn)
+    }
+
+    @Test("awaySummary flushes pending tool block and breaks the run")
+    func awaySummaryFlushesPendingToolBlock() {
+        let turns: [ConversationTurn] = [
+            .assistantMessage(text: "", toolCalls: [ToolCallSummary(toolName: "Read")], timestamp: t(0)),
+            .assistantMessage(text: "", toolCalls: [ToolCallSummary(toolName: "Edit")], timestamp: t(1)),
+            .awaySummary(text: "recap", timestamp: t(2)),
+            .assistantMessage(text: "", toolCalls: [ToolCallSummary(toolName: "Bash")], timestamp: t(3)),
+            .assistantMessage(text: "", toolCalls: [ToolCallSummary(toolName: "Grep")], timestamp: t(4)),
+        ]
+        let items = TranscriptDisplay.build(turns)
+        #expect(items.count == 3)
+        if case .collapsedToolBlock(_, let counts) = items[0] {
+            #expect(counts.messages == 2)
+            #expect(counts.toolCalls == 2)
+        } else {
+            Issue.record("items[0] should be .collapsedToolBlock")
+        }
+        if case .awaySummaryTurn = items[1] {} else {
+            Issue.record("items[1] should be .awaySummaryTurn")
+        }
+        if case .collapsedToolBlock(_, let counts) = items[2] {
+            #expect(counts.messages == 2)
+            #expect(counts.toolCalls == 2)
+        } else {
+            Issue.record("items[2] should be .collapsedToolBlock")
+        }
+    }
 }

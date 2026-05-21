@@ -44,6 +44,7 @@ public enum TranscriptParser {
         var assistantGroups: [(id: String, timestamp: Date, contentBlocks: [[String: Any]])] = []
         var assistantIndex: [String: Int] = [:]  // message.id → index in assistantGroups
         var userTurns: [(text: String, timestamp: Date)] = []
+        var awaySummaryTurns: [(text: String, timestamp: Date)] = []
 
         let isoFormatter = ISO8601DateFormatter()
         isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -53,28 +54,40 @@ public enum TranscriptParser {
                   let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
                   let type = json["type"] as? String else { continue }
 
-            // Only process user and assistant types
-            guard type == "user" || type == "assistant" else { continue }
-
             let timestamp = parseTimestamp(json["timestamp"], formatter: isoFormatter) ?? Date.distantPast
-            guard let message = json["message"] as? [String: Any] else { continue }
 
-            if type == "user" {
-                if let text = extractUserText(from: message) {
-                    userTurns.append((text: text, timestamp: timestamp))
-                }
-            } else if type == "assistant" {
-                guard let messageId = message["id"] as? String,
-                      let contentArray = message["content"] as? [[String: Any]] else { continue }
+            // Note: the row preview uses TranscriptAwaySummaryScanner which suppresses
+            // recaps once the conversation resumes (stale). The detail view shows every
+            // recap in chronological order — historical context, not "current state".
+            if type == "system", json["subtype"] as? String == "away_summary" {
+                guard let content = json["content"] as? String else { continue }
+                let stripped = TranscriptAwaySummaryScanner.stripRecapHint(content)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if stripped.isEmpty { continue }
+                awaySummaryTurns.append((text: stripped, timestamp: timestamp))
+                continue
+            } else if type == "user" || type == "assistant" {
+                guard let message = json["message"] as? [String: Any] else { continue }
 
-                if let idx = assistantIndex[messageId] {
-                    assistantGroups[idx].contentBlocks.append(contentsOf: contentArray)
-                    // Use latest timestamp
-                    assistantGroups[idx].timestamp = timestamp
-                } else {
-                    assistantIndex[messageId] = assistantGroups.count
-                    assistantGroups.append((id: messageId, timestamp: timestamp, contentBlocks: contentArray))
+                if type == "user" {
+                    if let text = extractUserText(from: message) {
+                        userTurns.append((text: text, timestamp: timestamp))
+                    }
+                } else if type == "assistant" {
+                    guard let messageId = message["id"] as? String,
+                          let contentArray = message["content"] as? [[String: Any]] else { continue }
+
+                    if let idx = assistantIndex[messageId] {
+                        assistantGroups[idx].contentBlocks.append(contentsOf: contentArray)
+                        // Use latest timestamp
+                        assistantGroups[idx].timestamp = timestamp
+                    } else {
+                        assistantIndex[messageId] = assistantGroups.count
+                        assistantGroups.append((id: messageId, timestamp: timestamp, contentBlocks: contentArray))
+                    }
                 }
+            } else {
+                continue
             }
         }
 
@@ -91,6 +104,10 @@ public enum TranscriptParser {
             // Skip empty assistant turns (e.g., thinking-only)
             if text.isEmpty && toolCalls.isEmpty { continue }
             turns.append(.assistantMessage(text: text, toolCalls: toolCalls, timestamp: group.timestamp))
+        }
+
+        for summary in awaySummaryTurns {
+            turns.append(.awaySummary(text: summary.text, timestamp: summary.timestamp))
         }
 
         // Sort chronologically

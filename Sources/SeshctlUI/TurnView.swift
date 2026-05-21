@@ -80,3 +80,35 @@ struct AssistantTurnView: View {
     }
 }
 
+// MARK: - AwaySummaryTurnView
+// Left-aligned rounded card mirroring `UserTurnView`'s shape (same padding,
+// same corner radius) but filled with `Color.gray.opacity(0.15)` to mark it
+// as system-authored rather than accent-tinted user content. A leading clock
+// SF Symbol on `.firstTextBaseline` lets multi-line recaps wrap under
+// themselves, and `MessageBodyText` gives search-highlight parity with the
+// user/assistant turns.
+struct AwaySummaryTurnView: View {
+    let text: String
+    var isSearchActive: Bool = false
+    var highlightText: String? = nil
+    var currentMatchRange: Range<String.Index>? = nil
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "clock")
+                .foregroundStyle(.secondary)
+            MessageBodyText(text: text, isSearchActive: isSearchActive, query: highlightText, currentMatchRange: currentMatchRange)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.gray.opacity(0.15))
+        )
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+}

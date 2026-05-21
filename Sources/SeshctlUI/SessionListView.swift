@@ -18,6 +18,10 @@ public struct SessionListView: View {
     /// shows. Supplied by `AppDelegate`; nil in previews/tests hides the
     /// section.
     var onOpenIntegrations: (() -> Void)?
+    /// Plumbed through to `SettingsPopover` so the triple-dot menu's About
+    /// section can offer a manual Sparkle update check. Supplied by
+    /// `AppDelegate`; nil in previews/tests hides the button.
+    var onCheckForUpdates: (() -> Void)?
     var onQuit: (() -> Void)?
 
     public init(
@@ -28,6 +32,7 @@ public struct SessionListView: View {
         onOpenRecallDetail: ((RecallResult, Session?) -> Void)? = nil,
         onUninstall: (() -> Void)? = nil,
         onOpenIntegrations: (() -> Void)? = nil,
+        onCheckForUpdates: (() -> Void)? = nil,
         onQuit: (() -> Void)? = nil
     ) {
         self.viewModel = viewModel
@@ -37,6 +42,7 @@ public struct SessionListView: View {
         self.onOpenRecallDetail = onOpenRecallDetail
         self.onUninstall = onUninstall
         self.onOpenIntegrations = onOpenIntegrations
+        self.onCheckForUpdates = onCheckForUpdates
         self.onQuit = onQuit
     }
 
@@ -99,7 +105,8 @@ public struct SessionListView: View {
                         store: connectionStore,
                         onUninstall: onUninstall,
                         onQuit: onQuit,
-                        onOpenIntegrations: onOpenIntegrations
+                        onOpenIntegrations: onOpenIntegrations,
+                        onCheckForUpdates: onCheckForUpdates
                     )
                 }
             }
@@ -177,7 +184,7 @@ public struct SessionListView: View {
 
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(spacing: 0) {
+                        LazyVStack(spacing: 4) {
                             ForEach(Array(ordered.enumerated()), id: \.element.id) { index, row in
                                 if index < activeCount {
                                     let bucket = activeBuckets[index]
@@ -359,6 +366,7 @@ public struct SessionListView: View {
                 isBridged: viewModel.bridgedLocalIds.contains(session.id),
                 showCloudAffordances: connectionStore.hasClaudeConnection,
                 showAgentBadge: showAgentBadge,
+                awaySummary: viewModel.awaySummariesById[session.id],
                 onDetail: onOpenDetail.map { handler in
                     {
                         viewModel.markSessionRead(session)

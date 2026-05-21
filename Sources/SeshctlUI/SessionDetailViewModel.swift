@@ -164,6 +164,7 @@ public final class SessionDetailViewModel: ObservableObject {
             switch turn {
             case .userMessage(let t, _): text = t
             case .assistantMessage(let t, _, _): text = t
+            case .awaySummary(let t, _): text = t
             }
 
             var searchStart = text.startIndex
@@ -235,6 +236,7 @@ public final class SessionDetailViewModel: ObservableObject {
         switch turns[match.turnIndex] {
         case .userMessage(let t, _): text = t
         case .assistantMessage(let t, _, _): text = t
+        case .awaySummary(let t, _): text = t
         }
         let charOffset = text.distance(from: text.startIndex, to: match.range.lowerBound)
         let totalChars = text.count

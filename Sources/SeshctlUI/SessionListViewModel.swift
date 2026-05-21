@@ -27,11 +27,22 @@ public final class SessionListViewModel: ObservableObject {
     /// Filtered out of `activeRows` / `recentRows` to prevent the pair from
     /// showing twice. Computed in `refresh()` via `BridgeMatcher`.
     @Published public private(set) var bridgedRemoteIds: Set<String> = []
+    /// Latest Claude Code `away_summary` ("recap") per local session, keyed by
+    /// `session.id`. Sessions without a recap are absent (the row falls
+    /// through to its existing preview chain). Computed in `refresh()` via
+    /// `TranscriptAwaySummaryScanner` with `transcriptAwaySummaryCache`
+    /// providing mtime-based reuse so re-reads of unchanged transcripts are
+    /// skipped on the 2-second refresh cadence.
+    @Published public private(set) var awaySummariesById: [String: String] = [:]
     /// Per-transcript cache: `path → (mtime, cseId)`. Lets `refresh()` skip
     /// re-reading a live Claude transcript when its file mtime hasn't
     /// advanced. Bounded by `sessions.count` on each refresh (entries for
     /// paths no longer present in the session list are evicted).
     private var transcriptBridgeCache: [String: (mtime: Date, cseId: String?)] = [:]
+    /// Per-transcript cache: `path → (mtime, awaySummary)`. Mirrors
+    /// `transcriptBridgeCache` for Claude Code recaps. Pruned by
+    /// `pruneTranscriptAwaySummaryCache(keepingPaths:)` on each refresh.
+    private var transcriptAwaySummaryCache: [String: (mtime: Date, summary: String?)] = [:]
     @Published public private(set) var recallResults: [RecallResult] = []
     @Published public private(set) var isRecallSearching: Bool = false
     @Published public private(set) var recallIndexingDone: Int?
@@ -210,7 +221,20 @@ public final class SessionListViewModel: ObservableObject {
             )
             bridgedLocalIds = Set(pairs.map(\.localId))
             bridgedRemoteIds = Set(pairs.map(\.remoteId))
-            pruneTranscriptBridgeCache(keepingPaths: sessions.compactMap(\.transcriptPath))
+            // Pull the latest Claude Code `away_summary` per local Claude session
+            // into `awaySummariesById`. Reuses the per-transcript mtime cache to
+            // skip re-reading unchanged JSONLs. Non-Claude tools are guarded inside
+            // `cachedAwaySummary(for:)` and never hit the filesystem.
+            var summaries: [String: String] = [:]
+            for session in sessions {
+                if let summary = cachedAwaySummary(for: session) {
+                    summaries[session.id] = summary
+                }
+            }
+            awaySummariesById = summaries
+            let livePaths = sessions.compactMap(\.transcriptPath)
+            pruneTranscriptAwaySummaryCache(keepingPaths: livePaths)
+            pruneTranscriptBridgeCache(keepingPaths: livePaths)
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -687,6 +711,32 @@ public final class SessionListViewModel: ObservableObject {
     fileprivate func pruneTranscriptBridgeCache(keepingPaths paths: [String]) {
         let live = Set(paths)
         transcriptBridgeCache = transcriptBridgeCache.filter { live.contains($0.key) }
+    }
+
+    /// Scan `session.transcriptPath` for the latest `away_summary` content,
+    /// re-using a previous result when the transcript's mtime hasn't
+    /// advanced. Mirrors `cachedBridgedRemoteId(for:)`. Non-Claude tools
+    /// return nil without a filesystem hit — only Claude Code writes
+    /// `away_summary` records.
+    fileprivate func cachedAwaySummary(for session: Session) -> String? {
+        guard session.tool == .claude else { return nil }
+        guard let path = session.transcriptPath else { return nil }
+        let mtime = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+        if let mtime, let cached = transcriptAwaySummaryCache[path], cached.mtime == mtime {
+            return cached.summary
+        }
+        let summary = TranscriptAwaySummaryScanner.extractLatestAwaySummary(transcriptPath: path)
+        if let mtime {
+            transcriptAwaySummaryCache[path] = (mtime, summary)
+        }
+        return summary
+    }
+
+    /// Drop cache entries for transcripts whose owning session is no longer
+    /// in the live list. Mirrors `pruneTranscriptBridgeCache`.
+    fileprivate func pruneTranscriptAwaySummaryCache(keepingPaths paths: [String]) {
+        let live = Set(paths)
+        transcriptAwaySummaryCache = transcriptAwaySummaryCache.filter { live.contains($0.key) }
     }
 
     public func markSessionRead(_ session: Session) {

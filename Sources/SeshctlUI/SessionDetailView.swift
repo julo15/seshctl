@@ -104,6 +104,15 @@ public struct SessionDetailView: View {
                                         }
                                     case .collapsedToolBlock(let turns, let counts):
                                         CollapsedToolBlockView(turns: turns, counts: counts)
+                                    case .awaySummaryTurn(let turn):
+                                        if case .awaySummary(let text, _) = turn {
+                                            AwaySummaryTurnView(
+                                                text: text,
+                                                isSearchActive: viewModel.isSearchActive,
+                                                highlightText: viewModel.isSearchActive ? viewModel.searchQuery : nil,
+                                                currentMatchRange: viewModel.currentMatchRange(for: turn.id)
+                                            )
+                                        }
                                     }
                                 }
                                 .id(item.id)

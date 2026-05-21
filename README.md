@@ -9,7 +9,7 @@ A macOS session manager for terminal-based workflows. Tracks coding sessions acr
 - macOS 13+
 - Swift 6.0+ (comes with Xcode 16+) — only needed if you build from source
 - Optional: [jq](https://jqlang.github.io/jq/) — used by the standalone `seshctl-uninstall` fallback for robust JSON edits. Without it, the fallback leaves your hook config files untouched and writes a `.seshctl-uninstall.bak` next to each
-- Optional: `create-dmg` and the GitHub CLI for cutting releases — see [`docs/release.md`](docs/release.md)
+- For cutting releases (`make dist` + `make appcast` + `make publish`), see the full tooling list in [`docs/release.md`](docs/release.md)
 
 ## Install
 
@@ -28,28 +28,19 @@ On first launch, Seshctl shows a one-screen welcome panel. Click **Install** and
 
 All operations are idempotent and reversible.
 
-#### VS Code extension
+#### Editor Integrations (VS Code, VS Code Insiders, Cursor)
 
-If you use VS Code (or Cursor / VS Code Insiders), install the companion extension so Seshctl can focus terminal tabs by PID. DMG users don't need a source checkout — see [Editor Integrations](#editor-integrations) below for the in-app flow. From a source checkout you can also run the matching target — both install the same `.vsix`:
+The companion extension lets Seshctl focus the exact terminal tab (and, for Cursor, the exact chat thread) when you press Enter on a session. It ships pre-built inside the app at `Seshctl.app/Contents/Resources/extensions/seshctl.vsix` — DMG users don't need a source checkout.
 
-```sh
-make install-vscode   # VS Code (or VS Code Insiders)
-make install-cursor   # Cursor (also enables chat-thread focus for native Cursor chat sessions)
-```
+On a fresh install, the **Editor Integrations** window opens automatically after the welcome panel and lists every detected editor with an Install / Reinstall / Update button. You can revisit it any time from the menu-bar gear icon → **Editor Integrations → Configure…**. On subsequent launches, Seshctl silently refreshes editors that already have the extension installed; editors without it are left alone (you opt in once via the window).
 
-Reload the editor after installing to activate the extension.
+Reload the editor after the extension lands to activate it.
 
-#### Editor Integrations
-
-The companion extension ships pre-built inside the app at `Seshctl.app/Contents/Resources/extensions/seshctl.vsix`. On a fresh DMG install, the **Editor Integrations** window opens automatically after the welcome dialog and lists every detected editor (VS Code, VS Code Insiders, Cursor) with an Install / Reinstall / Update button. You can revisit it any time from the menu-bar gear icon → **Editor Integrations → Configure…**.
-
-On subsequent launches Seshctl checks the bundled extension version against what's installed and silently refreshes editors that have already opted in. Editors without the extension are left alone — the user opts in once through the Editor Integrations window.
-
-`make install-vscode` and `make install-cursor` still work for dev iteration from a source checkout. They're no longer the only install surface — just the fast path when you're working on the extension itself.
+> **Source-checkout dev iteration:** `make install-vscode` / `make install-cursor` rebuild `vscode-extension/` and push it straight to your local editor — faster than rebuilding the whole `.app` when you're hacking on the extension itself. Not the user-facing install path.
 
 ### Updating
 
-For now: download a new DMG from the releases page and drag it over the existing `/Applications/Seshctl.app`. macOS keeps your TCC Automation grants because the code-signing identity stays the same. On the next launch, Seshctl's launch-time install reconciler detects the bundle change and silently refreshes the CLI symlink, the standalone uninstaller, and the hook registrations — no manual step needed. **Auto-updates are coming in Phase 2** (see [Roadmap](#roadmap)).
+For v0.4.0+, the app auto-updates over Sparkle: on launch (and every 24h while running) it fetches the appcast at `https://julo15.github.io/seshctl/appcast.xml`, and when a newer version is available offers a one-click in-app install. You can also trigger a check on demand from **Settings → About → Check for Updates…**. v0.3.0 installs don't bundle Sparkle, so the one-time path to v0.4.0 is still "download the DMG and drag it over `/Applications/Seshctl.app`" — TCC grants survive because the signing identity stays the same.
 
 ### Migrating from a pre-DMG install
 
@@ -85,7 +76,7 @@ For producing a signed `.dmg` to share with others, see [`docs/release.md`](docs
 
 ### LLM CLI hooks
 
-Seshctl tracks session status through hooks for [Claude Code](https://docs.anthropic.com/en/docs/claude-code/hooks) and Codex. The install flow — DMG first launch or `make install` — registers these automatically, and the launch-time reconciler keeps them in sync on every subsequent launch. Hook scripts live in `~/.local/share/seshctl/hooks/{claude,codex}/` and are registered in `~/.claude/settings.json` and `~/.agents/hooks.json` respectively.
+Seshctl tracks session status through hooks for [Claude Code](https://docs.anthropic.com/en/docs/claude-code/hooks), Codex, and Cursor (1.7+). The install flow — DMG first launch or `make install` — registers these automatically, and the launch-time reconciler keeps them in sync on every subsequent launch. Hook scripts live in `~/.local/share/seshctl/hooks/{claude,codex,cursor}/` and are registered in `~/.claude/settings.json`, `~/.agents/hooks.json`, and `~/.cursor/hooks.json` respectively.
 
 ## Usage
 
@@ -212,7 +203,7 @@ These deferred phases are tracked in [`.agents/plans/2026-05-08-1151-seshctl-rea
 | Phase | What | Status / Tracking |
 |---|---|---|
 | **1B — Developer ID + notarization** | Drop the right-click-to-Open ritual on first install. One-time TCC re-prompt expected. | Tracking: `<LIN-ID>` (or "TODO — file ticket") |
-| **2 — Sparkle auto-updates** | Silent background updates. Replaces the current "Slack Jason a new DMG" workflow. | Tracking: `<LIN-ID>` (or "TODO — file ticket") |
+| **2 — Sparkle auto-updates** | In-app one-click updates over an EdDSA-signed appcast on GitHub Pages. | **Done in v0.4.0.** Plan: [`.agents/plans/2026-05-20-2300-sparkle-auto-updates.md`](.agents/plans/2026-05-20-2300-sparkle-auto-updates.md) |
 | **3 — GitHub Actions CI release** | `git tag v0.x.y && git push --tags` produces a complete release with no manual steps. Only worth it once release cadence justifies it. | Tracking: `<LIN-ID>` (or "TODO — file ticket") |
 
 Each phase has explicit triggers, first concrete steps, acceptance criteria, and risks documented in the plan file.

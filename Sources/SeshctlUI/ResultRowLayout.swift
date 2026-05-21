@@ -35,7 +35,11 @@ struct ResultRowLayout<Status: View, Content: View>: View {
     var isUnread: Bool = false
 
     var body: some View {
-        HStack(spacing: 12) {
+        // Top-aligned so the status dot, timestamp, accent bar, host icon
+        // and chevron sit flush with the first line of the content cluster
+        // when a row grows to multiple wrapped preview lines, instead of
+        // floating to the row's vertical center.
+        HStack(alignment: .top, spacing: 12) {
             // Status indicator
             Color.clear
                 .frame(width: 22, height: 22)

@@ -16,6 +16,10 @@ let package = Package(
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.4.1"),
         .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", from: "2.4.0"),
         .package(url: "https://github.com/gonzalezreal/swift-markdown-ui", from: "2.4.1"),
+        // Sparkle 2.x — auto-update framework. Attached to the SeshctlApp
+        // target only; SeshctlCore stays Foundation-only and the CLI doesn't
+        // need it.
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.0"),
     ],
     targets: [
         .target(
@@ -37,6 +41,7 @@ let package = Package(
                 "SeshctlCore",
                 "SeshctlUI",
                 .product(name: "KeyboardShortcuts", package: "KeyboardShortcuts"),
+                .product(name: "Sparkle", package: "Sparkle"),
             ]
         ),
         .executableTarget(

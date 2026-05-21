@@ -60,6 +60,7 @@ private func truncate(_ string: String, _ limit: Int) -> String {
 public enum ConversationTurn: Sendable, Equatable, Identifiable {
     case userMessage(text: String, timestamp: Date)
     case assistantMessage(text: String, toolCalls: [ToolCallSummary], timestamp: Date)
+    case awaySummary(text: String, timestamp: Date)
 
     public var id: String {
         switch self {
@@ -67,6 +68,8 @@ public enum ConversationTurn: Sendable, Equatable, Identifiable {
             return "user-\(ts.timeIntervalSince1970)-\(StableHash.djb2(text))"
         case .assistantMessage(let text, _, let ts):
             return "assistant-\(ts.timeIntervalSince1970)-\(StableHash.djb2(text))"
+        case .awaySummary(let text, let ts):
+            return "away-\(ts.timeIntervalSince1970)-\(StableHash.djb2(text))"
         }
     }
 
@@ -74,6 +77,7 @@ public enum ConversationTurn: Sendable, Equatable, Identifiable {
         switch self {
         case .userMessage(_, let ts): return ts
         case .assistantMessage(_, _, let ts): return ts
+        case .awaySummary(_, let ts): return ts
         }
     }
 
