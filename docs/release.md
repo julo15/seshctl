@@ -1,6 +1,6 @@
 # Cutting a release (Phase 1/2, manual)
 
-This walks through producing a signed `.dmg`, regenerating the Sparkle appcast, and uploading it all to a GitHub Release. Each step is manual — `make dist` + `make appcast` on your Mac, `git push` for the appcast, `gh release create` for the DMG. CI automation is deferred to Phase 3.
+This walks through producing a signed `.dmg`, regenerating the Sparkle appcast, and uploading it all to a GitHub Release. Three make commands: `make dist` builds and signs the DMG, `make appcast` updates the Sparkle metadata, `make publish` commits + pushes the metadata and creates the GitHub Release with the DMG attached. CI automation is deferred to Phase 3.
 
 For the bigger picture (why we're self-signed first, what later phases add), see the plan: [`.agents/plans/2026-05-08-1151-seshctl-real-app-phase1.md`](../.agents/plans/2026-05-08-1151-seshctl-real-app-phase1.md).
 
@@ -128,52 +128,43 @@ Review the diff:
 git diff docs/appcast.xml
 ```
 
-Commit the appcast + release notes and push to publish on Pages:
+## Publish
 
 ```bash
-git add docs/appcast.xml docs/release-notes/<VERSION>.md
-git commit -m "appcast: <VERSION>"
-git push
+make publish
 ```
 
-GitHub Pages rebuilds within ~60s. Verify:
+`make publish` chains two targets — they're separable so you can re-run only the second if the GitHub Release upload fails midway:
 
-```bash
-curl -sI https://julo15.github.io/seshctl/appcast.xml | head -5
-```
+1. **`make publish-docs`** (`scripts/publish-docs.sh`): pre-flight checks (on `main`, expected three paths and only those modified, DMG exists, no existing `v<VERSION>` tag locally or on origin, `gh auth status` happy), then `git add` the three metadata files, commits as `Release v<VERSION>`, pushes to `main`, and **polls** `https://julo15.github.io/seshctl/appcast.xml` every 5s until it advertises the new version (5min timeout). Idempotent — if Pages already serves the version, the whole step is a no-op.
+2. **`make publish-release`** (`scripts/publish-release.sh`): pre-flight (DMG + release notes exist, `gh auth status` happy, no existing GitHub Release for the version), then `gh release create v<VERSION>` with the DMG attached and `docs/release-notes/<VERSION>.md` as the body.
 
-## Cut the release
+`docs/release-notes/<VERSION>.md` is the single source of truth — `make appcast` embeds it in the appcast `<description>` (Sparkle's update prompt) and `gh release create` uses it as the Release body.
 
-> **Order matters.** Push the appcast/Info.plist/release-notes commit to `main` BEFORE running `gh release create`. Pages takes ~60s to rebuild after a push; once it does, Sparkle clients hitting `https://julo15.github.io/seshctl/appcast.xml` see the new `<item>` whose `<enclosure url>` points at the GitHub Release URL you're about to create. Reversing the order means the release is live but Pages still serves the old appcast (or 404 on the first release) — Sparkle in already-shipped builds 404s on the download and silently retries on the 24h timer. Verify Pages rebuilt with `curl -sI https://julo15.github.io/seshctl/appcast.xml | head -3` before tagging.
+### Recovery
 
-Tag and publish in one shot:
+- **`publish-docs` failed before the push.** Fix the underlying issue (e.g., resolve drift in your working tree), re-run `make publish`. The pre-flight is fully idempotent.
+- **`publish-docs` failed during the Pages poll** (Pages build broken, taking >5min). Check the repo's Actions tab; once Pages recovers, re-run `make publish` — the script's idempotency check at the top will skip the commit/push if it already landed, and re-poll from there.
+- **`publish-release` failed during the DMG upload.** Re-run `make publish-release` directly. If `gh release view v<VERSION>` shows the release exists but is missing the asset, either delete + retry (`gh release delete v<VERSION> --cleanup-tag --yes && make publish-release`) or upload the asset only (`gh release upload v<VERSION> dist/Seshctl-<VERSION>.dmg`).
 
-```bash
-VERSION=$(plutil -extract CFBundleShortVersionString raw -o - Resources/Info.plist)
-gh release create "v${VERSION}" \
-  "dist/Seshctl-${VERSION}.dmg" \
-  --title "Seshctl ${VERSION}" \
-  --notes-file "docs/release-notes/${VERSION}.md"
-```
-
-The `docs/release-notes/<VERSION>.md` file you wrote during the pre-release checklist drives both Sparkle's update prompt (via the appcast) and the GitHub Release body. Single source of truth.
-
-This will:
-- Create the `v${VERSION}` git tag locally (if not present) and push it.
-- Create the GitHub Release with the DMG attached.
-- Print the Release URL.
+> **Order matters.** Don't run `gh release create` manually — `make publish-release` enforces the right tag conventions. If you must publish manually, push the appcast/Info.plist/release-notes commit to `main` BEFORE creating the release. Pages takes ~60s to rebuild after a push; once it does, Sparkle clients hitting `https://julo15.github.io/seshctl/appcast.xml` see the new `<item>` whose `<enclosure url>` points at the GitHub Release URL you're about to create. Reversing the order means the release is live but Pages still serves the old appcast (or 404 on the first release) — Sparkle in already-shipped builds 404s on the download and silently retries on the 24h timer.
 
 > **Stage 1A note:** include in the release notes that on first install users must **right-click → Open** to bypass Gatekeeper. This will go away in Phase 1B once we notarize. See [Troubleshooting](#troubleshooting) below.
 
 ## Distribute
 
-Get the Release URL:
+`make publish-release` prints the Release URL on success. To re-fetch:
 
 ```bash
 gh release view "v${VERSION}" --json url -q .url
 ```
 
-Slack the link to anyone running Seshctl. Include in the message:
+Users on **v0.4.0+** auto-update through Sparkle within 24h of launch (or immediately via Settings → About → Check for Updates…) — no Slack message needed for ordinary upgrades. Slack only when:
+
+- This is the v0.4.0 cutover (existing v0.3.0 installs don't bundle Sparkle, so they need the link once).
+- The release is a **public-key rotation** (Sparkle in already-shipped builds will fail signature verification on the new DMG — users have to manually download from Releases). See [`docs/signing.md`](signing.md#public-key-rotation-if-the-private-key-is-lost).
+
+When you do Slack, include:
 
 - "Drag to /Applications, replace if it's already there. TCC grants are preserved across replacements."
 - "First install: right-click → Open to bypass Gatekeeper (self-signed cert; will go away in 1B)."

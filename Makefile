@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help build build-release bundle sign make-dmg dist appcast install cert-setup run-app run-cli test test-core test-ui clean resolve kill-build install-vscode install-cursor uninstall
+.PHONY: help build build-release bundle sign make-dmg dist appcast publish publish-docs publish-release install cert-setup run-app run-cli test test-core test-ui clean resolve kill-build install-vscode install-cursor uninstall
 
 # Colors
 CYAN   := \033[36m
@@ -64,6 +64,22 @@ dist: bundle sign make-dmg
 # See docs/release.md for the full release flow.
 appcast:
 	bash scripts/make-appcast.sh
+
+# End-to-end publish. `publish-docs` commits + pushes the metadata
+# (Info.plist + appcast + release notes) and waits for Pages to rebuild;
+# `publish-release` then creates the GitHub Release with the DMG asset.
+#
+# `publish` chains both. If `publish-release` fails midway (network blip
+# during upload, gh hiccup) re-run `make publish-release` directly —
+# `publish-docs` is idempotent and `make publish` will skip it the
+# second time if Pages already serves the version.
+publish: publish-docs publish-release
+
+publish-docs:
+	bash scripts/publish-docs.sh
+
+publish-release:
+	bash scripts/publish-release.sh
 
 # Dev iteration: rebuild + sign + drop the .app straight into /Applications.
 # Skips DMG creation (use `make dist` for the user-facing flow). Designed
