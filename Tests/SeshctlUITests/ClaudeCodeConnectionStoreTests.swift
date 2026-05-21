@@ -17,6 +17,12 @@ private actor StubFetcher: RemoteClaudeCodeFetching {
     func refresh() async throws -> [RemoteClaudeCodeSession] {
         try result.get()
     }
+
+    func fetchLatestAssistantText(sessionId: String) async throws -> String? {
+        // Existing tests don't exercise this; later step's tests will use a
+        // richer stub with per-id result injection.
+        nil
+    }
 }
 
 private func makeRemoteSession(id: String = "cse_test_\(UUID().uuidString)") -> RemoteClaudeCodeSession {

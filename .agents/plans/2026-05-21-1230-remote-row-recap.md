@@ -160,16 +160,18 @@ flowchart TD
 - [x] Parser tests written in same step (14 tests, all passing). Plan's Step 6 parser test list satisfied.
 
 ### Step 2: Fetcher method + protocol extension
-- [ ] In `Sources/SeshctlCore/RemoteClaudeCodeFetcher.swift`, extract a helper `buildAuthedRequest(url:cookieHeader:)` that takes a `URL` and applies the existing header set (anthropic-beta, anthropic-version, Origin, Referer, User-Agent, Accept, Cookie). Refactor `buildRemoteClaudeCodeRequest(cookieHeader:)` to delegate to it (or replace, if no external callers).
-- [ ] Add an actor method `func fetchLatestAssistantText(sessionId: String) async throws -> String?`:
+- [x] In `Sources/SeshctlCore/RemoteClaudeCodeFetcher.swift`, extract a helper `buildAuthedRequest(url:cookieHeader:)` that takes a `URL` and applies the existing header set (anthropic-beta, anthropic-version, Origin, Referer, User-Agent, Accept, Cookie). Refactor `buildRemoteClaudeCodeRequest(cookieHeader:)` to delegate to it (or replace, if no external callers).
+- [x] Add an actor method `func fetchLatestAssistantText(sessionId: String) async throws -> String?`:
   - Pull cookies via the same `cookieSource.currentCookies()` + filter pattern as `refresh()`.
   - Validate both `sessionKey` and `sessionKeyLC` are present (`.notConnected` otherwise).
   - Build URL `https://claude.ai/v1/code/sessions/\(sessionId)/events?limit=10` and request via the helper.
   - Execute via `urlSession.data(for:)`. Map status: 200 → parse with `RemoteEventsParser`; 401 → `.needsReauth`; other non-200 → `.http(status)`; URLError → `.transport(...)`.
   - Return the parser's result (which may be nil) on 200.
-- [ ] In `Sources/SeshctlUI/ClaudeCodeConnectionStore.swift`, extend the `RemoteClaudeCodeFetching` protocol with:
+- [x] In `Sources/SeshctlUI/ClaudeCodeConnectionStore.swift`, extend the `RemoteClaudeCodeFetching` protocol with:
   - `func fetchLatestAssistantText(sessionId: String) async throws -> String?`
-- [ ] Run `swift build` (120s) via a subagent.
+- [x] Run `swift build` (120s) via a subagent.
+- [x] StubFetcher stub added in `Tests/SeshctlUITests/ClaudeCodeConnectionStoreTests.swift` so existing store tests keep compiling.
+- [x] Fetcher tests written in same step (7 new tests; 18/18 fetcher tests pass; 12/12 store tests pass).
 
 ### Step 3: Connection store cache + dispatch
 - [ ] In `Sources/SeshctlUI/ClaudeCodeConnectionStore.swift`, add:

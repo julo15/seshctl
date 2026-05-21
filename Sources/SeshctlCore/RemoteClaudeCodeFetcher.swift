@@ -165,12 +165,12 @@ func flattenAPISession(_ api: APISession) -> RemoteClaudeCodeSession {
 
 // MARK: - Request building
 
-/// Builds the `GET /v1/code/sessions?limit=50` request with all required
-/// headers. Extracted as a pure helper so tests can exercise header shape
-/// without an actor hop.
-func buildRemoteClaudeCodeRequest(cookieHeader: String) -> URLRequest {
-    // swiftlint:disable:next force_unwrapping — constant, always valid
-    let url = URL(string: "https://claude.ai/v1/code/sessions?limit=50")!
+/// Builds a `GET` request to a claude.ai endpoint with the canonical
+/// header set the backend expects: Cookie + anthropic-beta + anthropic-version
+/// + Origin + Referer + Safari UA + Accept. Extracted as a pure helper so
+/// every claude.ai endpoint we hit (list, per-session events, future) shares
+/// one header definition.
+func buildAuthedRequest(url: URL, cookieHeader: String) -> URLRequest {
     var req = URLRequest(url: url)
     req.httpMethod = "GET"
     req.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
@@ -181,6 +181,15 @@ func buildRemoteClaudeCodeRequest(cookieHeader: String) -> URLRequest {
     req.setValue(RemoteClaudeCodeFetcher.safariUserAgent, forHTTPHeaderField: "User-Agent")
     req.setValue("application/json", forHTTPHeaderField: "Accept")
     return req
+}
+
+/// Builds the `GET /v1/code/sessions?limit=50` request with all required
+/// headers. Extracted as a pure helper so tests can exercise header shape
+/// without an actor hop.
+func buildRemoteClaudeCodeRequest(cookieHeader: String) -> URLRequest {
+    // swiftlint:disable:next force_unwrapping — constant, always valid
+    let url = URL(string: "https://claude.ai/v1/code/sessions?limit=50")!
+    return buildAuthedRequest(url: url, cookieHeader: cookieHeader)
 }
 
 /// JSONDecoder configured to parse ISO8601 timestamps with fractional seconds
@@ -319,5 +328,87 @@ public actor RemoteClaudeCodeFetcher {
 
         // 8. Return.
         return flat
+    }
+
+    /// Fetch the latest assistant text for a single remote session by issuing
+    /// `GET /v1/code/sessions/<id>/events?limit=10` and running the response
+    /// body through `RemoteEventsParser.extractLatestAssistantText`.
+    ///
+    /// Returns:
+    /// - The trimmed first non-empty line of the most-recent assistant event's
+    ///   first `type == "text"` content block, when one exists.
+    /// - `nil` when the session has no assistant events yet, or the latest
+    ///   assistant turn was tool-call-only (no text block). This is a valid
+    ///   "no recap available" signal — callers should fall through to the
+    ///   default preview.
+    ///
+    /// Throws on failure (not nil):
+    /// - `.notConnected` if either `sessionKey` or `sessionKeyLC` cookies are
+    ///   missing (matches `refresh()`'s precondition).
+    /// - `.needsReauth` on HTTP 401.
+    /// - `.http(status)` on any non-200/401 HTTP status.
+    /// - `.transport(...)` on URLSession-level failures or non-HTTP responses.
+    public func fetchLatestAssistantText(sessionId: String) async throws -> String? {
+        // 1. Pull cookies. Same precondition as `refresh()` — we need both
+        //    `sessionKey` (HttpOnly) and `sessionKeyLC` scoped to claude.ai.
+        let allCookies = await cookieSource.currentCookies()
+        let claudeCookies = allCookies.filter { cookie in
+            cookie.domain.hasSuffix("claude.ai")
+        }
+        let hasSessionKey = claudeCookies.contains(where: { $0.name == "sessionKey" })
+        let hasSessionKeyLC = claudeCookies.contains(where: { $0.name == "sessionKeyLC" })
+        guard hasSessionKey, hasSessionKeyLC else {
+            throw RemoteClaudeCodeError.notConnected
+        }
+
+        // 2. Build Cookie header from every .claude.ai-domain cookie.
+        let cookieHeader = claudeCookies
+            .map { "\($0.name)=\($0.value)" }
+            .joined(separator: "; ")
+
+        // 3. Build URL. Session ids are server-issued (`cse_<base32-ish>`) and
+        //    URL-path-safe in practice, but we defensively percent-encode via
+        //    URLComponents so anything unexpected can't break the URL.
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "claude.ai"
+        let encodedId = sessionId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionId
+        components.path = "/v1/code/sessions/\(encodedId)/events"
+        components.queryItems = [URLQueryItem(name: "limit", value: "10")]
+        guard let url = components.url else {
+            throw RemoteClaudeCodeError.transport("failed to build events URL for session \(sessionId)")
+        }
+
+        // 4. Build request via the shared header helper.
+        let request = buildAuthedRequest(url: url, cookieHeader: cookieHeader)
+
+        // 5. Issue request and map transport errors.
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await urlSession.data(for: request)
+        } catch let urlError as URLError {
+            throw RemoteClaudeCodeError.transport(urlError.localizedDescription)
+        } catch {
+            throw RemoteClaudeCodeError.transport(error.localizedDescription)
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw RemoteClaudeCodeError.transport("non-HTTP response")
+        }
+        switch http.statusCode {
+        case 200:
+            break
+        case 401:
+            throw RemoteClaudeCodeError.needsReauth
+        default:
+            throw RemoteClaudeCodeError.http(http.statusCode)
+        }
+
+        // 6. Hand the body to the parser. The parser tolerates malformed
+        //    JSON (returns nil) so we don't classify decode failures here as
+        //    errors — a malformed events body is a "no recap available" outcome
+        //    that self-heals on the next `last_event_at` advance.
+        return RemoteEventsParser.extractLatestAssistantText(eventsResponseData: data)
     }
 }

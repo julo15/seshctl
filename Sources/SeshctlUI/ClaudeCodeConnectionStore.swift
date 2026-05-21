@@ -11,6 +11,7 @@ import SeshctlCore
 /// spin up a real `URLSession` or WebKit cookie store.
 public protocol RemoteClaudeCodeFetching: Sendable {
     func refresh() async throws -> [RemoteClaudeCodeSession]
+    func fetchLatestAssistantText(sessionId: String) async throws -> String?
 }
 
 extension RemoteClaudeCodeFetcher: RemoteClaudeCodeFetching {}
