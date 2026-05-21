@@ -29,7 +29,7 @@ struct SessionTreeView: View {
 
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 0) {
+                LazyVStack(spacing: 4) {
                     ForEach(viewModel.treeGroups) { group in
                         GroupHeaderView(name: group.name, count: group.rows.count, isRepo: group.isRepo)
                             .id(group.id)
@@ -86,6 +86,7 @@ struct SessionTreeView: View {
                 isBridged: viewModel.bridgedLocalIds.contains(session.id),
                 showCloudAffordances: connectionStore.hasClaudeConnection,
                 showAgentBadge: showAgentBadge,
+                awaySummary: viewModel.awaySummariesById[session.id],
                 onDetail: onOpenDetail.map { handler in
                     {
                         viewModel.markSessionRead(session)

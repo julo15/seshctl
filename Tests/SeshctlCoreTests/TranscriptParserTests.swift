@@ -408,6 +408,99 @@ struct TranscriptParserTests {
         #expect(turn1.id == turn2.id)
     }
 
+    // MARK: - Away summary (system/away_summary)
+
+    @Test("away_summary record emits an awaySummary turn")
+    func awaySummaryRecordEmitsTurn() throws {
+        let line = """
+        {"type":"system","subtype":"away_summary","content":"Shipped two PRs to main today: #31 and #32. (disable recaps in /config)","timestamp":"2026-05-06T17:48:04.022Z","sessionId":"abc","cwd":"/work"}
+        """
+        let turns = try TranscriptParser.parse(data: Data(line.utf8))
+        #expect(turns.count == 1)
+        guard case .awaySummary(let text, let ts) = turns[0] else {
+            Issue.record("Expected awaySummary, got \(turns[0])")
+            return
+        }
+        #expect(text == "Shipped two PRs to main today: #31 and #32.")
+        #expect(ts != Date.distantPast)
+    }
+
+    @Test("away_summary strips the (disable recaps in /config) hint")
+    func awaySummaryStripsRecapHint() throws {
+        let line = """
+        {"type":"system","subtype":"away_summary","content":"All clear.   (disable recaps in /config)","timestamp":"2026-05-06T17:48:04.022Z","sessionId":"abc"}
+        """
+        let turns = try TranscriptParser.parse(data: Data(line.utf8))
+        #expect(turns.count == 1)
+        guard case .awaySummary(let text, _) = turns[0] else {
+            Issue.record("Expected awaySummary")
+            return
+        }
+        #expect(text == "All clear.")
+    }
+
+    @Test("away_summary whose content is only the hint is skipped")
+    func awaySummaryWithEmptyContentIsSkipped() throws {
+        let onlyHint = """
+        {"type":"system","subtype":"away_summary","content":"(disable recaps in /config)","timestamp":"2026-05-06T17:48:04.022Z","sessionId":"abc"}
+        """
+        let emptyString = """
+        {"type":"system","subtype":"away_summary","content":"","timestamp":"2026-05-06T17:48:05.022Z","sessionId":"abc"}
+        """
+        let whitespaceOnly = """
+        {"type":"system","subtype":"away_summary","content":"   \\n  ","timestamp":"2026-05-06T17:48:06.022Z","sessionId":"abc"}
+        """
+        let jsonl = [onlyHint, emptyString, whitespaceOnly].joined(separator: "\n")
+        let turns = try TranscriptParser.parse(data: Data(jsonl.utf8))
+        #expect(turns.isEmpty)
+    }
+
+    @Test("away_summary interleaves chronologically with user/assistant turns")
+    func awaySummaryInterleavesChronologically() throws {
+        let away1 = """
+        {"type":"system","subtype":"away_summary","content":"recap one (disable recaps in /config)","timestamp":"2026-01-01T00:00:02.000Z","sessionId":"abc"}
+        """
+        let user1 = makeUserLine(content: "\"first ask\"", timestamp: "2026-01-01T00:00:01.000Z")
+        let assistant1 = makeAssistantLine(messageId: "msg_1", contentBlocks: [
+            "{\"type\": \"text\", \"text\": \"reply\"}"
+        ], timestamp: "2026-01-01T00:00:03.000Z")
+        let user2 = makeUserLine(content: "\"next ask\"", timestamp: "2026-01-01T00:00:04.000Z")
+
+        // File order is intentionally scrambled relative to timestamps.
+        let jsonl = [assistant1, away1, user2, user1].joined(separator: "\n")
+        let turns = try TranscriptParser.parse(data: Data(jsonl.utf8))
+
+        #expect(turns.count == 4)
+        if case .userMessage(let t, _) = turns[0] { #expect(t == "first ask") } else { Issue.record("turns[0] should be user") }
+        if case .awaySummary(let t, _) = turns[1] { #expect(t == "recap one") } else { Issue.record("turns[1] should be awaySummary") }
+        if case .assistantMessage = turns[2] {} else { Issue.record("turns[2] should be assistant") }
+        if case .userMessage(let t, _) = turns[3] { #expect(t == "next ask") } else { Issue.record("turns[3] should be user") }
+    }
+
+    @Test("Other system subtypes are still ignored")
+    func otherSystemSubtypesStillIgnored() throws {
+        let bridge = """
+        {"type":"system","subtype":"bridge_status","content":"bridge up","timestamp":"2026-01-01T00:00:01.000Z"}
+        """
+        let duration = """
+        {"type":"system","subtype":"turn_duration","content":"42ms","timestamp":"2026-01-01T00:00:02.000Z"}
+        """
+        let plainSystem = """
+        {"type":"system","content":"no subtype","timestamp":"2026-01-01T00:00:03.000Z"}
+        """
+        let user = makeUserLine(content: "\"only me\"", timestamp: "2026-01-01T00:00:04.000Z")
+
+        let jsonl = [bridge, duration, plainSystem, user].joined(separator: "\n")
+        let turns = try TranscriptParser.parse(data: Data(jsonl.utf8))
+
+        #expect(turns.count == 1)
+        if case .userMessage(let text, _) = turns[0] {
+            #expect(text == "only me")
+        } else {
+            Issue.record("Expected single user turn")
+        }
+    }
+
     @Test("Codex event_msg tool branch captures name and input")
     func codexEventMsgToolCapturesInput() throws {
         let line = """

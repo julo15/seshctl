@@ -177,7 +177,7 @@ public struct SessionListView: View {
 
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(spacing: 0) {
+                        LazyVStack(spacing: 4) {
                             ForEach(Array(ordered.enumerated()), id: \.element.id) { index, row in
                                 if index < activeCount {
                                     let bucket = activeBuckets[index]
@@ -359,6 +359,7 @@ public struct SessionListView: View {
                 isBridged: viewModel.bridgedLocalIds.contains(session.id),
                 showCloudAffordances: connectionStore.hasClaudeConnection,
                 showAgentBadge: showAgentBadge,
+                awaySummary: viewModel.awaySummariesById[session.id],
                 onDetail: onOpenDetail.map { handler in
                     {
                         viewModel.markSessionRead(session)

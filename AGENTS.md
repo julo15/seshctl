@@ -135,6 +135,16 @@ Surfaces to touch when adding a new tool:
 - The CLI and Database are tool-agnostic except for the `SessionTool` raw string. Don't branch on `tool` in `seshctl-cli` unless it's genuinely tool-specific (e.g. the Cursor lazy-create path in `Update`/`End` keyed on `--conversation-id`).
 - Exhaustive `switch`es over `SessionTool` are the safety net: never add `default:` cases.
 
+## Transcript-Derived Row Signals
+
+Two row signals are derived by scanning the live JSONL transcript on each ~2s refresh: `bridgedLocalIds` (via `TranscriptBridgeScanner` → `transcriptBridgeCache`) and `awaySummariesById` (via `TranscriptAwaySummaryScanner` → `transcriptAwaySummaryCache`). Both live in `SessionListViewModel.refresh()`.
+
+**Pattern.** A pure-Foundation scanner in `SeshctlCore` returns an optional value per transcript path. `SessionListViewModel` mtime-caches results in a `[String: (mtime: Date, value: X?)]` dict, populates a published `[session.id: X]` map, and prunes cache entries for transcripts whose owning session is no longer live on each refresh. The row view consumes the published map by `session.id` lookup.
+
+**Asymmetry with `TranscriptParser`.** `TranscriptParser` emits every `system/away_summary` record as an `awaySummary` turn (historical context for the detail view). `TranscriptAwaySummaryScanner` suppresses recaps once the conversation resumes — the scanner returns `nil` when a user/assistant turn lands after the latest recap, because the row preview shows "current state" not history. Don't unify the two: if the row scanner started emitting historical recaps, rows would pin to a 3+-minute-old summary while the user is actively chatting — the bug the stale-recap invalidation rule was added to fix.
+
+**To add a new transcript-derived signal:** add a sibling pure-Foundation scanner in `SeshctlCore`, mirror `transcriptAwaySummaryCache` / `cachedAwaySummary(for:)` / `pruneTranscriptAwaySummaryCache(keepingPaths:)` on `SessionListViewModel`, plumb a new `@Published` map keyed by `session.id`, and consume by lookup from the row view. Don't branch on `tool` outside the cached helper — the Claude-only guard sits inside `cachedAwaySummary(for:)` so non-Claude tools never hit the filesystem.
+
 ## Editor Integrations
 
 Seshctl ships a companion VS Code / Cursor extension pre-built inside the app bundle, so DMG users can install it from an in-app onboarding pane without a source checkout. Source-checkout devs can still use `make install-vscode` / `make install-cursor` for fast iteration on the extension itself.

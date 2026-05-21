@@ -135,9 +135,16 @@ public struct RemoteClaudeCodeRowView: View {
     /// opacity. Mirrors `SessionRowView.mainContent`.
     @ViewBuilder
     private var mainContent: some View {
-        HStack(alignment: .center, spacing: 12) {
+        // Top-aligned, mirroring `SessionRowView.mainContent`, so the sender
+        // column sits flush with the first line of a multi-line preview.
+        HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
-                SenderText(display: session.senderDisplay, isUnread: isUnread)
+                HStack(spacing: 6) {
+                    SenderText(display: session.senderDisplay, isUnread: isUnread)
+                    if isUnread {
+                        UnreadPill()
+                    }
+                }
                 subtitleRow
             }
             .fontWeight(isUnread ? .bold : .regular)
@@ -156,20 +163,17 @@ public struct RemoteClaudeCodeRowView: View {
     /// ever loosens, keeping the typography mapping consistent with
     /// `SessionRowView.previewView` (15pt title3, bold-on-unread).
     ///
-    /// The unread pill leads the column when the row is unread, mirroring
-    /// `SessionRowView.previewView` so local and remote rows stay visually
-    /// in sync.
+    /// Plain preview column — the unread pill moved up next to the sender
+    /// (line 1), mirroring `SessionRowView.previewView`, so wrapped preview
+    /// lines flow flush against the column edge.
     @ViewBuilder
     private var previewView: some View {
-        HStack(spacing: 8) {
-            if isUnread {
-                UnreadPill()
-            }
-            previewText
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
+        previewText
+            .lineLimit(4)
+            .truncationMode(.tail)
+            // Mirrors SessionRowView's eyeballed preview line spacing.
+            .lineSpacing(3)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -191,6 +195,20 @@ public struct RemoteClaudeCodeRowView: View {
                 .font(.title3)
                 .italic()
                 .foregroundStyle(.tertiary)
+        case .awaySummary(let text):
+            // Defensive — remote rows have no local JSONL transcript so the
+            // `awaySummary` case is unreachable today, but it must exist for
+            // the switch to be exhaustive. Mirror `SessionRowView`'s clock-
+            // led rendering so the behavior matches if the contract ever
+            // loosens.
+            (
+                Text(Image(systemName: "clock")).foregroundColor(.secondary)
+                + Text("  ")
+                + Text(text)
+            )
+                .font(.title3)
+                .fontWeight(isUnread ? .bold : .regular)
+                .foregroundStyle(.primary)
         }
     }
 

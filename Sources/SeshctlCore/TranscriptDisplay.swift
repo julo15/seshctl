@@ -6,11 +6,12 @@ import Foundation
 public enum DisplayItem: Sendable, Equatable, Identifiable {
     case userTurn(ConversationTurn)
     case assistantTurn(ConversationTurn)
+    case awaySummaryTurn(ConversationTurn)
     case collapsedToolBlock(turns: [ConversationTurn], counts: BlockCounts)
 
     public var id: String {
         switch self {
-        case .userTurn(let turn), .assistantTurn(let turn):
+        case .userTurn(let turn), .assistantTurn(let turn), .awaySummaryTurn(let turn):
             return turn.id
         case .collapsedToolBlock(let turns, _):
             return "block-\(turns.first?.id ?? "")"
@@ -72,6 +73,9 @@ public enum TranscriptDisplay {
                     flushPending()
                     items.append(.assistantTurn(turn))
                 }
+            case .awaySummary:
+                flushPending()
+                items.append(.awaySummaryTurn(turn))
             }
         }
         flushPending()

@@ -23,18 +23,25 @@ public struct SessionRowView: View {
     /// agent kind, since the badge is redundant in that case. Driven by
     /// `SessionListViewModel.hasMultipleAgentTypes`.
     var showAgentBadge: Bool = true
+    /// Latest `away_summary` ("recap") for this session, if Claude Code has
+    /// written one to the local JSONL. When non-nil, the row's preview slot
+    /// shows the recap instead of `lastReply`/`lastAsk`/statusHint — see
+    /// `Session.previewContent(awaySummary:)`. Sourced from
+    /// `SessionListViewModel.awaySummariesById`.
+    var awaySummary: String? = nil
 
     var onDetail: (() -> Void)?
 
     @AppStorage(AppearanceDefaults.repoAccentBarKey) private var repoAccentBarEnabled: Bool = AppearanceDefaults.repoAccentBarDefault
 
-    public init(session: Session, hostApp: HostAppInfo, isUnread: Bool = false, isBridged: Bool = false, showCloudAffordances: Bool = false, showAgentBadge: Bool = true, onDetail: (() -> Void)? = nil) {
+    public init(session: Session, hostApp: HostAppInfo, isUnread: Bool = false, isBridged: Bool = false, showCloudAffordances: Bool = false, showAgentBadge: Bool = true, awaySummary: String? = nil, onDetail: (() -> Void)? = nil) {
         self.session = session
         self.hostApp = hostApp
         self.isUnread = isUnread
         self.isBridged = isBridged
         self.showCloudAffordances = showCloudAffordances
         self.showAgentBadge = showAgentBadge
+        self.awaySummary = awaySummary
         self.onDetail = onDetail
     }
 
@@ -84,15 +91,26 @@ public struct SessionRowView: View {
     /// accent bar, icon, pill, chevron) stays at full opacity throughout.
     @ViewBuilder
     private var mainContent: some View {
-        HStack(alignment: .center, spacing: 12) {
+        // Top-aligned so the sender column (line 1 + branch line 2) sits flush
+        // with the first line of the preview when the row grows to multiple
+        // wrapped lines, instead of floating to the vertical center of a tall
+        // preview block.
+        HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
                 // Sender line — just the repo name (or directory basename
-                // when the session has no git context). Worktree
-                // disambiguation moved to line 2's branch slot. Italic is
-                // reserved for R3's `.userPrompt` / `.statusHint` cases on
-                // the *preview* side — never duplicated on the sender side.
-                // Stale-row dimming happens at the row-opacity tier per R12a.
-                SenderText(display: session.senderDisplay, isUnread: isUnread)
+                // when the session has no git context), with the unread pill
+                // sitting immediately to its right when the row is unread.
+                // Worktree disambiguation moved to line 2's branch slot.
+                // Italic is reserved for R3's `.userPrompt` / `.statusHint`
+                // cases on the *preview* side — never duplicated on the
+                // sender side. Stale-row dimming happens at the row-opacity
+                // tier per R12a.
+                HStack(spacing: 6) {
+                    SenderText(display: session.senderDisplay, isUnread: isUnread)
+                    if isUnread {
+                        UnreadPill()
+                    }
+                }
 
                 // Branch / row-kind line. Per R6, sits at the same metric
                 // size as the sender and demotes via lower-contrast color
@@ -156,26 +174,23 @@ public struct SessionRowView: View {
     /// `.userPrompt` / `.statusHint` retain italic + dimmer color to
     /// remain visibly distinct from real assistant output (R3).
     ///
-    /// The unread pill leads the column when the row is unread — Gmail
-    /// idiom of an inline status badge sitting before the preview text,
-    /// not as right-edge chrome. Read rows omit the pill so the preview
-    /// text aligns flush with the column.
+    /// Plain preview column — the unread pill moved up next to the sender
+    /// (line 1) so wrapped preview lines flow flush against the column edge
+    /// rather than being indented to the right of the pill.
     @ViewBuilder
     private var previewView: some View {
-        HStack(spacing: 8) {
-            if isUnread {
-                UnreadPill()
-            }
-            previewText
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
+        previewText
+            .lineLimit(4)
+            .truncationMode(.tail)
+            // Eyeballed — small enough to keep 4-line previews compact, large enough
+            // that wrapped lines don't read as a single visual block.
+            .lineSpacing(3)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
     private var previewText: some View {
-        switch session.previewContent {
+        switch session.previewContent(awaySummary: awaySummary) {
         case .reply(let text):
             Text(text)
                 .font(.title3)
@@ -192,6 +207,22 @@ public struct SessionRowView: View {
                 .font(.title3)
                 .italic()
                 .foregroundStyle(.tertiary)
+        case .awaySummary(let text):
+            // Same typography as `.reply` — the recap is real authored content,
+            // not a UI fallback hint. See `PreviewContent.awaySummary` docstring.
+            // Inline clock glyph mirrors `AwaySummaryTurnView` in the detail
+            // view so the row preview and the transcript card read as the
+            // same kind of authored event. Text concatenation lets the glyph
+            // flow with the wrapped run instead of pinning the icon outside
+            // the text column.
+            (
+                Text(Image(systemName: "clock")).foregroundColor(.secondary)
+                + Text("  ")
+                + Text(text)
+            )
+                .font(.title3)
+                .fontWeight(isUnread ? .bold : .regular)
+                .foregroundStyle(.primary)
         }
     }
 
