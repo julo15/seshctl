@@ -9,12 +9,13 @@ For the bigger picture (why we're self-signed first, what later phases add), see
 Install the tools:
 
 ```bash
-brew install create-dmg gh jq
+brew install create-dmg gh jq discount
 ```
 
 - [`create-dmg`](https://github.com/create-dmg/create-dmg) — builds the styled `.dmg`.
 - [`gh`](https://cli.github.com/) — GitHub CLI used to create the Release. Auth via `gh auth login`.
 - `jq` — used by hook installer scripts; required for end-to-end smoke tests.
+- `discount` — provides the `markdown` CLI that `make appcast` calls to render `docs/release-notes/<VERSION>.md` into the appcast `<description>`. Without it the script falls back to a `<pre>`-wrapped copy and Sparkle's update prompt shows raw Markdown.
 
 `npm` (Node) must also be on PATH on the release build host. `make bundle` invokes it under the hood to build `vscode-extension/` and produce the bundled `.vsix`. Manage Node with `asdf` (per [`AGENTS.md`](../AGENTS.md) global guidance) rather than `brew install node`. The build drops two artifacts into the bundle automatically — `Contents/Resources/extensions/seshctl.vsix` and `Contents/Resources/extensions/seshctl.vsix.version` — via `scripts/build-app-bundle.sh`. No manual step.
 
@@ -143,6 +144,8 @@ curl -sI https://julo15.github.io/seshctl/appcast.xml | head -5
 
 ## Cut the release
 
+> **Order matters.** Push the appcast/Info.plist/release-notes commit to `main` BEFORE running `gh release create`. Pages takes ~60s to rebuild after a push; once it does, Sparkle clients hitting `https://julo15.github.io/seshctl/appcast.xml` see the new `<item>` whose `<enclosure url>` points at the GitHub Release URL you're about to create. Reversing the order means the release is live but Pages still serves the old appcast (or 404 on the first release) — Sparkle in already-shipped builds 404s on the download and silently retries on the 24h timer. Verify Pages rebuilt with `curl -sI https://julo15.github.io/seshctl/appcast.xml | head -3` before tagging.
+
 Tag and publish in one shot:
 
 ```bash
@@ -210,6 +213,22 @@ Sparkle's update path is several moving parts:
 - **Sparkle says "no update available" but the appcast clearly has a newer entry.** Check that `CFBundleVersion` (the integer build number) strictly increased — Sparkle compares this, not `CFBundleShortVersionString`. A version like `0.4.0` with a `CFBundleVersion` that stayed at `3` will be ignored.
 - **Sparkle rejects with a signature error.** The DMG was modified after `make appcast` signed it (e.g., re-uploaded a different build with the same filename) or `SUPublicEDKey` in `Info.plist` doesn't match the private key in the Keychain. Re-run `make appcast`; if that doesn't help, check the keychain item matches the public key with `.build/artifacts/sparkle/Sparkle/bin/generate_keys -p`.
 - **GitHub Pages serves stale appcast.** Pages caches aggressively. Wait ~60s after push; if still stale, check Actions tab for a failed Pages build.
+
+### Releasing from a new Mac — re-hydrate `dist/releases/`
+
+`dist/releases/` is gitignored — it's the local DMG mirror that `generate_appcast` walks to build the appcast. **Each Mac you release from has its own.** If you release from a different host than last time (laptop ↔ desktop, fresh machine, etc.), `make appcast` will walk an empty (or sparse) mirror and emit an appcast that drops every prior version. Users on intermediate versions still get the latest update advertised, but the appcast no longer carries the historical `<item>` entries.
+
+Before the first `make appcast` on a new release host, re-hydrate the mirror by downloading every prior DMG from GitHub Releases:
+
+```bash
+mkdir -p dist/releases
+gh release list --limit 50 --json tagName -q '.[].tagName' | while read tag; do
+  gh release download "$tag" --pattern "Seshctl-*.dmg" --dir dist/releases/ 2>/dev/null || true
+done
+ls dist/releases/   # should list every shipped Seshctl-*.dmg
+```
+
+Then `make appcast` produces a complete appcast. Cross-check the resulting `docs/appcast.xml` against the current `main` to confirm no versions were lost (`git diff docs/appcast.xml` should show only the new entry, not deletions).
 
 ### macOS Gatekeeper says the app is "damaged or untrusted" / "cannot verify developer"
 

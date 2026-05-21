@@ -49,7 +49,7 @@ On subsequent launches Seshctl checks the bundled extension version against what
 
 ### Updating
 
-For now: download a new DMG from the releases page and drag it over the existing `/Applications/Seshctl.app`. macOS keeps your TCC Automation grants because the code-signing identity stays the same. On the next launch, Seshctl's launch-time install reconciler detects the bundle change and silently refreshes the CLI symlink, the standalone uninstaller, and the hook registrations — no manual step needed. **Auto-updates are coming in Phase 2** (see [Roadmap](#roadmap)).
+For v0.4.0+, the app auto-updates over Sparkle: on launch (and every 24h while running) it fetches the appcast at `https://julo15.github.io/seshctl/appcast.xml`, and when a newer version is available offers a one-click in-app install. You can also trigger a check on demand from **Settings → About → Check for Updates…**. v0.3.0 installs don't bundle Sparkle, so the one-time path to v0.4.0 is still "download the DMG and drag it over `/Applications/Seshctl.app`" — TCC grants survive because the signing identity stays the same.
 
 ### Migrating from a pre-DMG install
 
@@ -212,7 +212,7 @@ These deferred phases are tracked in [`.agents/plans/2026-05-08-1151-seshctl-rea
 | Phase | What | Status / Tracking |
 |---|---|---|
 | **1B — Developer ID + notarization** | Drop the right-click-to-Open ritual on first install. One-time TCC re-prompt expected. | Tracking: `<LIN-ID>` (or "TODO — file ticket") |
-| **2 — Sparkle auto-updates** | Silent background updates. Replaces the current "Slack Jason a new DMG" workflow. | Tracking: `<LIN-ID>` (or "TODO — file ticket") |
+| **2 — Sparkle auto-updates** | In-app one-click updates over an EdDSA-signed appcast on GitHub Pages. | **Done in v0.4.0.** Plan: [`.agents/plans/2026-05-20-2300-sparkle-auto-updates.md`](.agents/plans/2026-05-20-2300-sparkle-auto-updates.md) |
 | **3 — GitHub Actions CI release** | `git tag v0.x.y && git push --tags` produces a complete release with no manual steps. Only worth it once release cadence justifies it. | Tracking: `<LIN-ID>` (or "TODO — file ticket") |
 
 Each phase has explicit triggers, first concrete steps, acceptance criteria, and risks documented in the plan file.

@@ -120,11 +120,23 @@ new_content, n = pattern.subn(
     content,
 )
 if n == 0:
-    print(f"  warning: no enclosure URLs matched the Pages pattern in {path}", file=sys.stderr)
-else:
-    with open(path, 'w', encoding='utf-8') as f:
-        f.write(new_content)
-    print(f"  rewrote {n} enclosure URL(s)")
+    # Fail loud — if generate_appcast ever changes its default URL shape
+    # (Sparkle 2.x has shown this between minor versions), we'd otherwise
+    # silently ship an appcast pointing at the Pages URL, which 404s for
+    # users since DMGs live on Releases.
+    print(
+        f"ERROR: no enclosure URLs in {path} matched the expected Pages pattern.",
+        file=sys.stderr,
+    )
+    print(
+        "       generate_appcast may have changed its default URL shape — "
+        "update the regex in scripts/make-appcast.sh.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+with open(path, 'w', encoding='utf-8') as f:
+    f.write(new_content)
+print(f"  rewrote {n} enclosure URL(s)")
 PYEOF
 
 echo ""

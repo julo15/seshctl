@@ -93,22 +93,43 @@ echo ""
 #    hashes of every nested item, so we must re-sign each with our identity
 #    in inside-out order. No entitlements on these helpers — they're not
 #    Automation clients.
+#
+#    Path goes through Versions/Current (the symlink Sparkle's framework
+#    maintains) so this survives Sparkle bumping its internal version letter
+#    (B → C → ...) in a future major release. Each required item is
+#    verified before signing — missing innards fail loud rather than
+#    silently producing a bundle whose outer signature can't validate.
 SPARKLE_FW="${BUNDLE_DIR}/Contents/Frameworks/Sparkle.framework"
 if [[ -d "${SPARKLE_FW}" ]]; then
   echo "→ Signing Sparkle helpers (nested)"
+  SPARKLE_VER="${SPARKLE_FW}/Versions/Current"
+  if [[ ! -d "${SPARKLE_VER}" ]]; then
+    echo "Error: ${SPARKLE_VER} not found. Sparkle.framework layout may have changed." >&2
+    exit 1
+  fi
   # XPC services are sandbox-only at runtime but bundled regardless; the
-  # outer signature still wraps their hashes, so they need signing.
-  for xpc in "${SPARKLE_FW}/Versions/B/XPCServices/Downloader.xpc" \
-             "${SPARKLE_FW}/Versions/B/XPCServices/Installer.xpc"; do
+  # outer signature still wraps their hashes, so they need signing. They
+  # may legitimately be absent in stripped Sparkle distributions — soft
+  # check, but warn if missing.
+  for xpc in "${SPARKLE_VER}/XPCServices/Downloader.xpc" \
+             "${SPARKLE_VER}/XPCServices/Installer.xpc"; do
     if [[ -d "${xpc}" ]]; then
       codesign --force --sign "${IDENTITY}" --options runtime --timestamp=none "${xpc}"
+    else
+      echo "  note: ${xpc##*Versions/Current/} not present, skipping" >&2
     fi
   done
-  # Updater.app and Autoupdate are the helpers Sparkle launches during install.
-  codesign --force --sign "${IDENTITY}" --options runtime --timestamp=none \
-    "${SPARKLE_FW}/Versions/B/Updater.app"
-  codesign --force --sign "${IDENTITY}" --options runtime --timestamp=none \
-    "${SPARKLE_FW}/Versions/B/Autoupdate"
+  # Updater.app and Autoupdate are required — Sparkle launches both during
+  # install. If they vanish, fail loud instead of producing a half-signed
+  # bundle.
+  for required in "${SPARKLE_VER}/Updater.app" "${SPARKLE_VER}/Autoupdate"; do
+    if [[ ! -e "${required}" ]]; then
+      echo "Error: required Sparkle nested item missing: ${required}" >&2
+      echo "       Sparkle.framework layout may have changed; review scripts/sign-app.sh." >&2
+      exit 1
+    fi
+    codesign --force --sign "${IDENTITY}" --options runtime --timestamp=none "${required}"
+  done
   # Now the framework as a whole.
   codesign --force --sign "${IDENTITY}" --options runtime --timestamp=none \
     "${SPARKLE_FW}"

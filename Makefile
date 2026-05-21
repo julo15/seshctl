@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help build build-release bundle sign make-dmg dist install cert-setup run-app run-cli test test-core test-ui clean resolve kill-build install-vscode install-cursor uninstall
+.PHONY: help build build-release bundle sign make-dmg dist appcast install cert-setup run-app run-cli test test-core test-ui clean resolve kill-build install-vscode install-cursor uninstall
 
 # Colors
 CYAN   := \033[36m

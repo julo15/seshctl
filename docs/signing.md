@@ -176,6 +176,10 @@ If you ever lose the private key — Keychain wiped, 1Password backup gone — r
 
 The rotation release breaks the auto-update chain exactly once. Sparkle will keep retrying the failed signature check silently in the background, so users who never restart their app or never see the Slack message stay on the pre-rotation version indefinitely until they manually upgrade. There's no clean way around this — it's the cost of having strong update signing.
 
+### Trade-off: `com.apple.security.cs.disable-library-validation`
+
+`Resources/Seshctl.entitlements` carries `com.apple.security.cs.disable-library-validation`. Hardened runtime + third-party `Sparkle.framework` + self-signed cert (no Team ID) can't coexist any other way — without this entitlement, dyld refuses to load Sparkle at launch with "mapping process and mapped file have different Team IDs". The trade-off: any dylib loaded by `SeshctlApp` at runtime no longer needs the same Team ID as the main bundle, which broadens the attack surface for malicious dylib injection. Acceptable for Phase 1A (self-signed, single-user, no notarization). Phase 1B (Developer ID + notarization) should revisit — once `Sparkle.framework` and `SeshctlApp` both carry the same Apple-issued Team ID, this entitlement can be dropped.
+
 ### Migration to Developer ID (Phase 1B)
 
 Sparkle's EdDSA signature is independent of Apple's code-signing identity, so the Phase 1A → 1B migration leaves Sparkle untouched. The Phase 1B notarization adds Apple's notary signature to the DMG; Sparkle continues to verify EdDSA on its own. The "right-click → Open" Gatekeeper ritual disappears for the first install; subsequent Sparkle updates already skip Gatekeeper today (Sparkle strips `com.apple.quarantine` on swap).
