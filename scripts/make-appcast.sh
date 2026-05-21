@@ -102,6 +102,31 @@ echo "==> Generating appcast for $(ls "${RELEASES_DIR}"/*.dmg 2>/dev/null | wc -
 mkdir -p "${DOCS_DIR}"
 mv -f "${RELEASES_DIR}/appcast.xml" "${DOCS_DIR}/appcast.xml"
 
+# Rewrite <enclosure url> to point at GitHub Releases instead of the default
+# Pages-relative URL. generate_appcast assumes DMGs are hosted alongside the
+# appcast (it inherits the feed URL's directory). Our DMGs live on GitHub
+# Releases under `v<VERSION>/Seshctl-<VERSION>.dmg`, so we rewrite each URL
+# in-place. This keeps the appcast EdDSA signature intact — signatures are
+# computed over the DMG content, not the URL string.
+echo "==> Rewriting enclosure URLs to GitHub Releases pattern"
+python3 - "${DOCS_DIR}/appcast.xml" <<'PYEOF'
+import re, sys
+path = sys.argv[1]
+with open(path, 'r', encoding='utf-8') as f:
+    content = f.read()
+pattern = re.compile(r'url="https://julo15\.github\.io/seshctl/Seshctl-([^"]+)\.dmg"')
+new_content, n = pattern.subn(
+    r'url="https://github.com/julo15/seshctl/releases/download/v\1/Seshctl-\1.dmg"',
+    content,
+)
+if n == 0:
+    print(f"  warning: no enclosure URLs matched the Pages pattern in {path}", file=sys.stderr)
+else:
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(new_content)
+    print(f"  rewrote {n} enclosure URL(s)")
+PYEOF
+
 echo ""
 echo "==> Wrote ${DOCS_DIR}/appcast.xml"
 echo ""

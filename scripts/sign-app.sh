@@ -88,7 +88,33 @@ echo "Signing with identity: ${IDENTITY}"
 echo "  Bundle: ${BUNDLE_DIR}"
 echo ""
 
-# 4. Sign nested CLI first (innermost binary, minimal entitlements).
+# 4. Sign embedded Sparkle.framework innards before the outer .app.
+#    Sparkle ships pre-signed adhoc; the outer bundle's signature includes
+#    hashes of every nested item, so we must re-sign each with our identity
+#    in inside-out order. No entitlements on these helpers — they're not
+#    Automation clients.
+SPARKLE_FW="${BUNDLE_DIR}/Contents/Frameworks/Sparkle.framework"
+if [[ -d "${SPARKLE_FW}" ]]; then
+  echo "→ Signing Sparkle helpers (nested)"
+  # XPC services are sandbox-only at runtime but bundled regardless; the
+  # outer signature still wraps their hashes, so they need signing.
+  for xpc in "${SPARKLE_FW}/Versions/B/XPCServices/Downloader.xpc" \
+             "${SPARKLE_FW}/Versions/B/XPCServices/Installer.xpc"; do
+    if [[ -d "${xpc}" ]]; then
+      codesign --force --sign "${IDENTITY}" --options runtime --timestamp=none "${xpc}"
+    fi
+  done
+  # Updater.app and Autoupdate are the helpers Sparkle launches during install.
+  codesign --force --sign "${IDENTITY}" --options runtime --timestamp=none \
+    "${SPARKLE_FW}/Versions/B/Updater.app"
+  codesign --force --sign "${IDENTITY}" --options runtime --timestamp=none \
+    "${SPARKLE_FW}/Versions/B/Autoupdate"
+  # Now the framework as a whole.
+  codesign --force --sign "${IDENTITY}" --options runtime --timestamp=none \
+    "${SPARKLE_FW}"
+fi
+
+# 5. Sign nested CLI (innermost binary in MacOS/, minimal entitlements).
 echo "→ Signing seshctl-cli (nested)"
 codesign --force \
   --sign "${IDENTITY}" \
@@ -97,8 +123,9 @@ codesign --force \
   --entitlements "${CLI_ENT}" \
   "${CLI_BIN}"
 
-# 5. Sign outer .app with Automation entitlement.
-#    NOT --deep on purpose; we already signed the CLI with its own entitlements.
+# 6. Sign outer .app with Automation entitlement.
+#    NOT --deep on purpose; we already signed the CLI + Sparkle bits with
+#    their own (or no) entitlements.
 echo "→ Signing Seshctl.app (outer)"
 codesign --force \
   --sign "${IDENTITY}" \
