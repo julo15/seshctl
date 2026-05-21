@@ -249,17 +249,9 @@ No new code component duplicates existing functionality.
 - [ ] Document this one-time step in `docs/release.md` so a future maintainer knows the dependency.
 
 ### Step 8: Update documentation
-- [ ] `docs/signing.md` — append a new section "EdDSA key for Sparkle auto-updates":
-  - Generation: `.build/artifacts/sparkle/Sparkle/bin/generate_keys` (login Keychain).
-  - Backup: `generate_keys -x` exports single-line base64, store in 1Password.
-  - Restore on a new build host: `generate_keys -f sparkle_priv.key`.
-  - **Public-key rotation procedure**: if the private key is ever lost, generate a new pair, update `SUPublicEDKey` in Info.plist, ship a new release. **Existing installs WILL NOT auto-update to that release** (their bundled public key doesn't match the new signature). They must manually download the rotation release. Document the user-facing communication ("hey, please manually grab v0.X.0 from Releases — we rotated signing keys") to send via Slack.
-- [ ] `docs/release.md`:
-  - Pre-release checklist: add "Regenerate appcast: `make appcast`, review `docs/appcast.xml`, commit + push".
-  - Add a new short section "GitHub Pages dependency" noting the one-time enablement done in Step 7.
-  - Optional: mention the `docs/release-notes/<VERSION>.md` convention if Step 6 implemented release-notes embedding.
-- [ ] `AGENTS.md`:
-  - Update the "Phase 2 will add Sparkle auto-updates…" paragraph in the Distributable App Build section: Phase 2 is implemented. Document where the EdDSA key lives, that `make appcast` regenerates `docs/appcast.xml`, that Pages serves it.
+- [x] `docs/signing.md` — new "EdDSA key for Sparkle auto-updates" section: generation, 1Password backup (mandatory), idempotency, public-key rotation procedure, Phase 1B compatibility.
+- [x] `docs/release.md` — title updated for Phase 1/2; new "EdDSA signing key" prerequisite, "GitHub Pages dependency (one-time)" section, "Regenerate the Sparkle appcast" step with `make appcast` + commit + push to Pages; `--notes-file docs/release-notes/<VERSION>.md` in the `gh release create` call; Troubleshooting expanded with Sparkle debug tips.
+- [x] `AGENTS.md` — replaced "Phase 2 will add Sparkle auto-updates" paragraph with pointer to new section. Added "Sparkle Auto-Updates (Phase 2)" section covering bundle wiring, feed URL, UI surface, EdDSA key, release pipeline, invariants, and "Where things live" table.
 
 ### Step 9: Tests
 - [ ] Create `Tests/SeshctlAppTests/InfoPlistSparkleKeysTests.swift` (or place in the SeshctlCore test target if app-target tests don't exist — preferable to extend an existing test target than create a new one).
