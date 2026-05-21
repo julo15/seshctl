@@ -135,7 +135,9 @@ public struct RemoteClaudeCodeRowView: View {
     /// opacity. Mirrors `SessionRowView.mainContent`.
     @ViewBuilder
     private var mainContent: some View {
-        HStack(alignment: .center, spacing: 12) {
+        // Top-aligned, mirroring `SessionRowView.mainContent`, so the sender
+        // column sits flush with the first line of a multi-line preview.
+        HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
                     SenderText(display: session.senderDisplay, isUnread: isUnread)

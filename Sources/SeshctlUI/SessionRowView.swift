@@ -91,7 +91,11 @@ public struct SessionRowView: View {
     /// accent bar, icon, pill, chevron) stays at full opacity throughout.
     @ViewBuilder
     private var mainContent: some View {
-        HStack(alignment: .center, spacing: 12) {
+        // Top-aligned so the sender column (line 1 + branch line 2) sits flush
+        // with the first line of the preview when the row grows to multiple
+        // wrapped lines, instead of floating to the vertical center of a tall
+        // preview block.
+        HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
                 // Sender line — just the repo name (or directory basename
                 // when the session has no git context), with the unread pill
