@@ -254,12 +254,9 @@ No new code component duplicates existing functionality.
 - [x] `AGENTS.md` — replaced "Phase 2 will add Sparkle auto-updates" paragraph with pointer to new section. Added "Sparkle Auto-Updates (Phase 2)" section covering bundle wiring, feed URL, UI surface, EdDSA key, release pipeline, invariants, and "Where things live" table.
 
 ### Step 9: Tests
-- [ ] Create `Tests/SeshctlAppTests/InfoPlistSparkleKeysTests.swift` (or place in the SeshctlCore test target if app-target tests don't exist — preferable to extend an existing test target than create a new one).
-- [ ] Test cases (Swift Testing — `@Suite`, `@Test`, `#expect`):
-  - **`testInfoPlistHasSparkleFeedURL`**: reads `Resources/Info.plist`, asserts `SUFeedURL` exists, is a String, equals `https://julo15.github.io/seshctl/appcast.xml`. Catches typos / accidental removal.
-  - **`testInfoPlistHasSparklePublicKey`**: asserts `SUPublicEDKey` exists, is a non-empty String, decodes as base64 to exactly 32 bytes (ed25519 public key size). Catches typo / truncation / dropped key.
-  - **`testInfoPlistHasSparkleAutomaticChecks`**: asserts `SUEnableAutomaticChecks` exists, is a Bool, is `true`. Catches accidental flip to disable auto-checks.
-- [ ] Run `swift test --enable-code-coverage` via subagent. Confirm all three pass and the full suite stays green.
+- [x] Created `Tests/SeshctlAppTests/InfoPlistSparkleKeysTests.swift` with `repoRoot()` helper mirroring SeshctlCoreTests pattern.
+- [x] Three tests: SUFeedURL exact URL match, SUPublicEDKey base64 → 32 bytes, SUEnableAutomaticChecks true. All pass.
+- [x] Full suite green: 781/781 (was 778; 3 new tests added).
 
 ### Step 10: End-to-end smoke (manual)
 - [ ] Bump `Info.plist` to `0.4.0-test` (`CFBundleShortVersionString`) and `4` (`CFBundleVersion`). Run `make dist` → produces `dist/Seshctl-0.4.0-test.dmg`.
