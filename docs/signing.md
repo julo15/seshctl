@@ -112,3 +112,74 @@ Once we enroll in the Apple Developer Program ($99/yr):
 5. Update README to remove the "right-click → Open" Gatekeeper note.
 
 Switching from Phase 1A to 1B changes the signing identity, which **invalidates all existing TCC grants** — every user will be re-prompted once per browser/terminal. Communicate this clearly in the 1A→1B release notes. The full Phase 1B plan is in [`.agents/plans/2026-05-08-1151-seshctl-real-app-phase1.md`](../.agents/plans/2026-05-08-1151-seshctl-real-app-phase1.md) under "Future Phases".
+
+## EdDSA key for Sparkle auto-updates
+
+Phase 2 added Sparkle. Sparkle uses its own EdDSA signatures (independent of Apple's code signature) to verify that a downloaded DMG actually came from us. The signing key lifecycle mirrors the `.p12` pattern above.
+
+### First-time setup (once per release host)
+
+```bash
+swift build   # fetches Sparkle artifact if missing
+.build/artifacts/sparkle/Sparkle/bin/generate_keys
+```
+
+`generate_keys`:
+
+1. Creates an ed25519 keypair.
+2. Stores the **private key** in the login Keychain as item `https://sparkle-project.org` (the only keychain item Sparkle ever creates).
+3. Prints the **base64 public key** to stdout.
+
+The public key goes into `Resources/Info.plist` as the `SUPublicEDKey` string value. Without it, the bundled Sparkle refuses to install any update.
+
+### Backup (mandatory)
+
+```bash
+.build/artifacts/sparkle/Sparkle/bin/generate_keys -x /tmp/sparkle_priv.key
+cat /tmp/sparkle_priv.key   # single line of base64 — paste into 1Password
+trash /tmp/sparkle_priv.key
+```
+
+Store the base64 content in a 1Password secure note titled **"Seshctl Sparkle EdDSA private key"** alongside the existing Seshctl `.p12` entry.
+
+`generate_keys` is idempotent: re-running it (with or without `-x`) finds the existing Keychain entry and either prints / exports it. It does NOT generate a fresh pair on top.
+
+Verify the public key matches Info.plist:
+
+```bash
+.build/artifacts/sparkle/Sparkle/bin/generate_keys -p
+plutil -extract SUPublicEDKey raw -o - Resources/Info.plist
+# both should print the same base64 string
+```
+
+### Where things live
+
+| Artifact | Path | Committed? |
+|---|---|---|
+| Login-keychain item | `https://sparkle-project.org` | n/a |
+| Backup base64 | 1Password "Seshctl Sparkle EdDSA private key" | No |
+| Public key | `Resources/Info.plist` → `SUPublicEDKey` | Yes |
+
+### Signing a release
+
+`make appcast` (introduced in Phase 2) runs `sign_update` + `generate_appcast` against the DMG mirror under `dist/releases/`. Both tools pick up the private key from the login Keychain automatically — there's no key path to thread through. See [`docs/release.md`](release.md) for the full release flow.
+
+### Public-key rotation (if the private key is lost)
+
+If you ever lose the private key — Keychain wiped, 1Password backup gone — recovery is **not possible**. The existing installs out in the wild are wedded to the bundled public key; any new release signed with a different private key will fail verification and Sparkle will refuse to install it. The recovery procedure:
+
+1. Generate a new keypair: `.build/artifacts/sparkle/Sparkle/bin/generate_keys`.
+2. Update `SUPublicEDKey` in `Resources/Info.plist` with the new public key.
+3. Back up the new private key to 1Password (replacing the lost entry).
+4. Cut a normal release (`make dist && make appcast && gh release create ...`).
+5. **Notify users via Slack** that auto-updates are broken on the in-the-wild installs and they must manually download the rotation release from GitHub Releases. Subsequent releases will auto-update from the rotation version onward.
+
+The rotation release breaks the auto-update chain exactly once. Sparkle will keep retrying the failed signature check silently in the background, so users who never restart their app or never see the Slack message stay on the pre-rotation version indefinitely until they manually upgrade. There's no clean way around this — it's the cost of having strong update signing.
+
+### Trade-off: `com.apple.security.cs.disable-library-validation`
+
+`Resources/Seshctl.entitlements` carries `com.apple.security.cs.disable-library-validation`. Hardened runtime + third-party `Sparkle.framework` + self-signed cert (no Team ID) can't coexist any other way — without this entitlement, dyld refuses to load Sparkle at launch with "mapping process and mapped file have different Team IDs". The trade-off: any dylib loaded by `SeshctlApp` at runtime no longer needs the same Team ID as the main bundle, which broadens the attack surface for malicious dylib injection. Acceptable for Phase 1A (self-signed, single-user, no notarization). Phase 1B (Developer ID + notarization) should revisit — once `Sparkle.framework` and `SeshctlApp` both carry the same Apple-issued Team ID, this entitlement can be dropped.
+
+### Migration to Developer ID (Phase 1B)
+
+Sparkle's EdDSA signature is independent of Apple's code-signing identity, so the Phase 1A → 1B migration leaves Sparkle untouched. The Phase 1B notarization adds Apple's notary signature to the DMG; Sparkle continues to verify EdDSA on its own. The "right-click → Open" Gatekeeper ritual disappears for the first install; subsequent Sparkle updates already skip Gatekeeper today (Sparkle strips `com.apple.quarantine` on swap).

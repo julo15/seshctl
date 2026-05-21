@@ -1,167 +1,157 @@
-# Cutting a release (Phase 1, manual)
+# Cutting a release
 
-This walks through producing a signed `.dmg` and uploading it to a GitHub Release. Phase 1 is intentionally manual — `make dist` on your Mac, `gh release create` to publish, Slack a link to users. CI automation is deferred to Phase 3.
-
-For the bigger picture (why we're self-signed first, what later phases add), see the plan: [`.agents/plans/2026-05-08-1151-seshctl-real-app-phase1.md`](../.agents/plans/2026-05-08-1151-seshctl-real-app-phase1.md).
-
-## Prerequisites (one-time)
-
-Install the tools:
+Three make commands ship a new Seshctl version end-to-end:
 
 ```bash
-brew install create-dmg gh jq
+make dist      # build + sign DMG
+make appcast   # regenerate Sparkle appcast (EdDSA-signed)
+make publish   # commit + push metadata, wait for Pages, gh release create
 ```
 
-- [`create-dmg`](https://github.com/create-dmg/create-dmg) — builds the styled `.dmg`.
-- [`gh`](https://cli.github.com/) — GitHub CLI used to create the Release. Auth via `gh auth login`.
-- `jq` — used by hook installer scripts; required for end-to-end smoke tests.
+Phase 1 of the manual release pipeline. CI automation is deferred to Phase 3.
 
-`npm` (Node) must also be on PATH on the release build host. `make bundle` invokes it under the hood to build `vscode-extension/` and produce the bundled `.vsix`. Manage Node with `asdf` (per [`AGENTS.md`](../AGENTS.md) global guidance) rather than `brew install node`. The build drops two artifacts into the bundle automatically — `Contents/Resources/extensions/seshctl.vsix` and `Contents/Resources/extensions/seshctl.vsix.version` — via `scripts/build-app-bundle.sh`. No manual step.
+## How it works
 
-Set up the self-signed code-signing identity (once per Mac):
+Sparkle auto-updates use **two parallel channels** that travel together:
+
+| Channel | What it carries | Where it lives |
+|---|---|---|
+| **Metadata** (text, version-controlled) | `Resources/Info.plist` (version bump), `docs/release-notes/<VERSION>.md`, `docs/appcast.xml` (EdDSA signature + download URL) | Committed to `main`; served by **GitHub Pages** from the `/docs` folder at `https://julo15.github.io/seshctl/appcast.xml` |
+| **Artifact** (binary, NOT in git) | `Seshctl-<VERSION>.dmg` (signed by self-signed code-signing cert + EdDSA over the DMG bytes) | Uploaded as a **GitHub Release asset** at `github.com/julo15/seshctl/releases/download/v<VERSION>/Seshctl-<VERSION>.dmg` |
+
+A user's Sparkle client does these four steps in order:
+
+1. **Fetch metadata** — on launch and every 24h, HTTP GET to the Pages appcast URL.
+2. **Version-compare** — `<sparkle:version>` in the appcast vs the bundled `CFBundleVersion`. If the appcast's is higher, show the update prompt.
+3. **Download artifact** — pull the DMG from the URL the appcast advertises (the GitHub Releases path).
+4. **Verify + swap** — check the bytes against the EdDSA signature in the appcast (public key bundled in the app's Info.plist), strip quarantine, replace `/Applications/Seshctl.app`, relaunch.
+
+**The order of `make publish` matters.** It pushes the metadata first, polls Pages until the new appcast is live, *then* creates the GitHub Release. Reversed, the release tag exists but the appcast still advertises the old version — Sparkle in already-shipped builds doesn't see anything to update to until Pages catches up. `make publish-docs` and `make publish-release` are separable so you can re-run only the second if `gh release create` fails midway.
+
+## One-time setup
 
 ```bash
-make cert-setup
-```
-
-See [`docs/signing.md`](signing.md) for what this does, where the cert lives, and how to back it up. **Back up the `.p12`** to 1Password before continuing — losing it means a different code signature on the next Mac, which invalidates every TCC grant.
-
-Authenticate the GitHub CLI (once per Mac):
-
-```bash
+brew install create-dmg gh jq discount
+make cert-setup                # self-signed code-signing identity, login keychain
 gh auth login
+swift build                    # fetches Sparkle artifact under .build/
+.build/artifacts/sparkle/Sparkle/bin/generate_keys
+# back up the printed private key per docs/signing.md (1Password)
 ```
 
-See the [`gh` docs](https://cli.github.com/manual/gh_auth_login) for OAuth vs. token flow.
+Then enable GitHub Pages once: **repo Settings → Pages → Source: `main` / Folder: `/docs`**. Within 60s `https://julo15.github.io/seshctl/` should serve.
 
-## Pre-release checklist
+Tools needed:
 
-Before tagging anything:
+- `create-dmg` — styled DMG builder.
+- `gh` — GitHub CLI; creates the Release.
+- `jq` — required by hook installer scripts (smoke-test paths).
+- `discount` — provides the `markdown` CLI used to render release notes into the appcast `<description>`.
+- `node` / `npm` — bundled VS Code/Cursor extension build (managed via `asdf`).
 
-- [ ] **Tests pass.** Run `swift test` in a subagent (per [`AGENTS.md`](../AGENTS.md)). Don't proceed on red.
-- [ ] **Bump `CFBundleShortVersionString`** in [`Resources/Info.plist`](../Resources/Info.plist). E.g. `0.1.0` → `0.1.1`. This is the human-facing version.
-- [ ] **Bump `CFBundleVersion`** to a new monotonically increasing integer. E.g. `1` → `2`. This is the machine-facing version Sparkle (Phase 2) will eventually compare. Note: `CFBundleVersion` is a string-typed plist value (`<string>` in `Resources/Info.plist`) containing a monotonically-increasing integer.
-- [ ] **Update `CHANGELOG.md`** with release notes. The repo doesn't have a `CHANGELOG.md` yet — recommend creating one alongside the first DMG release. Use whatever convention you like ([Keep a Changelog](https://keepachangelog.com/) is a fine default).
-- [ ] Working tree is clean: `git status` shows nothing uncommitted.
+Back up the EdDSA private key (one-line base64) and the `.p12` code-signing key to 1Password. See [`docs/signing.md`](signing.md) for details.
 
-## Build & sign
+## Cutting a release
 
-```bash
-make dist
-```
+1. **Bump version** in [`Resources/Info.plist`](../Resources/Info.plist):
+   - `CFBundleShortVersionString`: human-facing (e.g., `0.3.0` → `0.4.0`).
+   - `CFBundleVersion`: monotonically-increasing integer that Sparkle compares (`3` → `4`). **Sparkle ignores releases that don't strictly bump this.**
+2. **Write release notes** at `docs/release-notes/<VERSION>.md`. Used as both Sparkle's update prompt body and the GitHub Release body — single source of truth.
+3. **Verify tests pass**: `swift test` (via a subagent per [`AGENTS.md`](../AGENTS.md)).
+4. **Build**:
 
-This runs three steps in order:
+   ```bash
+   make dist        # → dist/Seshctl-<VERSION>.dmg
+   ```
+5. **Smoke test the DMG** (don't skip — the `.dmg` is what users run, not your local build):
 
-1. `make bundle` — universal release build, assembles `dist/Seshctl.app`.
-2. `make sign` — signs `seshctl-cli` (nested) then `Seshctl.app` (outer) with the `Seshctl Self-Signed` identity. Hardened runtime + `--timestamp=none`.
-3. `make-dmg` — produces `dist/Seshctl-<VERSION>.dmg` via `create-dmg`.
+   ```bash
+   open dist/Seshctl-<VERSION>.dmg
+   ```
 
-Output: `dist/Seshctl-<VERSION>.dmg` ready to attach to a Release.
+   Drag `Seshctl.app` to a temp folder (NOT `/Applications`), right-click → Open, confirm the welcome panel appears, then **Cancel** out — you don't want this build to overwrite your dev install. Quit. Detach: `hdiutil detach "/Volumes/Seshctl <VERSION>"`.
+6. **Regenerate the appcast**:
 
-## Smoke test the DMG locally
+   ```bash
+   make appcast     # → docs/appcast.xml
+   git diff docs/appcast.xml   # review
+   ```
+7. **Publish** (commits metadata, waits for Pages, creates GitHub Release):
 
-Don't skip this. The `.dmg` is what users run, not the `.app` you just built.
+   ```bash
+   make publish
+   ```
 
-```bash
-open dist/Seshctl-<VERSION>.dmg
-```
+   `make publish` chains `publish-docs` (commit + push + poll Pages with 5min timeout) then `publish-release` (`gh release create` with DMG + notes). Pre-flight checks refuse if you're not on `main`, the working tree has unexpected changes, the DMG is missing, the tag already exists, etc.
 
-Confirm the bundled extension artifacts are present and non-empty before opening the DMG:
+8. **Verify**: `gh release view "v$(plutil -extract CFBundleShortVersionString raw -o - Resources/Info.plist)"`.
 
-```bash
-ls -l dist/Seshctl.app/Contents/Resources/extensions/seshctl.vsix \
-      dist/Seshctl.app/Contents/Resources/extensions/seshctl.vsix.version
-```
+### Distribute
 
-Both files must exist with non-zero size. If either is missing or empty, `make bundle` didn't run the extension build — most likely cause is `npm` not being on PATH.
+Users on **v0.4.0+** auto-update through Sparkle within 24h of launch (or on-demand via Settings → About → Check for Updates…). No Slack message needed for ordinary upgrades.
 
-In Finder:
+Slack only when:
 
-1. Drag `Seshctl.app` to a temp folder (e.g. `~/Desktop/seshctl-smoke/`). **Do NOT drag to `/Applications`** — that's the manual end-to-end test in Step 7 of the Phase 1 plan.
-2. Right-click the copied `Seshctl.app` → **Open**. Click **Open** again on the Gatekeeper warning. (Self-signed cert; this is expected until Phase 1B notarization.)
-3. The welcome panel should appear (the dragged-to-temp install has no marker file at `~/Library/Application Support/Seshctl/installed-v1.json`, so `FirstLaunchInstaller` triggers).
-4. **Cancel out without installing** — you don't want this temp build to overwrite your dev hooks/symlinks.
-5. Quit Seshctl from the temp folder.
+- **v0.4.0 cutover.** Existing v0.3.0 installs don't bundle Sparkle; they need the link once.
+- **Public-key rotation.** Sparkle in shipped builds will fail signature verification on the new DMG; users have to manually download. See [`docs/signing.md`](signing.md#public-key-rotation-if-the-private-key-is-lost).
 
-Detach the DMG:
+Include in the Slack message:
 
-```bash
-hdiutil detach "/Volumes/Seshctl <VERSION>"
-```
-
-## Cut the release
-
-Tag and publish in one shot:
-
-```bash
-VERSION=$(plutil -extract CFBundleShortVersionString raw -o - Resources/Info.plist)
-gh release create "v${VERSION}" \
-  "dist/Seshctl-${VERSION}.dmg" \
-  --title "Seshctl ${VERSION}" \
-  --notes-file CHANGELOG.md
-```
-
-Adjust `--notes-file` to whatever your CHANGELOG conventions are. If you keep release notes inline (without a `CHANGELOG.md`), swap `--notes-file CHANGELOG.md` for `--notes "..."` or `--notes-from-tag`.
-
-This will:
-- Create the `v${VERSION}` git tag locally (if not present) and push it.
-- Create the GitHub Release with the DMG attached.
-- Print the Release URL.
-
-> **Stage 1A note:** include in the release notes that on first install users must **right-click → Open** to bypass Gatekeeper. This will go away in Phase 1B once we notarize. See [Troubleshooting](#troubleshooting) below.
-
-## Distribute
-
-Get the Release URL:
-
-```bash
-gh release view "v${VERSION}" --json url -q .url
-```
-
-Slack the link to anyone running Seshctl. Include in the message:
-
-- "Drag to /Applications, replace if it's already there. TCC grants are preserved across replacements."
-- "First install: right-click → Open to bypass Gatekeeper (self-signed cert; will go away in 1B)."
+- "Drag to `/Applications`, replace if it's already there. TCC grants are preserved across replacements."
+- "First install: right-click → Open to bypass Gatekeeper (self-signed; goes away in Phase 1B)."
 - A one-line "what changed" summary.
 
-## After-release sanity check
+## If something fails
 
-The point of this step is to verify the release reproduces the user experience, not just yours.
-
-- Download the DMG from the GitHub Release URL on a *different* Mac (or, if you only have one Mac, temporarily move `Seshctl Self-Signed` out of your login keychain — the code signature stays embedded but trust validation runs against a clean keychain).
-- Drag to `/Applications`, right-click → Open.
-- Confirm the welcome panel appears, click Install, confirm the symlink + hooks land.
-- Trigger a remote Claude session focus, allow the Automation TCC prompt, and confirm focusing again does NOT re-prompt.
+| Symptom | Recovery |
+|---|---|
+| `publish-docs` failed during pre-flight | Fix the underlying issue (drift, missing file, wrong branch). Re-run `make publish` — pre-flight is fully idempotent. |
+| `publish-docs` failed during Pages poll (>5min) | Check the repo's Actions tab for a failed Pages build. Once Pages recovers, re-run `make publish` — the idempotency check skips past the already-pushed commit. |
+| `publish-release` failed during DMG upload | Re-run `make publish-release` directly. If the release exists but is missing the asset: `gh release upload v<VERSION> dist/Seshctl-<VERSION>.dmg`. To delete + retry: `gh release delete v<VERSION> --cleanup-tag --yes && make publish-release`. |
+| Released from a new Mac, prior versions dropped from appcast | `dist/releases/` is local mirror state. Re-hydrate before the first `make appcast` on a new host: `gh release list --limit 50 --json tagName -q '.[].tagName' \| while read t; do gh release download "$t" --pattern "Seshctl-*.dmg" --dir dist/releases/ \|\| true; done`. |
 
 ## Troubleshooting
 
 ### `create-dmg` failed with `hdiutil: create failed`
 
-This usually means a stale `swift-build` / `swift-frontend` / `pkgbuild` process is holding a lock on something inside the bundle. Run:
-
-```bash
-make kill-build
-make dist
-```
-
-If the second attempt also fails, there may be a leftover mounted DMG from a previous run — check with `mount | grep Seshctl` and detach it.
+A stale `swift-build` / `pkgbuild` process holds a lock on the bundle. Run `make kill-build && make dist`. If the second attempt also fails, check `mount | grep Seshctl` for a leftover mounted DMG and detach it.
 
 ### `codesign` warns about timestamp
 
-Expected with self-signed certs. We pass `--timestamp=none` because Apple's secure timestamping authority only signs Apple-issued certs. This warning will disappear in Phase 1B once we have a Developer ID and use plain `--timestamp`. Details in [`docs/signing.md`](signing.md).
+Expected with self-signed certs. We pass `--timestamp=none` because Apple's TSA only signs Apple-issued certs. Phase 1B drops this when we have a Developer ID.
 
-### Sparkle / appcast — where's the auto-update?
+### Sparkle says "no update available" but the appcast has a newer entry
 
-Deferred to **Phase 2** of the plan: [`.agents/plans/2026-05-08-1151-seshctl-real-app-phase1.md`](../.agents/plans/2026-05-08-1151-seshctl-real-app-phase1.md) under "Future Phases → Phase 2". For now, releases are manual: Slack the link, users download the new DMG.
+Check that `CFBundleVersion` (the integer) strictly increased — Sparkle compares this, not `CFBundleShortVersionString`. A bump from `0.3.0` → `0.4.0` with `CFBundleVersion` stuck at `3` is ignored.
 
-### macOS Gatekeeper says the app is "damaged or untrusted" / "cannot verify developer"
+### Sparkle rejects with a signature error
 
-This is the normal Stage 1A experience. The fix until Phase 1B notarization ships:
+Either the DMG was modified after `make appcast` signed it (e.g., a re-uploaded build with the same filename), or `SUPublicEDKey` in Info.plist doesn't match the private key in the Keychain. Re-run `make appcast`; if still failing, compare the in-bundle public key against the Keychain:
 
-1. Right-click `Seshctl.app` in Finder.
-2. Click **Open** (not double-click).
-3. Click **Open** in the dialog that says "macOS cannot verify the developer."
+```bash
+plutil -extract SUPublicEDKey raw -o - Resources/Info.plist
+.build/artifacts/sparkle/Sparkle/bin/generate_keys -p
+```
 
-This stores a per-user override; subsequent launches work via double-click. Document this clearly in the release notes for every Stage 1A release. Phase 1B will replace this with a notarized signature, and the release notes for the 1A→1B version should call out the one-time TCC re-prompt that comes with the cert change.
+Both should print the same base64 string.
 
-If you see "damaged" *after* a successful first-run with right-click → Open, the bundle was probably modified after signing (e.g. xattr from the download). Try `xattr -cr /Applications/Seshctl.app` to strip quarantine, then right-click → Open again.
+### GitHub Pages serves stale appcast
+
+Pages caches aggressively. Wait ~60s after push; if still stale, check the Actions tab for a failed Pages build.
+
+### macOS Gatekeeper says "damaged or untrusted" / "cannot verify developer"
+
+Normal Stage 1A first-install experience until Phase 1B notarization. Right-click `Seshctl.app` → **Open** → **Open** in the dialog. This stores a per-user override; subsequent launches and Sparkle-driven updates skip the prompt automatically.
+
+If you see "damaged" *after* a successful first-run, the bundle was modified after signing (e.g., quarantine xattr). Try `xattr -cr /Applications/Seshctl.app`, then right-click → Open.
+
+## After-release sanity check
+
+Verify the release reproduces the user experience, not just yours:
+
+1. Download the DMG from the GitHub Release on a different Mac (or temporarily move `Seshctl Self-Signed` out of your login keychain to simulate).
+2. Drag to `/Applications`, right-click → Open.
+3. Confirm the welcome panel, click Install, confirm the symlink + hooks land.
+4. Trigger a remote Claude session focus, allow the Automation prompt once, confirm the second focus does NOT re-prompt.
+
+For Sparkle specifically: bump a test version locally, run through `make publish`, and confirm a previously-installed copy at the older version shows the update prompt within ~5 minutes of relaunch.

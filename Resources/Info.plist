@@ -28,5 +28,11 @@
 	<string>Seshctl uses AppleScript to focus your terminal and browser tabs when you switch sessions.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>SUFeedURL</key>
+	<string>https://julo15.github.io/seshctl/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>F4/VhM3Q5l8wA+tmnHddVXof90az48InIFONlDtICHw=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 </dict>
 </plist>

@@ -3,6 +3,7 @@ import ApplicationServices
 import KeyboardShortcuts
 import SeshctlCore
 import SeshctlUI
+import Sparkle
 import SwiftUI
 
 extension KeyboardShortcuts.Name {
@@ -32,6 +33,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // (see the comment near the bottom of the class).
     private var defaultsObserver: NSObjectProtocol?
 
+    // Sparkle's standard updater controller. Drives automatic update checks
+    // (on launch + every 24h per `SUEnableAutomaticChecks` in Info.plist) and
+    // serves the "Check for Updates…" menu action. Retained for the process
+    // lifetime; the controller owns its own background timer.
+    private var updaterController: SPUStandardUpdaterController?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Hide dock icon
         NSApp.setActivationPolicy(.accessory)
@@ -51,6 +58,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // still bring up the panel via the global hotkey or menu bar item
         // whenever they're ready.
         let didJustInstall = runFirstLaunchInstallerIfNeeded()
+
+        // Sparkle auto-updates. SUFeedURL, SUPublicEDKey, and
+        // SUEnableAutomaticChecks live in Resources/Info.plist. With
+        // startingUpdater: true the controller's background scheduler fires
+        // immediately on launch and again every 24h while the app runs;
+        // SettingsPopover's "Check for Updates…" button calls
+        // updaterController.checkForUpdates(_:) on demand. Pre-Phase-1B we're
+        // still self-signed — Sparkle's EdDSA signature is independent of
+        // Apple's code signature, so it works without notarization.
+        updaterController = SPUStandardUpdaterController(
+            startingUpdater: true,
+            updaterDelegate: nil,
+            userDriverDelegate: nil
+        )
 
         // Silent refresh of the bundled editor extension — only acts on editors that
         // already have julo15.seshctl installed at a stale version. Background queue
@@ -123,6 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 },
                 onUninstall: { [weak self] in self?.runUninstallFlow() },
                 onOpenIntegrations: { IntegrationsWindowController.shared.showWindow(nil) },
+                onCheckForUpdates: { [weak self] in self?.checkForUpdates() },
                 onQuit: { NSApp.terminate(nil) }
             )
 
@@ -839,6 +861,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // nonisolated deinit would require unsafe concurrency annotations under
     // Swift 6.
 
+    /// Trigger an immediate Sparkle update check. Used by the SettingsPopover
+    /// "Check for Updates…" button. The standard updater controller surfaces
+    /// its own UI — either the update prompt with release notes (if a newer
+    /// version is in the appcast) or its "you're up to date" sheet.
+    private func checkForUpdates() {
+        updaterController?.checkForUpdates(nil)
+    }
+
     /// Shared uninstall flow used by both the status bar menu's "Uninstall
     /// Seshctl…" item and the in-app SettingsPopover's "Uninstall…" button.
     /// Presents the confirm dialog (with a session-history checkbox), calls
@@ -959,6 +989,10 @@ struct RootView: View {
     /// shows. Threaded through `RootView` and `SessionListView` to reach
     /// `SettingsPopover`.
     var onOpenIntegrations: (() -> Void)?
+    /// Supplied by `AppDelegate` to drive Sparkle's `checkForUpdates(_:)` from
+    /// the SettingsPopover's About section. Threaded through `RootView` and
+    /// `SessionListView` for the same reason as `onOpenIntegrations`.
+    var onCheckForUpdates: (() -> Void)?
     var onQuit: (() -> Void)?
 
     var body: some View {
@@ -973,6 +1007,7 @@ struct RootView: View {
                     onOpenRecallDetail: onOpenRecallDetail,
                     onUninstall: onUninstall,
                     onOpenIntegrations: onOpenIntegrations,
+                    onCheckForUpdates: onCheckForUpdates,
                     onQuit: onQuit
                 )
             case .detail:

@@ -48,6 +48,31 @@ echo "==> Copying Info.plist ..."
 # --entitlements at sign time. Only Info.plist ships inside the bundle.
 cp "${REPO_DIR}/Resources/Info.plist" "${BUNDLE_DIR}/Contents/Info.plist"
 
+# Embed Sparkle.framework. SwiftPM resolves Sparkle's binary xcframework and,
+# for the universal release build, drops a flattened Sparkle.framework right
+# alongside the SeshctlApp binary in PRODUCTS_DIR. We copy it to the standard
+# Contents/Frameworks/ location and add @executable_path/../Frameworks to
+# SeshctlApp's rpath (SwiftPM's default rpath is .../lib only, which won't
+# find it at Contents/Frameworks).
+echo "==> Embedding Sparkle.framework ..."
+SPARKLE_SRC="${PRODUCTS_DIR}/Sparkle.framework"
+if [[ ! -d "${SPARKLE_SRC}" ]]; then
+	echo "ERROR: Sparkle.framework not found at ${SPARKLE_SRC}" >&2
+	echo "       Expected the universal SwiftPM build to drop the resolved framework here." >&2
+	exit 1
+fi
+mkdir -p "${BUNDLE_DIR}/Contents/Frameworks"
+# -R preserves the Versions/Current symlinks Apple's framework layout needs.
+cp -R "${SPARKLE_SRC}" "${BUNDLE_DIR}/Contents/Frameworks/Sparkle.framework"
+
+# Add the runtime search path so dyld finds @rpath/Sparkle.framework/...
+# Idempotent: skip if already present (cheap insurance against re-use).
+if ! otool -l "${BUNDLE_DIR}/Contents/MacOS/SeshctlApp" \
+		| grep -A 2 LC_RPATH | grep -qF "@executable_path/../Frameworks"; then
+	install_name_tool -add_rpath "@executable_path/../Frameworks" \
+		"${BUNDLE_DIR}/Contents/MacOS/SeshctlApp"
+fi
+
 echo "==> Building and bundling VS Code / Cursor extension ..."
 # ExtensionInstaller reads these at runtime from Contents/Resources/extensions/.
 # The .vsix is the prebuilt extension; the .version sidecar is the source of
