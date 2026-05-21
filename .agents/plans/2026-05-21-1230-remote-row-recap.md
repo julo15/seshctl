@@ -227,7 +227,8 @@ flowchart TD
 - [x] Run `swift build` (120s) via a subagent. Full `swift test` clean (852/852 pass).
 
 ### Step 6: Write Tests
-- [ ] Create `Tests/SeshctlCoreTests/RemoteEventsParserTests.swift` (mirror `TranscriptAwaySummaryScannerTests.swift`):
+**Note:** Tests landed inline with each implementation step (Steps 1–5), per the implement skill's "write tests with each step" guidance. All sub-items below are complete.
+- [x] Create `Tests/SeshctlCoreTests/RemoteEventsParserTests.swift` (mirror `TranscriptAwaySummaryScannerTests.swift`):
   - Test: nil for empty data.
   - Test: nil for non-JSON / malformed JSON.
   - Test: nil when `data` array is empty.
@@ -236,12 +237,12 @@ flowchart TD
   - Test: walks past non-text content blocks (e.g. `tool_use`) to the first `type == "text"` block.
   - Test: skips empty / whitespace-only text blocks; falls through to nil if no text block has content.
   - Test: with a real captured spike response (use a fixture under `Tests/SeshctlCoreTests/Fixtures/` if helpful), returns the expected assistant text from the most-recent assistant event.
-- [ ] Extend `Tests/SeshctlCoreTests/RemoteClaudeCodeFetcherTests.swift`:
+- [x] Extend `Tests/SeshctlCoreTests/RemoteClaudeCodeFetcherTests.swift`:
   - Test: `fetchLatestAssistantText` builds a request against `/v1/code/sessions/<id>/events?limit=10` with the canonical Cookie + anthropic-beta + Origin + Referer + UA + Accept headers.
   - Test: returns parser's result on HTTP 200.
   - Test: maps HTTP 401 → `.needsReauth`, other non-200 → `.http(status)`, URLError → `.transport(...)`.
   - Test: returns `.notConnected` when cookies are missing.
-- [ ] Extend `Tests/SeshctlUITests/ClaudeCodeConnectionStoreTests.swift`:
+- [x] Extend `Tests/SeshctlUITests/ClaudeCodeConnectionStoreTests.swift`:
   - Update the `StubFetcher` actor to conform to the extended protocol (add `fetchLatestAssistantText` with a result-injection slot).
   - Test: after `fetchNow()` succeeds with N sessions, an events fetch is dispatched for each session (verify via the stub's call count).
   - Test: if the cache already holds the current `lastEventAt` for a session, no events fetch is dispatched on the next `fetchNow()`.
@@ -249,7 +250,7 @@ flowchart TD
   - Test: on a failed events fetch, the cache stores `(lastEventAt, nil)` and the next `fetchNow()` with the same `lastEventAt` does NOT retry.
   - Test: prune — sessions removed from the list response are removed from both `remoteAwaySummaryCache` and `remoteAwaySummariesById`.
   - Test: `disconnect()` clears the cache and the map.
-- [ ] Run `swift test` (30s) via a subagent. If failures, fix and re-run.
+- [x] Run `swift test` (30s) via a subagent. If failures, fix and re-run. **Final: 852/852 pass.**
 
 ### Step 7: Manual smoke test
 - [ ] `make install` — rebuilds and reinstalls `Seshctl.app` to `/Applications`.
@@ -261,10 +262,10 @@ flowchart TD
 
 ## Acceptance Criteria
 
-- [ ] [test] `RemoteEventsParser.extractLatestAssistantText` returns the first non-empty line of the most-recent assistant event's first text block, and returns nil for malformed / empty / no-assistant payloads.
-- [ ] [test] `RemoteClaudeCodeFetcher.fetchLatestAssistantText(sessionId:)` issues the right URL with the right headers, maps 401 → `.needsReauth`, returns parser output on 200, returns `.notConnected` when cookies are missing.
-- [ ] [test] `ClaudeCodeConnectionStore` dispatches an events fetch exactly once per session per `last_event_at` advance, skips when cached, prunes removed sessions, and clears the cache on `disconnect()`.
-- [ ] [test] `RemoteClaudeCodeSession.previewContent(awaySummary:)` returns `.awaySummary(text)` when a non-empty summary is supplied, otherwise falls through to `.reply(title)`.
+- [x] [test] `RemoteEventsParser.extractLatestAssistantText` returns the first non-empty line of the most-recent assistant event's first text block, and returns nil for malformed / empty / no-assistant payloads.
+- [x] [test] `RemoteClaudeCodeFetcher.fetchLatestAssistantText(sessionId:)` issues the right URL with the right headers, maps 401 → `.needsReauth`, returns parser output on 200, returns `.notConnected` when cookies are missing.
+- [x] [test] `ClaudeCodeConnectionStore` dispatches an events fetch exactly once per session per `last_event_at` advance, skips when cached, prunes removed sessions, and clears the cache on `disconnect()`.
+- [x] [test] `RemoteClaudeCodeSession.previewContent(awaySummary:)` returns `.awaySummary(text)` when a non-empty summary is supplied, otherwise falls through to `.reply(title)`.
 - [ ] [test-manual] In the running app, a pure-remote row with at least one assistant turn shows the recap (clock glyph + assistant text) within 1–2s of panel open.
 - [ ] [test-manual] Bridged rows continue to show the local-side recap (no double-rendering, no displacement).
 
