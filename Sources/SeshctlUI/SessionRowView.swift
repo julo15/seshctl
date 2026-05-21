@@ -77,54 +77,49 @@ public struct SessionRowView: View {
         return .orange
     }
 
-    /// Two-column row content: the left column stacks the sender (line 1)
-    /// above the branch / row-kind glyphs (line 2) at a fixed width; the
-    /// right column hosts the chat preview, vertically centered to span
-    /// the full row height in the Gmail "subject + preview reads as
-    /// prominent as the sender" idiom.
+    /// Single-column stacked row content: sender (line 1), branch / row-kind
+    /// glyphs (line 2), and the chat preview (line 3+) all flow vertically
+    /// in one column that spans the full content width. Replaces the prior
+    /// two-column "sender on the left, preview on the right" Gmail-style
+    /// layout — the preview now wraps under the sender, giving it the full
+    /// row width instead of competing with a fixed 180pt sender column.
     ///
-    /// **Read-state treatment:** the left column (sender + branch) stays
-    /// at full opacity in both states — unread rows bold the title and
-    /// subtitle for emphasis, read rows render them at regular weight.
-    /// The preview column dims on read so the row recedes visually
-    /// without losing left-side legibility. Row-chrome (status dot, time,
-    /// accent bar, icon, pill, chevron) stays at full opacity throughout.
+    /// **Read-state treatment:** the sender + branch lines stay at full
+    /// opacity in both states — unread rows bold them for emphasis, read
+    /// rows render at regular weight. The preview block dims on read so
+    /// the row recedes visually without losing top-line legibility. Row
+    /// chrome (status dot, time, accent bar, icon, pill, chevron) stays
+    /// at full opacity throughout.
     @ViewBuilder
     private var mainContent: some View {
-        // Top-aligned so the sender column (line 1 + branch line 2) sits flush
-        // with the first line of the preview when the row grows to multiple
-        // wrapped lines, instead of floating to the vertical center of a tall
-        // preview block.
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 6) {
-                // Sender line — just the repo name (or directory basename
-                // when the session has no git context), with the unread pill
-                // sitting immediately to its right when the row is unread.
-                // Worktree disambiguation moved to line 2's branch slot.
-                // Italic is reserved for R3's `.userPrompt` / `.statusHint`
-                // cases on the *preview* side — never duplicated on the
-                // sender side. Stale-row dimming happens at the row-opacity
-                // tier per R12a.
-                HStack(spacing: 6) {
-                    SenderText(display: session.senderDisplay, isUnread: isUnread)
-                    if isUnread {
-                        UnreadPill()
-                    }
+        VStack(alignment: .leading, spacing: 6) {
+            // Sender line — just the repo name (or directory basename
+            // when the session has no git context), with the unread pill
+            // sitting immediately to its right when the row is unread.
+            // Worktree disambiguation moved to line 2's branch slot.
+            // Italic is reserved for R3's `.userPrompt` / `.statusHint`
+            // cases on the *preview* side — never duplicated on the
+            // sender side. Stale-row dimming happens at the row-opacity
+            // tier per R12a.
+            HStack(spacing: 6) {
+                SenderText(display: session.senderDisplay, isUnread: isUnread)
+                if isUnread {
+                    UnreadPill()
                 }
-
-                // Branch / row-kind line. Per R6, sits at the same metric
-                // size as the sender and demotes via lower-contrast color
-                // rather than smaller font. Constrained to the column width
-                // (via the parent `.frame`), so long branches like
-                // `julo/row-ui-gmail-redesign` ellipsize cleanly.
-                subtitleRow
             }
-            .fontWeight(isUnread ? .bold : .regular)
-            .frame(width: SenderColumnLayout.width, alignment: .leading)
+            .fontWeight(.bold)
+
+            // Branch / row-kind line. Per R6, sits at the same metric
+            // size as the sender and demotes via lower-contrast color
+            // rather than smaller font.
+            subtitleRow
+                .fontWeight(isUnread ? .bold : .regular)
 
             previewView
-                .opacity(isUnread ? 1.0 : 0.6)
+                .padding(.top, 6)
+                .opacity(isUnread ? 1.0 : 0.85)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// Line-2 row-kind-glyphs + branch (or directory-path fallback when
@@ -149,7 +144,7 @@ public struct SessionRowView: View {
 
             if let branch = session.gitBranch, !branch.isEmpty {
                 Text(branch)
-                    .font(.system(size: SenderColumnLayout.textSize(isUnread: isUnread), design: .monospaced))
+                    .font(.system(size: SenderColumnLayout.subtitleSize(isUnread: isUnread), design: .monospaced))
                     .foregroundStyle(branchColor())
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -158,7 +153,7 @@ public struct SessionRowView: View {
                 // directory path with middle truncation, mirroring the
                 // pre-redesign behavior.
                 Text(directoryPath)
-                    .font(.system(size: SenderColumnLayout.textSize(isUnread: isUnread), design: .monospaced))
+                    .font(.system(size: SenderColumnLayout.subtitleSize(isUnread: isUnread), design: .monospaced))
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -194,12 +189,12 @@ public struct SessionRowView: View {
         case .reply(let text):
             Text(text)
                 .font(.title3)
-                .fontWeight(isUnread ? .bold : .regular)
+                .fontWeight(isUnread ? .semibold : .regular)
                 .foregroundStyle(.primary)
         case .userPrompt(let text):
             Text("You: " + text)
                 .font(.title3)
-                .fontWeight(isUnread ? .bold : .regular)
+                .fontWeight(isUnread ? .semibold : .regular)
                 .italic()
                 .foregroundStyle(.secondary)
         case .statusHint(let text):
@@ -217,11 +212,11 @@ public struct SessionRowView: View {
             // the text column.
             (
                 Text(Image(systemName: "clock")).foregroundColor(.secondary)
-                + Text("  ")
+                + Text(" ")
                 + Text(text)
             )
                 .font(.title3)
-                .fontWeight(isUnread ? .bold : .regular)
+                .fontWeight(isUnread ? .semibold : .regular)
                 .foregroundStyle(.primary)
         }
     }

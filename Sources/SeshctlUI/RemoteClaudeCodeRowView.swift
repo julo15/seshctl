@@ -123,36 +123,35 @@ public struct RemoteClaudeCodeRowView: View {
         )
     }
 
-    /// Two-column row content mirroring `SessionRowView.mainContent`: the
-    /// left column stacks the sender (line 1) above the cloud + branch
-    /// subtitle (line 2) at a fixed width; the right column hosts the chat
-    /// preview vertically centered to span the full row height. Remote
-    /// rows always hit `.reply(title)` so the preview renders at primary
-    /// color and regular weight per the Gmail idiom.
+    /// Single-column stacked row content mirroring
+    /// `SessionRowView.mainContent`: sender (line 1), cloud + branch
+    /// subtitle (line 2), and the chat preview (line 3+) all flow vertically
+    /// in one column that spans the full content width. Remote rows always
+    /// hit `.reply(title)` so the preview renders at primary color and
+    /// regular weight.
     ///
     /// Read-state dimming applies to the content cluster only — chrome
     /// (status dot, time, accent bar, icon, pill, chevron) stays at full
     /// opacity. Mirrors `SessionRowView.mainContent`.
     @ViewBuilder
     private var mainContent: some View {
-        // Top-aligned, mirroring `SessionRowView.mainContent`, so the sender
-        // column sits flush with the first line of a multi-line preview.
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
-                    SenderText(display: session.senderDisplay, isUnread: isUnread)
-                    if isUnread {
-                        UnreadPill()
-                    }
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                SenderText(display: session.senderDisplay, isUnread: isUnread)
+                if isUnread {
+                    UnreadPill()
                 }
-                subtitleRow
             }
-            .fontWeight(isUnread ? .bold : .regular)
-            .frame(width: SenderColumnLayout.width, alignment: .leading)
+            .fontWeight(.bold)
+
+            subtitleRow
+                .fontWeight(isUnread ? .bold : .regular)
 
             previewView
-                .opacity(isUnread ? 1.0 : 0.6)
+                .padding(.top, 6)
+                .opacity(isUnread ? 1.0 : 0.85)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// Chat-preview column. Remote sessions always pass through the
@@ -182,12 +181,12 @@ public struct RemoteClaudeCodeRowView: View {
         case .reply(let text):
             Text(text)
                 .font(.title3)
-                .fontWeight(isUnread ? .bold : .regular)
+                .fontWeight(isUnread ? .semibold : .regular)
                 .foregroundStyle(.primary)
         case .userPrompt(let text):
             Text("You: " + text)
                 .font(.title3)
-                .fontWeight(isUnread ? .bold : .regular)
+                .fontWeight(isUnread ? .semibold : .regular)
                 .italic()
                 .foregroundStyle(.secondary)
         case .statusHint(let text):
@@ -203,11 +202,11 @@ public struct RemoteClaudeCodeRowView: View {
             // loosens.
             (
                 Text(Image(systemName: "clock")).foregroundColor(.secondary)
-                + Text("  ")
+                + Text(" ")
                 + Text(text)
             )
                 .font(.title3)
-                .fontWeight(isUnread ? .bold : .regular)
+                .fontWeight(isUnread ? .semibold : .regular)
                 .foregroundStyle(.primary)
         }
     }
@@ -227,7 +226,7 @@ public struct RemoteClaudeCodeRowView: View {
                         .help("Runs on claude.ai only")
                 }
                 Text(branch)
-                    .font(.system(size: SenderColumnLayout.textSize(isUnread: isUnread), design: .monospaced))
+                    .font(.system(size: SenderColumnLayout.subtitleSize(isUnread: isUnread), design: .monospaced))
                     .foregroundStyle(branchColor(for: repo))
                     .lineLimit(1)
                     .truncationMode(.tail)
