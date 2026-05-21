@@ -568,12 +568,33 @@ public struct SeshctlDatabase: Sendable {
         }
     }
 
-    /// Fast check: mark active sessions with dead PIDs as stale.
-    /// Intended to run every poll cycle for responsive cleanup.
+    /// Fast check: mark active sessions as stale when their host process is gone.
+    ///
+    /// Two reap rules, mirroring the two start-time keying schemes:
+    /// - **PID-keyed rows** (Claude, Codex, …): row has `pid != nil`. Mark stale
+    ///   if `isProcessAlive(pid)` returns false.
+    /// - **Conversation-id-keyed rows** (Cursor 1.7+, and any future tool whose
+    ///   hook PPID is unstable): row has `pid == nil`. Mark stale if the row
+    ///   recorded a `hostAppBundleId` and `isHostAppRunning(bundleId)` returns
+    ///   false. Rows without a bundle id are left alone — no signal, so no
+    ///   action.
+    ///
+    /// The conversation-id rule is what catches "user quit Cursor with chats
+    /// open": Cursor's `sessionEnd` hook only fires for per-conversation closes,
+    /// not on Cmd-Q, so without this rule those rows live in the active bucket
+    /// until the 30-day GC.
+    ///
+    /// Defaults are deliberately permissive (`isHostAppRunning` returns true)
+    /// so that callers without an AppKit-aware liveness signal — tests, the
+    /// CLI — never spuriously mark sessions stale. The UI passes a real
+    /// `NSRunningApplication`-backed closure.
     @discardableResult
-    public func reapStaleSessions(isProcessAlive: (Int) -> Bool = { pid in
-        kill(Int32(pid), 0) == 0
-    }) throws -> Int {
+    public func reapStaleSessions(
+        isProcessAlive: (Int) -> Bool = { pid in
+            kill(Int32(pid), 0) == 0
+        },
+        isHostAppRunning: (String) -> Bool = { _ in true }
+    ) throws -> Int {
         try dbPool.write { db in
             let activeSessions = try Session
                 .filter(Self.activeStatusFilter)
@@ -581,7 +602,7 @@ public struct SeshctlDatabase: Sendable {
 
             var markedStale = 0
             for var session in activeSessions {
-                if let pid = session.pid, !isProcessAlive(pid) {
+                if Self.shouldReap(session, isProcessAlive: isProcessAlive, isHostAppRunning: isHostAppRunning) {
                     session.status = .stale
                     session.updatedAt = Date()
                     try session.update(db)
@@ -594,10 +615,17 @@ public struct SeshctlDatabase: Sendable {
 
     /// Garbage collect: delete old completed sessions and mark stale ones.
     /// Returns (deleted, marked_stale) counts.
+    ///
+    /// Stale-marking follows the same two rules as `reapStaleSessions`; see
+    /// that doc comment for details on the conversation-id-keyed path.
     @discardableResult
-    public func gc(olderThan: TimeInterval = 30 * 24 * 3600, isProcessAlive: (Int) -> Bool = { pid in
-        kill(Int32(pid), 0) == 0
-    }) throws -> (deleted: Int, markedStale: Int) {
+    public func gc(
+        olderThan: TimeInterval = 30 * 24 * 3600,
+        isProcessAlive: (Int) -> Bool = { pid in
+            kill(Int32(pid), 0) == 0
+        },
+        isHostAppRunning: (String) -> Bool = { _ in true }
+    ) throws -> (deleted: Int, markedStale: Int) {
         try dbPool.write { db in
             let cutoff = Date().addingTimeInterval(-olderThan)
 
@@ -609,14 +637,13 @@ public struct SeshctlDatabase: Sendable {
                 .filter(Column("updated_at") < cutoff)
                 .deleteAll(db)
 
-            // Mark stale: active sessions whose PID is dead
             let activeSessions = try Session
                 .filter(Self.activeStatusFilter)
                 .fetchAll(db)
 
             var markedStale = 0
             for var session in activeSessions {
-                if let pid = session.pid, !isProcessAlive(pid) {
+                if Self.shouldReap(session, isProcessAlive: isProcessAlive, isHostAppRunning: isHostAppRunning) {
                     session.status = .stale
                     session.updatedAt = Date()
                     try session.update(db)
@@ -626,6 +653,20 @@ public struct SeshctlDatabase: Sendable {
 
             return (deleted: deleted, markedStale: markedStale)
         }
+    }
+
+    private static func shouldReap(
+        _ session: Session,
+        isProcessAlive: (Int) -> Bool,
+        isHostAppRunning: (String) -> Bool
+    ) -> Bool {
+        if let pid = session.pid {
+            return !isProcessAlive(pid)
+        }
+        if let bundleId = session.hostAppBundleId {
+            return !isHostAppRunning(bundleId)
+        }
+        return false
     }
 
     // MARK: - Remote Claude Code Session Operations

@@ -114,6 +114,30 @@ struct SessionListViewModelTests {
         #expect(vm.localRecentSessions[0].status == .stale)
     }
 
+    @Test("Refresh reaps conversation-id row whose host app isn't running")
+    @MainActor
+    func refreshReapsCursorWhenHostAppNotRunning() throws {
+        let db = try SeshctlDatabase.temporary()
+        // A bundle ID that is guaranteed not to appear in
+        // NSWorkspace.runningApplications during the test run. If this
+        // assumption ever breaks, the test will start failing loudly —
+        // which is the correct signal that the closure plumbing changed.
+        try db.startSession(
+            conversationId: "cursor-conv-vm-test",
+            tool: .cursor, directory: "/tmp",
+            hostAppBundleId: "com.seshctl.test.never-running.\(UUID().uuidString)",
+            hostAppName: "TestHost"
+        )
+
+        let vm = SessionListViewModel(database: db, enableGC: true)
+        vm.refresh()
+
+        #expect(vm.localActiveSessions.isEmpty)
+        #expect(vm.localRecentSessions.count == 1)
+        #expect(vm.localRecentSessions[0].status == .stale)
+        #expect(vm.localRecentSessions[0].tool == .cursor)
+    }
+
     // MARK: - Selection Tests
 
     @Test("Selection starts at 0")

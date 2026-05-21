@@ -263,6 +263,91 @@ struct DatabaseTests {
         #expect(sessions.count == 1)
     }
 
+    @Test("Reap stales conversation-id row when host app quit")
+    func reapStalesCursorWhenAppQuit() throws {
+        let db = try SeshctlDatabase.temporary()
+        try db.startSession(
+            conversationId: "cursor-conv-1",
+            tool: .cursor, directory: "/tmp",
+            hostAppBundleId: "com.todesktop.230313mzl4w4u92",
+            hostAppName: "Cursor"
+        )
+
+        let marked = try db.reapStaleSessions(
+            isHostAppRunning: { _ in false }
+        )
+        #expect(marked == 1)
+
+        let stale = try db.listSessions(status: .stale)
+        #expect(stale.count == 1)
+        #expect(stale.first?.tool == .cursor)
+    }
+
+    @Test("Reap leaves conversation-id row alone when host app running")
+    func reapLeavesCursorWhenAppRunning() throws {
+        let db = try SeshctlDatabase.temporary()
+        try db.startSession(
+            conversationId: "cursor-conv-1",
+            tool: .cursor, directory: "/tmp",
+            hostAppBundleId: "com.todesktop.230313mzl4w4u92",
+            hostAppName: "Cursor"
+        )
+
+        let marked = try db.reapStaleSessions(
+            isHostAppRunning: { _ in true }
+        )
+        #expect(marked == 0)
+
+        let idle = try db.listSessions(status: .idle)
+        #expect(idle.count == 1)
+    }
+
+    @Test("Reap leaves row alone when pid==nil and host bundle unknown")
+    func reapLeavesRowWithNoSignal() throws {
+        let db = try SeshctlDatabase.temporary()
+        try db.startSession(
+            conversationId: "conv-no-host",
+            tool: .cursor, directory: "/tmp",
+            hostAppBundleId: nil, hostAppName: nil
+        )
+
+        let marked = try db.reapStaleSessions(
+            isHostAppRunning: { _ in false }
+        )
+        #expect(marked == 0)
+    }
+
+    @Test("Reap consults PID first when both signals present")
+    func reapPidShortCircuitsHostBranch() throws {
+        let db = try SeshctlDatabase.temporary()
+        // PID-keyed row that also happens to carry a host bundle id.
+        try db.startSession(
+            tool: .claude, directory: "/tmp", pid: 99999,
+            hostAppBundleId: "com.apple.Terminal", hostAppName: "Terminal"
+        )
+
+        // PID dead, host bundle "running" — reap because PID branch fires first.
+        let marked = try db.reapStaleSessions(
+            isProcessAlive: { _ in false },
+            isHostAppRunning: { _ in true }
+        )
+        #expect(marked == 1)
+    }
+
+    @Test("GC marks conversation-id row stale when host app quit")
+    func gcMarksCursorStaleWhenAppQuit() throws {
+        let db = try SeshctlDatabase.temporary()
+        try db.startSession(
+            conversationId: "cursor-conv-gc",
+            tool: .cursor, directory: "/tmp",
+            hostAppBundleId: "com.todesktop.230313mzl4w4u92",
+            hostAppName: "Cursor"
+        )
+
+        let (_, markedStale) = try db.gc(isHostAppRunning: { _ in false })
+        #expect(markedStale == 1)
+    }
+
     @Test("Status transitions: idle → working → idle")
     func statusTransitions() throws {
         let db = try SeshctlDatabase.temporary()
