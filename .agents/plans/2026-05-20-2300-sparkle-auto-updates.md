@@ -239,20 +239,9 @@ No new code component duplicates existing functionality.
 - [x] `SettingsPopover` — declared `private let onCheckForUpdates: (() -> Void)?`, added init parameter, rendered `Button("Check for Updates…")` inside the About section beneath the version string. Button hidden when closure is nil.
 
 ### Step 6: Build `scripts/make-appcast.sh` + `make appcast` target
-- [ ] Create `scripts/make-appcast.sh`. Required behavior:
-  - `set -euo pipefail`. Strict mode like the other scripts.
-  - Locate Sparkle's tooling: `.build/artifacts/sparkle/Sparkle/bin/sign_update` and `.build/artifacts/sparkle/Sparkle/bin/generate_appcast`. Hard-error if missing (with a suggestion to run `swift build` first).
-  - Read `VERSION` from `Resources/Info.plist` via `plutil -extract CFBundleShortVersionString raw -o -` (mirrors `make-dmg.sh:36`).
-  - Ensure `dist/Seshctl-<VERSION>.dmg` exists. Copy it into `dist/releases/` (create the mirror dir if missing).
-  - Optional: if `docs/release-notes/<VERSION>.md` exists, embed it into `dist/releases/<VERSION>.html` (Sparkle's `generate_appcast` reads release-notes from sibling HTML files keyed by version).
-  - Run `generate_appcast dist/releases/ -o docs/appcast.xml`. `generate_appcast` walks the dir, signs each DMG against the Keychain private key, emits the full appcast XML.
-  - Print "appcast.xml updated. Review changes, commit, push to publish on Pages."
-- [ ] Add to `Makefile`:
-  ```
-  appcast:
-  	bash scripts/make-appcast.sh
-  ```
-- [ ] Confirm `dist/releases/` is already covered by the gitignored `dist/` entry. No new `.gitignore` line needed.
+- [x] Created `scripts/make-appcast.sh` with `set -euo pipefail`, version extraction via `plutil`, DMG mirror copy, optional markdown-to-HTML release-notes embedding, and `generate_appcast` invocation. Output writes to `docs/appcast.xml`.
+- [x] Added `appcast` target to `Makefile` (one-line `bash scripts/make-appcast.sh`). NOT chained into `dist` — keeps `make dist` testable in isolation.
+- [x] `dist/releases/` is covered by the existing gitignored `dist/` entry. No new `.gitignore` line needed.
 
 ### Step 7: One-time GitHub Pages enablement (manual)
 - [ ] User toggles Pages on in the repo settings: Settings → Pages → Source: "Deploy from a branch" → Branch: `main`, Folder: `/docs`. Save.

@@ -58,6 +58,13 @@ make-dmg:
 
 dist: bundle sign make-dmg
 
+# Sparkle appcast regeneration. Intentionally NOT chained into `make dist`
+# so dist stays testable in isolation. Run after `make dist` to sign the
+# new DMG with EdDSA and rewrite docs/appcast.xml for GitHub Pages.
+# See docs/release.md for the full release flow.
+appcast:
+	bash scripts/make-appcast.sh
+
 # Dev iteration: rebuild + sign + drop the .app straight into /Applications.
 # Skips DMG creation (use `make dist` for the user-facing flow). Designed
 # for tight iteration on app code; preserves the marker file in
