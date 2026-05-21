@@ -227,18 +227,16 @@ No new code component duplicates existing functionality.
   - Do NOT add `SUEnableInstallerLauncherService` or `SUEnableDownloaderService` — those are sandbox-only and we're not sandboxed.
 
 ### Step 4: Wire `SPUStandardUpdaterController` into AppDelegate
-- [ ] Add `import Sparkle` at the top of `Sources/SeshctlApp/AppDelegate.swift`.
-- [ ] Add a stored property: `private var updaterController: SPUStandardUpdaterController?` near the existing stored properties.
-- [ ] In `applicationDidFinishLaunching`, after the first-launch installer call (line ~63 today) and before the silent extension refresh (line ~58 today — Sparkle init must run from MainActor), instantiate: `updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)`. `startingUpdater: true` tells Sparkle to begin its background timer immediately.
-- [ ] Add a `checkForUpdates()` method on AppDelegate that calls `updaterController?.checkForUpdates(nil)`.
-- [ ] Pass `onCheckForUpdates: { [weak self] in self?.checkForUpdates() }` to `RootView` in the existing closure-init block (line ~124 today, alongside `onUninstall` and `onOpenIntegrations`).
+- [x] Add `import Sparkle` at the top of `Sources/SeshctlApp/AppDelegate.swift`.
+- [x] Add a stored property: `private var updaterController: SPUStandardUpdaterController?` near the existing stored properties.
+- [x] In `applicationDidFinishLaunching`, after the first-launch installer call and before the silent extension refresh, instantiate the controller with `startingUpdater: true`.
+- [x] Add a `checkForUpdates()` method on AppDelegate that calls `updaterController?.checkForUpdates(nil)`.
+- [x] Pass `onCheckForUpdates: { [weak self] in self?.checkForUpdates() }` to `RootView`.
 
 ### Step 5: Thread the closure through RootView → SessionListView → SettingsPopover
-- [ ] Mirror the existing `onUninstall` / `onOpenIntegrations` pattern exactly:
-  - `RootView` — accept `onCheckForUpdates: (() -> Void)?` and forward to `SessionListView`.
-  - `SessionListView` — declare `var onCheckForUpdates: (() -> Void)?`, accept it in init, forward to `SettingsPopover`.
-  - `SettingsPopover` — declare `private let onCheckForUpdates: (() -> Void)?`, accept it in init, render a `Button("Check for Updates…") { onCheckForUpdates?() }` inside the About section beneath the version string.
-- [ ] Hide the button when `onCheckForUpdates == nil` (matches the conditional pattern used for `onOpenIntegrations` etc.).
+- [x] `RootView` (in AppDelegate.swift) — added `onCheckForUpdates: (() -> Void)?`, forwarded to `SessionListView`.
+- [x] `SessionListView` — declared `var onCheckForUpdates: (() -> Void)?`, added init parameter, forwarded to `SettingsPopover`.
+- [x] `SettingsPopover` — declared `private let onCheckForUpdates: (() -> Void)?`, added init parameter, rendered `Button("Check for Updates…")` inside the About section beneath the version string. Button hidden when closure is nil.
 
 ### Step 6: Build `scripts/make-appcast.sh` + `make appcast` target
 - [ ] Create `scripts/make-appcast.sh`. Required behavior:

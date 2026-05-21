@@ -22,17 +22,24 @@ public struct SettingsPopover: View {
     private let onUninstall: (() -> Void)?
     private let onQuit: (() -> Void)?
     private let onOpenIntegrations: (() -> Void)?
+    /// Optional callback for the About section's "Check for Updates…" button.
+    /// Supplied by `AppDelegate` which routes it to Sparkle's
+    /// `SPUStandardUpdaterController.checkForUpdates(_:)`. nil hides the
+    /// button (previews/tests).
+    private let onCheckForUpdates: (() -> Void)?
 
     public init(
         store: ClaudeCodeConnectionStore,
         onUninstall: (() -> Void)? = nil,
         onQuit: (() -> Void)? = nil,
-        onOpenIntegrations: (() -> Void)? = nil
+        onOpenIntegrations: (() -> Void)? = nil,
+        onCheckForUpdates: (() -> Void)? = nil
     ) {
         self.store = store
         self.onUninstall = onUninstall
         self.onQuit = onQuit
         self.onOpenIntegrations = onOpenIntegrations
+        self.onCheckForUpdates = onCheckForUpdates
     }
 
     public var body: some View {
@@ -90,6 +97,14 @@ public struct SettingsPopover: View {
                 Text("seshctl \(Self.appVersionString)")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                if let onCheckForUpdates {
+                    HStack {
+                        Button("Check for Updates…") { onCheckForUpdates() }
+                            .controlSize(.small)
+                        Spacer()
+                    }
+                    .padding(.top, 2)
+                }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
