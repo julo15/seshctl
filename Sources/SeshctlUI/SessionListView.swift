@@ -177,7 +177,7 @@ public struct SessionListView: View {
 
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(spacing: 0) {
+                        LazyVStack(spacing: 4) {
                             ForEach(Array(ordered.enumerated()), id: \.element.id) { index, row in
                                 if index < activeCount {
                                     let bucket = activeBuckets[index]

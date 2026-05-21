@@ -178,6 +178,7 @@ public struct SessionRowView: View {
         previewText
             .lineLimit(4)
             .truncationMode(.tail)
+            .lineSpacing(3)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 

@@ -29,7 +29,7 @@ struct SessionTreeView: View {
 
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 0) {
+                LazyVStack(spacing: 4) {
                     ForEach(viewModel.treeGroups) { group in
                         GroupHeaderView(name: group.name, count: group.rows.count, isRepo: group.isRepo)
                             .id(group.id)
