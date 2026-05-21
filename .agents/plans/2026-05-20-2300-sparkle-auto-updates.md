@@ -1,5 +1,28 @@
 # Plan: Sparkle Auto-Updates (Phase 2)
 
+## Status (resumption snapshot — 2026-05-21)
+
+- **Branch:** `julo/sparkle-integration` (worktree at `.worktrees/sparkle-integration/`), rebased on origin/main, **15 commits ahead**. Last commit: `1fe0e54 Final-pass review-gate fixes`.
+- **PR:** https://github.com/julo15/seshctl/pull/42 — ready to merge.
+- **Tests:** 819/819 passing.
+- **GitHub Pages:** enabled on `julo15/seshctl` (source `main`, folder `/docs`). Currently serves an empty 404 for `appcast.xml` because no appcast has been committed to main yet — that happens during Step 11 (cutting v0.4.0).
+- **EdDSA signing key:** generated, public key (`F4/V…ICHw=`) committed in `Resources/Info.plist`, private key in login Keychain + 1Password.
+
+**All steps complete except Step 11** (cut v0.4.0 — the first Sparkle-enabled release). Two manual milestones remain after merge:
+
+1. **Merge PR #42** to main. The squash-commit lands all 15 commits onto main; Info.plist stays at `0.3.0` / `CFBundleVersion 3`. Nothing changes for existing users.
+2. **Cut v0.4.0** (Step 11 below). Bumps Info.plist to `0.4.0` / `4`, runs `make dist && make appcast && make publish`. `make publish` is new — see Post-implementation additions below.
+
+## Post-implementation additions (not in the original plan)
+
+These came out of two `/review-gate` cycles + the Step 10 smoke. They're all on the branch:
+
+1. **`make publish` wrapper** (`scripts/publish-docs.sh`, `scripts/publish-release.sh`, plus `publish` / `publish-docs` / `publish-release` Makefile targets). Replaces the manual `git push` + `gh release create` dance with a single command that enforces the push-before-tag ordering, polls Pages with a cache-buster, and lets you re-run just the release-create step if the DMG upload fails midway. See `docs/release.md` "Publish" section.
+2. **Sparkle.framework embedding + nested re-signing.** The smoke caught that SwiftPM doesn't bundle the framework automatically. `scripts/build-app-bundle.sh` now copies `Sparkle.framework` into `Contents/Frameworks/` and adds the `@executable_path/../Frameworks` rpath; `scripts/sign-app.sh` re-signs the nested code (XPC services → Updater.app → Autoupdate → framework) via `Versions/Current` so the chain survives a future Sparkle major bump.
+3. **Appcast URL post-process.** `generate_appcast` defaults to feed-relative URLs (Pages); we want GitHub Releases URLs. `scripts/make-appcast.sh` post-processes `docs/appcast.xml` to rewrite enclosure URLs to the canonical `releases/download/v<VERSION>/...` shape. Fails loud on regex miss.
+4. **`com.apple.security.cs.disable-library-validation` entitlement.** Hardened runtime + self-signed cert + third-party framework can't coexist any other way (dyld refuses to load Sparkle with "different Team IDs"). Phase 1B (Developer ID) can revisit.
+5. **Doc tightening.** `docs/release.md` rewritten to 157 lines around a "model + steps + recovery" structure with the two-channel model (metadata via git→Pages, artifact via Releases) up top. README extension subsection merged + reframed so the in-app Editor Integrations flow is the primary path and `make install-vscode` is demoted to a dev-iteration callout.
+
 ## Working Protocol
 - Use parallel subagents for independent tasks (e.g., SwiftPM wiring + script writing + doc updates can proceed concurrently once the key is generated).
 - Mark each step's checkbox done as you complete it — a fresh agent should be able to find where to resume.
@@ -214,10 +237,10 @@ No new code component duplicates existing functionality.
 - [x] `swift build` — Sparkle resolves and the framework links cleanly.
 
 ### Step 2: Generate EdDSA keypair + back up
-- [ ] Run `.build/artifacts/sparkle/Sparkle/bin/generate_keys` from the worktree root. This creates the private key in your login Keychain (item: `https://sparkle-project.org`, the only item Sparkle ever creates there) and prints the base64 public key to stdout.
-- [ ] Capture the public key string. **Don't commit it to anything yet** — it goes into Info.plist in Step 4.
-- [ ] Export the private key for 1Password backup: `.build/artifacts/sparkle/Sparkle/bin/generate_keys -x /tmp/sparkle_priv.key`. Copy the file contents into a new 1Password secure note titled "Seshctl Sparkle EdDSA private key" alongside the existing Seshctl .p12 entry. Verify the export is a single line of base64. Delete `/tmp/sparkle_priv.key` after the copy.
-- [ ] **Do not commit the private key anywhere in the repo.** The only thing the repo holds is the public key in Info.plist.
+- [x] Ran `.build/artifacts/sparkle/Sparkle/bin/generate_keys` — private key in login Keychain item `https://sparkle-project.org`.
+- [x] Public key captured: `F4/VhM3Q5l8wA+tmnHddVXof90az48InIFONlDtICHw=` (committed in `Resources/Info.plist` at Step 3).
+- [x] Exported via `generate_keys -x` and backed up to 1Password secure note "Seshctl Sparkle EdDSA private key".
+- [x] No private-key material in the repo.
 
 ### Step 3: Add Sparkle keys to Info.plist
 - [x] Edit `Resources/Info.plist`:
@@ -258,40 +281,94 @@ No new code component duplicates existing functionality.
 - [x] Three tests: SUFeedURL exact URL match, SUPublicEDKey base64 → 32 bytes, SUEnableAutomaticChecks true. All pass.
 - [x] Full suite green: 781/781 (was 778; 3 new tests added).
 
-### Step 10: End-to-end smoke (manual)
-- [ ] Bump `Info.plist` to `0.4.0-test` (`CFBundleShortVersionString`) and `4` (`CFBundleVersion`). Run `make dist` → produces `dist/Seshctl-0.4.0-test.dmg`.
-- [ ] Run `make appcast`. Verify `docs/appcast.xml` now lists a `0.4.0-test` item with a `sparkle:edSignature` attribute.
-- [ ] **DO NOT commit/push yet** — staging only for the smoke test.
-- [ ] On a secondary location: copy `Seshctl-0.3.0.dmg` (from today's release) to a temp folder, install at `/Applications/Seshctl.app`, run it. **Sparkle is NOT bundled in 0.3.0** — so this scenario only validates the post-0.4.0 path. Skip this if cumbersome — the more important smoke is below.
-- [ ] **Primary smoke:** bump Info.plist to `0.4.0`. Run `make dist`, `make appcast`. Manually copy `dist/Seshctl-0.4.0.dmg` to `dist/releases/`. Edit `docs/appcast.xml` to point the `<enclosure url>` at a localhost file:// or a temporary release URL. Run the app. Confirm:
-  - On launch (or after triggering Check for Updates from the menu), Sparkle prompts to update from your local 0.4.0 to a fabricated 0.5.0 (or reverse).
-  - Clicking Install Update downloads, verifies the EdDSA signature against `SUPublicEDKey`, mounts the DMG, swaps the bundle, relaunches.
-  - The relaunched app reports the new version in About.
-  - `~/Library/Logs/Seshctl/install.log` reflects the silent-refresh path running against the new bundle.
-- [ ] Revert the test version bumps before any commit.
+### Step 10: End-to-end smoke (manual) — done; caught 3 real bugs
+- [x] Bumped Info.plist to `0.4.0-test` / `4`. `make dist` produced `dist/Seshctl-0.4.0-test.dmg` (10MB, codesigned). `make appcast` produced a `docs/appcast.xml` with a single `0.4.0-test` item carrying a populated `sparkle:edSignature` and a `length` matching the DMG byte size.
+- [x] `make install` from the worktree initially **crashed at launch** with a dyld error — "Library not loaded: @rpath/Sparkle.framework/Versions/B/Sparkle … mapping process and mapped file (non-platform) have different Team IDs". Three smoke-caught fixes shipped as part of this branch:
+  - **`scripts/build-app-bundle.sh`** now copies `Sparkle.framework` into `Contents/Frameworks/` (SwiftPM resolves the framework into the universal-build dir alongside `SeshctlApp`) and adds the `@executable_path/../Frameworks` rpath via `install_name_tool`.
+  - **`scripts/sign-app.sh`** now re-signs Sparkle's nested code with our self-signed identity in inside-out order (XPC services → `Updater.app` → `Autoupdate` → framework) via the `Versions/Current` symlink. Sparkle ships pre-signed adhoc; without this the outer bundle's signature can't validate.
+  - **`Resources/Seshctl.entitlements`** gains `com.apple.security.cs.disable-library-validation`. Hardened runtime enforces library validation by default; with a self-signed cert (no Team ID) it'd reject the third-party framework. Phase 1B (Developer ID + notarization) can revisit.
+- [x] `scripts/make-appcast.sh` post-processes `docs/appcast.xml` to rewrite enclosure URLs from Pages-relative (the `generate_appcast` default) to GitHub Releases (`releases/download/v<VERSION>/Seshctl-<VERSION>.dmg`). Fails loud (`sys.exit(1)`) if the regex matches zero entries.
+- [x] After the fixes, `make install` lands a clean Sparkle-bundled v0.3.0 in `/Applications`. App launches, `⌘⇧S` panel opens, **Check for Updates…** in Settings → About fires Sparkle (currently 404s the appcast since no version is published yet — expected; Sparkle handles cleanly).
+- [x] Test version bump (0.4.0-test / 4) and generated `docs/appcast.xml` reverted before commit.
 
-### Step 11: First Sparkle-enabled release (0.4.0)
-- [ ] Bump `Info.plist` to `0.4.0` (CFBundleShortVersionString) and `4` (CFBundleVersion). Commit.
-- [ ] Write `docs/release-notes/0.4.0.md`: covers Sparkle auto-updates as the headline feature.
-- [ ] `make dist` → produces `dist/Seshctl-0.4.0.dmg`.
-- [ ] `make appcast` → updates `docs/appcast.xml`.
-- [ ] Commit `Resources/Info.plist`, `docs/appcast.xml`, `docs/release-notes/0.4.0.md`. Push to main (still on the feature branch — PR + merge before pushing the tag).
-- [ ] After merge: `gh release create v0.4.0 dist/Seshctl-0.4.0.dmg --title "Seshctl 0.4.0" --notes-file docs/release-notes/0.4.0.md`.
-- [ ] Verify `https://julo15.github.io/seshctl/appcast.xml` serves the new entry within 60s.
-- [ ] Notes for existing 0.3.0 users (one-time): they must manually download v0.4.0 from Releases since they don't have Sparkle bundled. All subsequent releases will auto-update for them.
+### Step 11: First Sparkle-enabled release (0.4.0) — TODO after merging PR #42
+
+This step runs **on `main`** after the PR squash-merges (the eight metadata-only changes need to land before the tag). Sequence:
+
+```bash
+# 0. Sync local main to the post-merge state.
+git checkout main
+git pull origin main
+
+# 1. Bump version. Sparkle compares CFBundleVersion (integer) to decide
+#    whether to advertise an update — it MUST strictly increase.
+#    Edit Resources/Info.plist:
+#      CFBundleShortVersionString  0.3.0  →  0.4.0
+#      CFBundleVersion             3      →  4
+
+# 2. Write docs/release-notes/0.4.0.md. Single source of truth for
+#    both Sparkle's update prompt (via the appcast) and the GitHub
+#    Release body. Headline: in-app auto-updates over Sparkle.
+#    Don't forget the one-time note that 0.3.0 users have to manually
+#    download v0.4.0 once because 0.3.0 doesn't bundle Sparkle.
+
+# 3. Build + sign the DMG.
+make dist           # → dist/Seshctl-0.4.0.dmg
+
+# 4. Smoke the DMG locally before publishing. Drag Seshctl.app from
+#    the mounted DMG to a temp folder (NOT /Applications), right-
+#    click → Open, confirm welcome panel appears, cancel out, quit.
+#    See docs/release.md "Smoke test the DMG locally" for the full
+#    recipe.
+
+# 5. Regenerate the appcast. This signs the DMG with the EdDSA key
+#    from the login Keychain and writes docs/appcast.xml.
+make appcast
+
+# 6. Review the appcast diff and publish end-to-end.
+git diff docs/appcast.xml
+make publish        # publish-docs (commit + push + poll Pages 5min)
+                    # then publish-release (gh release create)
+```
+
+**Why `make publish` instead of manual `git commit + push + gh release create`:** `make publish` enforces the push-before-tag ordering structurally — it polls Pages until the appcast serves the new version *before* yielding to the release-create step. Reversing the order means the GitHub Release exists but the appcast still advertises the old version, so Sparkle in already-shipped builds doesn't see anything to update to. See `docs/release.md` → "Publish" for the model.
+
+**If `make publish` fails midway:**
+- Pre-flight failed → fix the underlying issue (drift in working tree, missing file, wrong branch), re-run `make publish`. Idempotent.
+- Pages-poll timed out → check the repo's Actions tab for a failed Pages build; once recovered, re-run `make publish` (idempotency check skips past the already-pushed commit).
+- DMG upload failed during `gh release create` → re-run `make publish-release` directly; or if the release exists but is missing the asset, `gh release upload v0.4.0 dist/Seshctl-0.4.0.dmg`.
+
+**Verify after success:**
+
+```bash
+# Pages serves the appcast (cache-buster on the URL — Fastly TTL can be slow).
+curl -fsS "https://julo15.github.io/seshctl/appcast.xml?_=$(date +%s)" \
+  | grep sparkle:shortVersionString
+
+# GitHub Release exists with the DMG attached.
+gh release view v0.4.0 --json url,assets -q '{url, assets: [.assets[].name]}'
+
+# Manual: open the locally-installed 0.3.0 (if you still have one
+# around), confirm Sparkle does NOTHING because 0.3.0 doesn't bundle
+# the framework. Then `make install` from main to get the 0.4.0
+# Sparkle build into /Applications.
+```
+
+**One-time Slack message** to existing 0.3.0 users: "Manually grab v0.4.0 from https://github.com/julo15/seshctl/releases/latest — 0.3.0 doesn't have Sparkle, so this transition is the only one that needs a manual download. Every release after this auto-updates." See `docs/release.md` "Distribute" section for the full template.
 
 ## Acceptance Criteria
 
-- [ ] [test] `testInfoPlistHasSparkleFeedURL` — Info.plist contains the canonical Pages URL.
-- [ ] [test] `testInfoPlistHasSparklePublicKey` — Info.plist contains a base64 string that decodes to exactly 32 bytes.
-- [ ] [test] `testInfoPlistHasSparkleAutomaticChecks` — Info.plist enables automatic checks.
-- [ ] [test-manual] On launch, Sparkle silently fetches the appcast and surfaces an Update Available window when a newer version is advertised.
-- [ ] [test-manual] Clicking **Check for Updates…** in SettingsPopover → About surfaces Sparkle's update window synchronously (or its "you're up to date" sheet).
-- [ ] [test-manual] Clicking **Install Update** downloads the DMG, verifies the EdDSA signature, swaps `/Applications/Seshctl.app`, relaunches, and the running app reports the new `CFBundleShortVersionString` in About.
-- [ ] [test-manual] No Gatekeeper "right-click → Open" prompt appears during the Sparkle-driven upgrade (quarantine xattr stripped automatically).
-- [ ] [test-manual] An update download with a tampered EdDSA signature fails with Sparkle's standard error sheet — the running app is not modified.
-- [ ] [test-manual] `make appcast` produces a `docs/appcast.xml` whose `<item>` for the current `CFBundleShortVersionString` has a populated `sparkle:edSignature` attribute and a `length` matching the DMG byte size.
-- [ ] [test-manual] `https://julo15.github.io/seshctl/appcast.xml` serves the latest committed appcast within ~60s of push.
+- [x] [test] `testInfoPlistHasSparkleFeedURL` — Info.plist contains the canonical Pages URL.
+- [x] [test] `testInfoPlistHasSparklePublicKey` — Info.plist contains a base64 string that decodes to exactly 32 bytes.
+- [x] [test] `testInfoPlistHasSparkleAutomaticChecks` — Info.plist enables automatic checks.
+- [x] [test-manual] `make install` from the branch lands a Sparkle-bundled build at `/Applications/Seshctl.app` that launches cleanly (no dyld error). Confirmed during Step 10 smoke.
+- [x] [test-manual] Clicking **Check for Updates…** in SettingsPopover → About fires Sparkle. With no appcast.xml currently on Pages, Sparkle surfaces its standard "update unavailable" / "error" sheet without crashing — exactly the expected pre-v0.4.0 behavior.
+- [x] [test-manual] `make appcast` produces a `docs/appcast.xml` whose `<item>` carries a populated `sparkle:edSignature` and `length` matching the DMG byte size. Confirmed during Step 10 (then reverted).
+- [ ] [test-manual] **Step 11 — pending merge + 0.4.0 cut:** On launch, Sparkle silently fetches the appcast and surfaces an Update Available window when a newer version is advertised. To validate after 0.4.0 ships: cut v0.5.0 against a Mac running v0.4.0 and confirm the update prompt fires.
+- [ ] [test-manual] **Step 11 — pending:** Clicking **Install Update** downloads the DMG, verifies the EdDSA signature, swaps `/Applications/Seshctl.app`, relaunches, and the running app reports the new version in About.
+- [ ] [test-manual] **Step 11 — pending:** No Gatekeeper "right-click → Open" prompt appears during the Sparkle-driven upgrade (quarantine xattr stripped automatically).
+- [ ] [test-manual] **Step 11 — pending:** An update download with a tampered EdDSA signature fails with Sparkle's standard error sheet — the running app is not modified.
+- [ ] [test-manual] **Step 11 — pending:** `https://julo15.github.io/seshctl/appcast.xml` serves the v0.4.0 entry within ~60s of `make publish`.
 
 ## Edge Cases
 
