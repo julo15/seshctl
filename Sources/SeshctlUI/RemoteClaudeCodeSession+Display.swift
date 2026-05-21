@@ -23,6 +23,22 @@ extension RemoteClaudeCodeSession {
         .reply(title)
     }
 
+    /// Priority-chain preview content with an optional claude.ai assistant-text
+    /// recap injected at the top of the chain. When a non-empty summary is
+    /// supplied, returns `.awaySummary` — same case the local-side recap
+    /// uses, so remote rows pick up the clock-glyph rendering the row view
+    /// already has wired up for `PreviewContent.awaySummary`. Nil / empty /
+    /// whitespace summaries fall through to the existing `.reply(title)`
+    /// chain.
+    ///
+    /// Mirrors `Session.previewContent(awaySummary:)`.
+    func previewContent(awaySummary: String?) -> PreviewContent {
+        if let summary = awaySummary.nonEmpty, let body = Session.trimmedPreviewBody(of: summary) {
+            return .awaySummary(body)
+        }
+        return previewContent
+    }
+
     /// First branch in the `branches` array, or `nil` when the array is
     /// empty. The view layer uses `nil` as the signal to collapse line 2 on
     /// remote rows.

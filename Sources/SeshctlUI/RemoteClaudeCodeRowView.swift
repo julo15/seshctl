@@ -48,6 +48,12 @@ public struct RemoteClaudeCodeRowView: View {
     /// kind. Mirrors the same flag on `SessionRowView`; driven by
     /// `SessionListViewModel.hasMultipleAgentTypes`.
     public let showAgentBadge: Bool
+    /// Most recent assistant text for this remote session, if known.
+    /// Sourced from `ClaudeCodeConnectionStore.remoteAwaySummariesById` at the
+    /// row's construction site. Nil means we haven't fetched yet OR the
+    /// session has no assistant turn — either way the row falls through to
+    /// `.reply(title)`. See `RemoteClaudeCodeSession.previewContent(awaySummary:)`.
+    public let awaySummary: String?
 
     @AppStorage(AppearanceDefaults.repoAccentBarKey) private var repoAccentBarEnabled: Bool = AppearanceDefaults.repoAccentBarDefault
     @AppStorage(AppearanceDefaults.stackedRowLayoutKey) private var stackedRowLayoutEnabled: Bool = AppearanceDefaults.stackedRowLayoutDefault
@@ -58,7 +64,8 @@ public struct RemoteClaudeCodeRowView: View {
         isUnread: Bool = false,
         isStale: Bool = false,
         showCloudAffordances: Bool = true,
-        showAgentBadge: Bool = true
+        showAgentBadge: Bool = true,
+        awaySummary: String? = nil
     ) {
         self.session = session
         self.isSelected = isSelected
@@ -66,6 +73,7 @@ public struct RemoteClaudeCodeRowView: View {
         self.isStale = isStale
         self.showCloudAffordances = showCloudAffordances
         self.showAgentBadge = showAgentBadge
+        self.awaySummary = awaySummary
     }
 
     public var body: some View {
@@ -209,7 +217,7 @@ public struct RemoteClaudeCodeRowView: View {
 
     @ViewBuilder
     private var previewText: some View {
-        switch session.previewContent {
+        switch session.previewContent(awaySummary: awaySummary) {
         case .reply(let text):
             Text(text)
                 .font(.title3)

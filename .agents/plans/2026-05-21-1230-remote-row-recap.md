@@ -204,8 +204,8 @@ flowchart TD
 - [x] Connection-store tests written in same step (7 new tests covering populate, cache-hit-skip, advance-re-dispatch, failure caches nil + no retry, prune, disconnect clears, disconnect cancels in-flight). 19/19 store tests pass.
 
 ### Step 4: Display helpers + visibility promotion
-- [ ] In `Sources/SeshctlUI/Session+Display.swift`, promote `nonEmpty` (currently `fileprivate` on `Optional<String>`) and `trimmedPreviewBody` (currently `private static` on `Session`) to **module-internal** (default Swift visibility) so the remote-side extension can reuse them without duplication.
-- [ ] In `Sources/SeshctlUI/RemoteClaudeCodeSession+Display.swift`, add:
+- [x] In `Sources/SeshctlUI/Session+Display.swift`, promote `nonEmpty` (currently `fileprivate` on `Optional<String>`) and `trimmedPreviewBody` (currently `private static` on `Session`) to **module-internal** (default Swift visibility) so the remote-side extension can reuse them without duplication.
+- [x] In `Sources/SeshctlUI/RemoteClaudeCodeSession+Display.swift`, add:
   ```swift
   func previewContent(awaySummary: String?) -> PreviewContent {
       if let summary = awaySummary.nonEmpty, let body = Session.trimmedPreviewBody(of: summary) {
@@ -214,16 +214,17 @@ flowchart TD
       return previewContent
   }
   ```
-- [ ] Run `swift build` (120s).
+- [x] Run `swift build` (120s).
+- [x] Display helper tests (5 tests) added to `SessionDisplayHelpersTests.swift` — all pass.
 
 ### Step 5: Row view + call sites
-- [ ] In `Sources/SeshctlUI/RemoteClaudeCodeRowView.swift`:
+- [x] In `Sources/SeshctlUI/RemoteClaudeCodeRowView.swift`:
   - Add `public let awaySummary: String?` (defaulted to `nil` in `init`).
   - Add `awaySummary` param to the init, default `nil`, slotted near `showAgentBadge` to mirror `SessionRowView`'s shape.
   - In `previewText`, switch from `session.previewContent` to `session.previewContent(awaySummary: awaySummary)`. The `.awaySummary` case already exists with the correct clock-glyph rendering.
-- [ ] In `Sources/SeshctlUI/SessionListView.swift:378`, pass `awaySummary: connectionStore.remoteAwaySummariesById[remote.id]`.
-- [ ] In `Sources/SeshctlUI/SessionTreeView.swift:98`, same one-line addition.
-- [ ] Run `swift build` (120s) via a subagent.
+- [x] In `Sources/SeshctlUI/SessionListView.swift:378`, pass `awaySummary: connectionStore.remoteAwaySummariesById[remote.id]`.
+- [x] In `Sources/SeshctlUI/SessionTreeView.swift:98`, same one-line addition.
+- [x] Run `swift build` (120s) via a subagent. Full `swift test` clean (852/852 pass).
 
 ### Step 6: Write Tests
 - [ ] Create `Tests/SeshctlCoreTests/RemoteEventsParserTests.swift` (mirror `TranscriptAwaySummaryScannerTests.swift`):

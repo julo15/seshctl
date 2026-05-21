@@ -100,7 +100,8 @@ struct SessionTreeView: View {
                 isSelected: viewModel.selectedRow?.id == remote.id,
                 isUnread: viewModel.unreadSessionIds.contains(remote.id),
                 isStale: connectionStore.state == .authExpired,
-                showAgentBadge: showAgentBadge
+                showAgentBadge: showAgentBadge,
+                awaySummary: connectionStore.remoteAwaySummariesById[remote.id]
             )
         }
     }
