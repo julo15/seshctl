@@ -122,29 +122,29 @@ Three layers, mirrored from the bridge-scanner pipeline:
 ## Implementation Steps
 
 ### Step 1: Add the scanner
-- [x] Create `Sources/SeshctlCore/TranscriptAwaySummaryScanner.swift` with two public entry points (mirror `TranscriptBridgeScanner`):
+- [ ] Create `Sources/SeshctlCore/TranscriptAwaySummaryScanner.swift` with two public entry points (mirror `TranscriptBridgeScanner`):
   - `static func extractLatestAwaySummary(transcriptPath: String) -> String?` — reads file via `String(contentsOfFile:encoding:)`, delegates to the string overload, returns `nil` on read failure.
   - `static func extractLatestAwaySummary(transcript: String) -> String?` — `enumerateLines`, JSON-parse each line, keep the most recent `type=="system" && subtype=="away_summary"`, extract `content` (String), strip the `(disable recaps in /config)` trailing parenthetical (and any surrounding whitespace), trim, return `nil` if empty.
-- [x] Build: `swift build` (120s timeout).
+- [ ] Build: `swift build` (120s timeout).
 
 ### Step 2: VM cache + map + refresh wiring
-- [x] In `Sources/SeshctlUI/SessionListViewModel.swift`, add a `private var transcriptAwaySummaryCache: [String: (mtime: Date, summary: String?)] = [:]` next to `transcriptBridgeCache`.
-- [x] Add `@Published public private(set) var awaySummariesById: [String: String] = [:]` near the other published row metadata. (Note: `session.id` is `String`, not `UUID` — `[String: String]` mirrors `Set<String>` `bridgedLocalIds`. Plan originally said `[UUID: String]`; corrected during implementation.)
-- [x] Add `fileprivate func cachedAwaySummary(for session: Session) -> String?` mirroring `cachedBridgedRemoteId(for:)` line-for-line — `.claude`-only guard, mtime-keyed cache, `TranscriptAwaySummaryScanner.extractLatestAwaySummary(transcriptPath:)` on miss.
-- [x] Add `fileprivate func pruneTranscriptAwaySummaryCache(keepingPaths:)` mirroring `pruneTranscriptBridgeCache`.
-- [x] In the refresh per-session loop (currently around line 208), call `cachedAwaySummary(for: session)` alongside `cachedBridgedRemoteId(for: session)` and accumulate non-nil results into a new `[String: String]` dict; assign to `awaySummariesById` at the end of the pass. Call the new prune alongside `pruneTranscriptBridgeCache`.
+- [ ] In `Sources/SeshctlUI/SessionListViewModel.swift`, add a `private var transcriptAwaySummaryCache: [String: (mtime: Date, summary: String?)] = [:]` next to `transcriptBridgeCache`.
+- [ ] Add `@Published public private(set) var awaySummariesById: [UUID: String] = [:]` near the other published row metadata. (Or a non-published computed view if `awaySummariesById` doesn't need to drive view updates — verify by checking how `bridgedLocalIds` is exposed.)
+- [ ] Add `fileprivate func cachedAwaySummary(for session: Session) -> String?` mirroring `cachedBridgedRemoteId(for:)` line-for-line — `.claude`-only guard, mtime-keyed cache, `TranscriptAwaySummaryScanner.extractLatestAwaySummary(transcriptPath:)` on miss.
+- [ ] Add `fileprivate func pruneTranscriptAwaySummaryCache(keepingPaths:)` mirroring `pruneTranscriptBridgeCache`.
+- [ ] In the refresh per-session loop (currently around line 208), call `cachedAwaySummary(for: session)` alongside `cachedBridgedRemoteId(for: session)` and accumulate non-nil results into a new `[UUID: String]` dict; assign to `awaySummariesById` at the end of the pass. Call the new prune alongside `pruneTranscriptBridgeCache`.
 
 ### Step 3: Preview-content overload
-- [x] In `Sources/SeshctlUI/Session+Display.swift`, add a `.awaySummary(String)` case to the `PreviewContent` enum.
-- [x] Add `func previewContent(awaySummary: String?) -> PreviewContent` on `Session` that returns `.awaySummary(text)` when `awaySummary` has a non-empty first line, else falls through to the existing `previewContent` computed property.
+- [ ] In `Sources/SeshctlUI/Session+Display.swift`, add a `.awaySummary(String)` case to the `PreviewContent` enum.
+- [ ] Add `func previewContent(awaySummary: String?) -> PreviewContent` on `Session` that returns `.awaySummary(text)` when `awaySummary` has a non-empty first line, else falls through to the existing `previewContent` computed property.
 
 ### Step 4: Row view threading
-- [x] In `Sources/SeshctlUI/SessionRowView.swift`, add `var awaySummary: String? = nil` to the struct and to the `public init`.
-- [x] Update `previewText` to call `session.previewContent(awaySummary: awaySummary)` and add a `case .awaySummary(let text):` branch with the same styling as `.reply` (`.title3`, weight = `.bold` on unread / `.regular` otherwise, `foregroundStyle(.primary)`). (Case landed in the Step 3 commit as a stub; this commit makes it reachable.)
-- [x] In `Sources/SeshctlUI/SessionListView.swift:355` and `Sources/SeshctlUI/SessionTreeView.swift:82`, pass `awaySummary: viewModel.awaySummariesById[session.id]` into the `SessionRowView(...)` call.
+- [ ] In `Sources/SeshctlUI/SessionRowView.swift`, add `var awaySummary: String? = nil` to the struct and to the `public init`.
+- [ ] Update `previewText` to call `session.previewContent(awaySummary: awaySummary)` and add a `case .awaySummary(let text):` branch with the same styling as `.reply` (`.title3`, weight = `.bold` on unread / `.regular` otherwise, `foregroundStyle(.primary)`).
+- [ ] In `Sources/SeshctlUI/SessionListView.swift:355` and `Sources/SeshctlUI/SessionTreeView.swift:82`, pass `awaySummary: viewModel.awaySummariesById[session.id]` into the `SessionRowView(...)` call.
 
 ### Step 5: Write tests
-- [x] Create `Tests/SeshctlCoreTests/TranscriptAwaySummaryScannerTests.swift`, mirroring `TranscriptBridgeScannerTests.swift`:
+- [ ] Create `Tests/SeshctlCoreTests/TranscriptAwaySummaryScannerTests.swift`, mirroring `TranscriptBridgeScannerTests.swift`:
   - Test: returns nil for empty string.
   - Test: returns nil when no `away_summary` record exists.
   - Test: returns the `content` of the only `away_summary` record.
@@ -160,9 +160,9 @@ Three layers, mirrored from the bridge-scanner pipeline:
 - [ ] Run `swift test` (30s timeout) via a subagent (per CLAUDE.md "always run tests via subagents").
 
 ### Step 6: Verify in the running app
-- [x] `make install` (rebuilds and reinstalls `Seshctl.app` into `/Applications`).
-- [ ] Open Seshctl, confirm Claude sessions with known recaps show the recap text in place of the lastReply preview; confirm non-Claude rows and recap-less Claude rows are unchanged. *(user-side verification)*
-- [ ] Trigger a new recap in a live session (let a Claude session idle ~3 minutes) and confirm the row picks it up on the next refresh. *(user-side verification)*
+- [ ] `make install` (rebuilds and reinstalls `Seshctl.app` into `/Applications`).
+- [ ] Open Seshctl, confirm Claude sessions with known recaps show the recap text in place of the lastReply preview; confirm non-Claude rows and recap-less Claude rows are unchanged.
+- [ ] Trigger a new recap in a live session (let a Claude session idle ~3 minutes) and confirm the row picks it up on the next refresh.
 
 ## Acceptance Criteria
 

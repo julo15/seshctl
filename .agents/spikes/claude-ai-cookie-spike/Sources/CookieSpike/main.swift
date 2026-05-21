@@ -5,6 +5,11 @@ import WebKit
 // Force line-buffered stdout so output appears immediately when piped to a file.
 setvbuf(stdout, nil, _IOLBF, 0)
 
+// Extra URLs passed on the command line are probed after the built-in list.
+// Useful when DevTools surfaces an endpoint we wouldn't have guessed.
+//   swift run CookieSpike https://claude.ai/v1/code/sessions/<id>/foo
+let extraURLs: [String] = Array(CommandLine.arguments.dropFirst())
+
 @MainActor
 final class Spike: NSObject, WKNavigationDelegate {
     let window: NSWindow
@@ -74,9 +79,11 @@ final class Spike: NSObject, WKNavigationDelegate {
 
         webView.load(URLRequest(url: URL(string: "https://claude.ai/login")!))
         print("→ Opened WKWebView at https://claude.ai/login")
-        print("→ Use the email / magic-link path. When you get the email,")
-        print("   right-click the magic link and 'Copy Link'. Paste into the URL bar,")
-        print("   press Enter. Spike will detect login and hit the API.")
+        print("→ Sign in (or re-use the persisted WKWebsiteDataStore from a prior run).")
+        print("→ Spike auto-detects login and runs the multi-endpoint sweep.")
+        if !extraURLs.isEmpty {
+            print("→ Extra URLs queued: \(extraURLs.count)")
+        }
     }
 
     @objc func goPressed() {
@@ -94,11 +101,11 @@ final class Spike: NSObject, WKNavigationDelegate {
         print("↪ didFinish: \(url.absoluteString)")
         guard !apiHit else { return }
         Task { @MainActor in
-            await self.checkCookiesAndAPI()
+            await self.runSweep()
         }
     }
 
-    func checkCookiesAndAPI() async {
+    func runSweep() async {
         let store = webView.configuration.websiteDataStore.httpCookieStore
         let all = await store.allCookies()
         let claudeCookies = all.filter { $0.domain.hasSuffix("claude.ai") }
@@ -108,6 +115,7 @@ final class Spike: NSObject, WKNavigationDelegate {
               claudeCookies.contains(where: { $0.name == "sessionKeyLC" }) else {
             return
         }
+        apiHit = true
 
         print("\n=== Cookies for claude.ai (n=\(claudeCookies.count)) ===")
         for c in claudeCookies.sorted(by: { $0.name < $1.name }) {
@@ -115,28 +123,83 @@ final class Spike: NSObject, WKNavigationDelegate {
                 ? "\(c.value.prefix(8))…(len=\(c.value.count))"
                 : c.value
             let exp = c.expiresDate.map { "\($0)" } ?? "session"
-            print("  \(c.name)  httpOnly=\(c.isHTTPOnly)  secure=\(c.isSecure)  expires=\(exp)  domain=\(c.domain)  value=\(preview)")
+            print("  \(c.name)  httpOnly=\(c.isHTTPOnly)  secure=\(c.isSecure)  expires=\(exp)  domain=\(c.domain)")
+            _ = preview
         }
-
-        if let sessionKey = claudeCookies.first(where: { $0.name == "sessionKey" }) {
-            print("\n--- sessionKey (assumption A test) ---")
-            print("  isHTTPOnly: \(sessionKey.isHTTPOnly)   ← want: true (means HttpOnly is not a blocker)")
-            if let exp = sessionKey.expiresDate {
-                let lifetime = exp.timeIntervalSinceNow / 86_400
-                print("  expiresDate: \(exp)")
-                print("  measured lifetime from now: \(String(format: "%.1f", lifetime)) days")
-            } else {
-                print("  expiresDate: session-only (lost on browser close)")
-            }
-        }
-
-        apiHit = true
 
         let cookieHeader = claudeCookies
             .map { "\($0.name)=\($0.value)" }
             .joined(separator: "; ")
 
-        var req = URLRequest(url: URL(string: "https://claude.ai/v1/code/sessions?limit=1")!)
+        // Per-call probe helper. Captures cookieHeader.
+        let sessionConfig = URLSessionConfiguration.ephemeral
+        sessionConfig.httpShouldSetCookies = false
+        sessionConfig.httpCookieAcceptPolicy = .never
+        let urlSession = URLSession(configuration: sessionConfig)
+
+        // Set up output dir alongside the spike package root.
+        let outDir = outputDirectory()
+        do {
+            try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+        } catch {
+            print("❌ Could not create output dir \(outDir.path): \(error)")
+        }
+        print("→ Dumping responses to \(outDir.path)")
+
+        // 1. List endpoint — pull full response so we see every field.
+        let listURL = "https://claude.ai/v1/code/sessions?limit=50"
+        let listBody = await probe(urlString: listURL, cookieHeader: cookieHeader, session: urlSession, outDir: outDir, label: "01_list")
+
+        // 2. Parse the list response for the first 3 session ids.
+        let sessionIDs = parseSessionIDs(from: listBody, limit: 3)
+        print("\n→ Picked session ids for detail probes: \(sessionIDs)")
+
+        // 3. For each id, blind-probe candidate detail endpoint shapes.
+        let detailPathTemplates = [
+            "/v1/code/sessions/{id}",
+            "/v1/code/sessions/{id}/messages",
+            "/v1/code/sessions/{id}/messages?limit=50",
+            "/v1/code/sessions/{id}/turns",
+            "/v1/code/sessions/{id}/events",
+            "/v1/code/sessions/{id}/history",
+            "/v1/code/sessions/{id}/outcomes",
+            "/v1/code/sessions/{id}/files",
+            "/v1/code/sessions/{id}/summary",
+        ]
+        var probeIndex = 2
+        for sid in sessionIDs {
+            for tmpl in detailPathTemplates {
+                let path = tmpl.replacingOccurrences(of: "{id}", with: sid)
+                let urlStr = "https://claude.ai" + path
+                let label = String(format: "%02d_%@", probeIndex, sanitize(path))
+                _ = await probe(urlString: urlStr, cookieHeader: cookieHeader, session: urlSession, outDir: outDir, label: label)
+                probeIndex += 1
+            }
+        }
+
+        // 4. Replay any URLs passed on the command line (e.g. captured from DevTools).
+        for raw in extraURLs {
+            let label = String(format: "%02d_extra_%@", probeIndex, sanitize(URL(string: raw)?.path ?? raw))
+            _ = await probe(urlString: raw, cookieHeader: cookieHeader, session: urlSession, outDir: outDir, label: label)
+            probeIndex += 1
+        }
+
+        print("\n--- Done. Inspect responses in \(outDir.path) ---")
+        print("    Tip: jq '. | keys' \(outDir.path)/01_list.json")
+        fflush(stdout)
+        exit(0)
+    }
+
+    /// Issue a GET against `urlString`, save body to `<outDir>/<label>.json`,
+    /// and print a one-line summary. Returns the body data so the caller can
+    /// parse it (e.g. to extract session ids from the list response).
+    func probe(urlString: String, cookieHeader: String, session: URLSession, outDir: URL, label: String) async -> Data {
+        guard let url = URL(string: urlString) else {
+            print("\n=== \(label): \(urlString) ===")
+            print("❌ Invalid URL")
+            return Data()
+        }
+        var req = URLRequest(url: url)
         req.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
         req.setValue("managed-agents-2026-04-01", forHTTPHeaderField: "anthropic-beta")
         req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
@@ -145,35 +208,72 @@ final class Spike: NSObject, WKNavigationDelegate {
         req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15", forHTTPHeaderField: "User-Agent")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
 
-        let sessionConfig = URLSessionConfiguration.ephemeral
-        sessionConfig.httpShouldSetCookies = false
-        sessionConfig.httpCookieAcceptPolicy = .never
-        let urlSession = URLSession(configuration: sessionConfig)
-
-        print("\n=== GET /v1/code/sessions?limit=1 (using cookies from WKWebView) ===")
+        print("\n=== \(label): GET \(url.path)\(url.query.map { "?\($0)" } ?? "") ===")
         do {
-            let (data, response) = try await urlSession.data(for: req)
+            let (data, response) = try await session.data(for: req)
             guard let http = response as? HTTPURLResponse else {
                 print("❌ Non-HTTP response")
-                return
+                return data
             }
-            print("HTTP \(http.statusCode)")
-            let preview = String(data: data.prefix(800), encoding: .utf8) ?? "<non-utf8>"
-            print("Body preview:\n\(preview)")
-            print("\n--- Verdict ---")
-            if http.statusCode == 200 {
-                print("✅ Login inside WKWebView + cookies captured from WKHTTPCookieStore + URLSession request → 200.")
-                print("   Plan's auth approach is viable if this login flow (email/magic-link) is acceptable.")
+            let ct = http.value(forHTTPHeaderField: "Content-Type") ?? "<none>"
+            print("HTTP \(http.statusCode)  \(data.count) bytes  content-type=\(ct)")
+
+            // Pretty-print JSON when possible so the file is easy to scan.
+            let pretty: Data
+            if let obj = try? JSONSerialization.jsonObject(with: data),
+               let p = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]) {
+                pretty = p
+                if let topLevel = obj as? [String: Any] {
+                    print("Top-level keys: \(topLevel.keys.sorted())")
+                } else if let arr = obj as? [Any] {
+                    print("Top-level: array (n=\(arr.count))")
+                }
             } else {
-                print("❌ Non-200 (\(http.statusCode)). Cookies captured from WebView may be missing something browser-specific (TLS fingerprint, extra CF cookies set only under challenge).")
+                pretty = data
+                let preview = String(data: data.prefix(400), encoding: .utf8) ?? "<non-utf8>"
+                print("Body preview (non-JSON):\n\(preview)")
             }
+
+            let outFile = outDir.appendingPathComponent("\(label).json")
+            try pretty.write(to: outFile)
+            return data
         } catch {
             print("❌ Request failed: \(error)")
+            return Data()
         }
-        fflush(stdout)
-        print("\n(spike exiting)")
-        fflush(stdout)
-        exit(0)
+    }
+
+    /// Pulls a few session ids out of `/v1/code/sessions` response data.
+    func parseSessionIDs(from data: Data, limit: Int) -> [String] {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let arr = obj["data"] as? [[String: Any]] else {
+            return []
+        }
+        return arr.prefix(limit).compactMap { $0["id"] as? String }
+    }
+
+    /// Sanitize a path / URL string into a filesystem-friendly token.
+    func sanitize(_ s: String) -> String {
+        var out = ""
+        for ch in s {
+            if ch.isLetter || ch.isNumber || ch == "-" || ch == "_" {
+                out.append(ch)
+            } else if ch == "/" || ch == "?" || ch == "=" || ch == "&" {
+                out.append("_")
+            }
+        }
+        // Trim leading underscores from leading "/v1/..." path style.
+        while out.first == "_" { out.removeFirst() }
+        return out.isEmpty ? "x" : out
+    }
+
+    /// Output directory inside the spike folder (`out/` next to `Package.swift`).
+    /// Falls back to CWD when source location isn't resolvable.
+    func outputDirectory() -> URL {
+        // #file → .../Sources/CookieSpike/main.swift  → spike root is two parents up.
+        let source = URL(fileURLWithPath: #file)
+        let spikeRoot = source.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        return spikeRoot.appendingPathComponent("out")
     }
 }
 
