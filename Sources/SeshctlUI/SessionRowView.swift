@@ -103,6 +103,7 @@ public struct SessionRowView: View {
             // tier per R12a.
             HStack(spacing: 6) {
                 SenderText(display: session.senderDisplay, isUnread: isUnread)
+                    .foregroundStyle(senderColor())
                 if isUnread {
                     UnreadPill()
                 }
@@ -229,6 +230,18 @@ public struct SessionRowView: View {
             return color
         }
         return .secondary
+    }
+
+    /// Sender (repo name) color. Mirrors `branchColor()` — when per-repo
+    /// color coding is on, the sender picks up the repo accent so the
+    /// whole row reads as that repo's color group; otherwise falls back to
+    /// `.primary` so the sender keeps its full-strength row-heading
+    /// treatment.
+    private func senderColor() -> Color {
+        if repoAccentBarEnabled, let color = repoAccentColor(for: session.gitRepoName) {
+            return color
+        }
+        return .primary
     }
 
     /// Full directory path with ~ shortening.

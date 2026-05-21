@@ -138,6 +138,7 @@ public struct RemoteClaudeCodeRowView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 SenderText(display: session.senderDisplay, isUnread: isUnread)
+                    .foregroundStyle(senderColor(for: repo))
                 if isUnread {
                     UnreadPill()
                 }
@@ -244,5 +245,15 @@ public struct RemoteClaudeCodeRowView: View {
             return color
         }
         return .secondary
+    }
+
+    /// Sender (repo name) color. Mirrors `branchColor(for:)` but falls
+    /// back to `.primary` instead of `.secondary` so the sender keeps its
+    /// row-heading treatment when per-repo coloring is off.
+    private func senderColor(for repoName: String?) -> Color {
+        if repoAccentBarEnabled, let color = repoAccentColor(for: repoName) {
+            return color
+        }
+        return .primary
     }
 }
