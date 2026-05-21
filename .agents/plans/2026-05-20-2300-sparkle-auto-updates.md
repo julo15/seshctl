@@ -188,7 +188,7 @@ No new code component duplicates existing functionality.
 - `AGENTS.md` — replace the "Phase 2 will add Sparkle auto-updates. Don't re-introduce manual update infrastructure as a 'missing feature' — the plan deliberately defers it." paragraph with: Phase 2 is implemented; document the EdDSA key location, the `make appcast` step, the Pages dependency, the orphan-on-rotation rule.
 
 **Dependencies introduced:**
-- Build-time: Sparkle's `bin/generate_keys`, `bin/sign_update`, `bin/generate_appcast` (live inside the resolved package at `.build/checkouts/Sparkle/bin/`).
+- Build-time: Sparkle's `bin/generate_keys`, `bin/sign_update`, `bin/generate_appcast` (live inside the resolved package at `.build/artifacts/sparkle/Sparkle/bin/`).
 - Runtime: `Sparkle.framework` embedded in the .app bundle.
 - Infrastructure: GitHub Pages enabled on `julo15/seshctl` (one-time, via repo settings).
 
@@ -214,13 +214,13 @@ No new code component duplicates existing functionality.
 - [x] `swift build` — Sparkle resolves and the framework links cleanly.
 
 ### Step 2: Generate EdDSA keypair + back up
-- [ ] Run `.build/checkouts/Sparkle/bin/generate_keys` from the worktree root. This creates the private key in your login Keychain (item: `https://sparkle-project.org`, the only item Sparkle ever creates there) and prints the base64 public key to stdout.
+- [ ] Run `.build/artifacts/sparkle/Sparkle/bin/generate_keys` from the worktree root. This creates the private key in your login Keychain (item: `https://sparkle-project.org`, the only item Sparkle ever creates there) and prints the base64 public key to stdout.
 - [ ] Capture the public key string. **Don't commit it to anything yet** — it goes into Info.plist in Step 4.
-- [ ] Export the private key for 1Password backup: `.build/checkouts/Sparkle/bin/generate_keys -x /tmp/sparkle_priv.key`. Copy the file contents into a new 1Password secure note titled "Seshctl Sparkle EdDSA private key" alongside the existing Seshctl .p12 entry. Verify the export is a single line of base64. Delete `/tmp/sparkle_priv.key` after the copy.
+- [ ] Export the private key for 1Password backup: `.build/artifacts/sparkle/Sparkle/bin/generate_keys -x /tmp/sparkle_priv.key`. Copy the file contents into a new 1Password secure note titled "Seshctl Sparkle EdDSA private key" alongside the existing Seshctl .p12 entry. Verify the export is a single line of base64. Delete `/tmp/sparkle_priv.key` after the copy.
 - [ ] **Do not commit the private key anywhere in the repo.** The only thing the repo holds is the public key in Info.plist.
 
 ### Step 3: Add Sparkle keys to Info.plist
-- [ ] Edit `Resources/Info.plist`:
+- [x] Edit `Resources/Info.plist`:
   - `SUFeedURL` (string): `https://julo15.github.io/seshctl/appcast.xml`
   - `SUPublicEDKey` (string): the base64 public key from Step 2.
   - `SUEnableAutomaticChecks` (bool): `true`
@@ -243,7 +243,7 @@ No new code component duplicates existing functionality.
 ### Step 6: Build `scripts/make-appcast.sh` + `make appcast` target
 - [ ] Create `scripts/make-appcast.sh`. Required behavior:
   - `set -euo pipefail`. Strict mode like the other scripts.
-  - Locate Sparkle's tooling: `.build/checkouts/Sparkle/bin/sign_update` and `.build/checkouts/Sparkle/bin/generate_appcast`. Hard-error if missing (with a suggestion to run `swift build` first).
+  - Locate Sparkle's tooling: `.build/artifacts/sparkle/Sparkle/bin/sign_update` and `.build/artifacts/sparkle/Sparkle/bin/generate_appcast`. Hard-error if missing (with a suggestion to run `swift build` first).
   - Read `VERSION` from `Resources/Info.plist` via `plutil -extract CFBundleShortVersionString raw -o -` (mirrors `make-dmg.sh:36`).
   - Ensure `dist/Seshctl-<VERSION>.dmg` exists. Copy it into `dist/releases/` (create the mirror dir if missing).
   - Optional: if `docs/release-notes/<VERSION>.md` exists, embed it into `dist/releases/<VERSION>.html` (Sparkle's `generate_appcast` reads release-notes from sibling HTML files keyed by version).
@@ -263,7 +263,7 @@ No new code component duplicates existing functionality.
 
 ### Step 8: Update documentation
 - [ ] `docs/signing.md` — append a new section "EdDSA key for Sparkle auto-updates":
-  - Generation: `.build/checkouts/Sparkle/bin/generate_keys` (login Keychain).
+  - Generation: `.build/artifacts/sparkle/Sparkle/bin/generate_keys` (login Keychain).
   - Backup: `generate_keys -x` exports single-line base64, store in 1Password.
   - Restore on a new build host: `generate_keys -f sparkle_priv.key`.
   - **Public-key rotation procedure**: if the private key is ever lost, generate a new pair, update `SUPublicEDKey` in Info.plist, ship a new release. **Existing installs WILL NOT auto-update to that release** (their bundled public key doesn't match the new signature). They must manually download the rotation release. Document the user-facing communication ("hey, please manually grab v0.X.0 from Releases — we rotated signing keys") to send via Slack.
