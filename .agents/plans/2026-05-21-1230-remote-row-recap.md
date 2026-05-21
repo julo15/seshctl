@@ -174,11 +174,11 @@ flowchart TD
 - [x] Fetcher tests written in same step (7 new tests; 18/18 fetcher tests pass; 12/12 store tests pass).
 
 ### Step 3: Connection store cache + dispatch
-- [ ] In `Sources/SeshctlUI/ClaudeCodeConnectionStore.swift`, add:
+- [x] In `Sources/SeshctlUI/ClaudeCodeConnectionStore.swift`, add:
   - `private var remoteAwaySummaryCache: [String: (lastEventAt: Date, summary: String?)] = [:]`
-  - `private var inFlightAwaySummaryFetches: Set<String> = []`
+  - `private var awaySummaryFetchTasks: [String: Task<Void, Never>] = [:]` (replaces planned `inFlightAwaySummaryFetches: Set<String>` — same semantics, awaitable handles for tests)
   - `@Published public private(set) var remoteAwaySummariesById: [String: String] = [:]`
-- [ ] In `fetchNow()`, after a successful `fetcher.refresh()`:
+- [x] In `fetchNow()`, after a successful `fetcher.refresh()`:
   - Compute the set of session IDs returned. Prune `remoteAwaySummaryCache` and `remoteAwaySummariesById` to only those IDs.
   - For each returned session: if `remoteAwaySummaryCache[id]?.lastEventAt != session.lastEventAt` AND `inFlightAwaySummaryFetches` does not contain `id`, insert into the in-flight set and spawn:
     ```swift
@@ -198,8 +198,10 @@ flowchart TD
     }
     ```
   - Sessions whose cache `lastEventAt` matches the current `session.lastEventAt` are skipped — no network call.
-- [ ] On `disconnect()` and on transition to `.notConnected`, clear `remoteAwaySummaryCache`, `inFlightAwaySummaryFetches`, and `remoteAwaySummariesById` so cookies-purge + cache-purge stay in sync.
-- [ ] Run `swift build` (120s) via a subagent.
+- [x] On `disconnect()` and on transition to `.notConnected`, clear `remoteAwaySummaryCache`, cancel in-flight tasks, and clear `remoteAwaySummariesById` BEFORE the state transition (so the in-task `hasClaudeConnection` guard fires on `.notConnected`).
+- [x] Run `swift build` (120s) via a subagent.
+- [x] Test seam `awaitPendingAwaySummaryFetches() async` added so tests don't need Task.yield() loops.
+- [x] Connection-store tests written in same step (7 new tests covering populate, cache-hit-skip, advance-re-dispatch, failure caches nil + no retry, prune, disconnect clears, disconnect cancels in-flight). 19/19 store tests pass.
 
 ### Step 4: Display helpers + visibility promotion
 - [ ] In `Sources/SeshctlUI/Session+Display.swift`, promote `nonEmpty` (currently `fileprivate` on `Optional<String>`) and `trimmedPreviewBody` (currently `private static` on `Session`) to **module-internal** (default Swift visibility) so the remote-side extension can reuse them without duplication.
