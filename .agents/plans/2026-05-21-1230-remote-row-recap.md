@@ -151,12 +151,13 @@ flowchart TD
 ## Implementation Steps
 
 ### Step 1: Parser
-- [ ] Create `Sources/SeshctlCore/RemoteEventsParser.swift` with a public enum `RemoteEventsParser` mirroring `TranscriptAwaySummaryScanner`'s shape:
+- [x] Create `Sources/SeshctlCore/RemoteEventsParser.swift` with a public enum `RemoteEventsParser` mirroring `TranscriptAwaySummaryScanner`'s shape:
   - `static func extractLatestAssistantText(eventsResponseData: Data) -> String?` — top-level entry.
   - JSON-parse the body, expect `{ data: [event...] }`, walk newest-first (`data[]` is already newest-first per the spike), pick the first event where `event_type == "assistant"`, then within `payload.message.content[]` pick the first block where `type == "text"` and return its `.text` value.
   - Trim leading/trailing whitespace, return `nil` if empty after trim. Apply the same first-non-empty-line semantics the local-side scanner uses (via the shared helper once promoted in Step 4).
   - Returns `nil` on malformed JSON, missing fields, no assistant event, no text block.
-- [ ] Run `swift build` (120s timeout) via a subagent.
+- [x] Run `swift build` (120s timeout) via a subagent.
+- [x] Parser tests written in same step (14 tests, all passing). Plan's Step 6 parser test list satisfied.
 
 ### Step 2: Fetcher method + protocol extension
 - [ ] In `Sources/SeshctlCore/RemoteClaudeCodeFetcher.swift`, extract a helper `buildAuthedRequest(url:cookieHeader:)` that takes a `URL` and applies the existing header set (anthropic-beta, anthropic-version, Origin, Referer, User-Agent, Accept, Cookie). Refactor `buildRemoteClaudeCodeRequest(cookieHeader:)` to delegate to it (or replace, if no external callers).
