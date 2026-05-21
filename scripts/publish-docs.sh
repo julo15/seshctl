@@ -97,13 +97,15 @@ if ! gh auth status >/dev/null 2>&1; then
 fi
 
 # 6. Working tree contains the three expected paths and nothing else.
-#    `git status --porcelain` returns "XY path" entries. We accept M/A/?? states
-#    for the three expected paths and refuse if any other path shows up.
-#    Using newline-joined strings rather than arrays so this works on macOS's
-#    stock bash 3.2 (no `mapfile`).
+#    Enumerate via `git diff --name-only HEAD` (all tracked file changes
+#    regardless of staging state) plus `git ls-files --others --exclude-standard`
+#    (individual untracked files — `git status --porcelain` collapses untracked
+#    directories to a single trailing-slash entry, which is why we don't use it
+#    here). Using newline-joined strings rather than arrays so this works on
+#    macOS's stock bash 3.2 (no `mapfile`).
 EXPECTED_PATHS=("${INFO_PLIST}" "${APPCAST_PATH}" "${NOTES_PATH}")
 expected_sorted=$(printf '%s\n' "${EXPECTED_PATHS[@]}" | sort)
-actual_sorted=$(git status --porcelain | awk '{print $2}' | sort)
+actual_sorted=$( { git diff --name-only HEAD; git ls-files --others --exclude-standard; } | sort -u)
 if [[ "${actual_sorted}" != "${expected_sorted}" ]]; then
   echo "Error: working tree drift. Expected exactly these paths changed:" >&2
   printf '         %s\n' "${EXPECTED_PATHS[@]}" >&2
