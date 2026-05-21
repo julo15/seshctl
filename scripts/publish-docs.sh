@@ -99,15 +99,16 @@ fi
 # 6. Working tree contains the three expected paths and nothing else.
 #    `git status --porcelain` returns "XY path" entries. We accept M/A/?? states
 #    for the three expected paths and refuse if any other path shows up.
+#    Using newline-joined strings rather than arrays so this works on macOS's
+#    stock bash 3.2 (no `mapfile`).
 EXPECTED_PATHS=("${INFO_PLIST}" "${APPCAST_PATH}" "${NOTES_PATH}")
-mapfile -t actual_paths < <(git status --porcelain | awk '{print $2}' | sort)
 expected_sorted=$(printf '%s\n' "${EXPECTED_PATHS[@]}" | sort)
-actual_joined=$(printf '%s\n' "${actual_paths[@]}")
-if [[ "${actual_joined}" != "${expected_sorted}" ]]; then
+actual_sorted=$(git status --porcelain | awk '{print $2}' | sort)
+if [[ "${actual_sorted}" != "${expected_sorted}" ]]; then
   echo "Error: working tree drift. Expected exactly these paths changed:" >&2
   printf '         %s\n' "${EXPECTED_PATHS[@]}" >&2
   echo "       Actual:" >&2
-  printf '         %s\n' "${actual_paths[@]}" >&2
+  printf '         %s\n' "${actual_sorted}" >&2
   echo "       Stash or commit unrelated changes first." >&2
   exit 1
 fi
