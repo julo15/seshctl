@@ -3,6 +3,22 @@
     <channel>
         <title>Seshctl</title>
         <item>
+            <title>0.4.1</title>
+            <pubDate>Thu, 21 May 2026 11:56:33 -0400</pubDate>
+            <sparkle:version>5</sparkle:version>
+            <sparkle:shortVersionString>0.4.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h1>Seshctl 0.4.1</h1>
+
+<p>Smoke-test release for the Sparkle auto-update flow.</p>
+
+<p>No functional changes vs 0.4.0 — this release exists to verify that an installed 0.4.0 build detects the new appcast entry, downloads the signed DMG, verifies the EdDSA signature, swaps <code>/Applications/Seshctl.app</code>, and relaunches cleanly at 0.4.1.</p>
+
+<p>If you&rsquo;re seeing this prompt: the loop works end-to-end.</p>
+]]></description>
+            <enclosure url="https://github.com/julo15/seshctl/releases/download/v0.4.1/Seshctl-0.4.1.dmg" length="11683207" type="application/octet-stream" sparkle:edSignature="KvICFnFVyB9/Ah+EHavHi2OH/voV1fGXw6+tl748owNQo7ieJeIwz6WqH9y+G4pORT2EG1FELIc9i6+MZzi4AQ=="/>
+        </item>
+        <item>
             <title>0.4.0</title>
             <pubDate>Thu, 21 May 2026 09:55:34 -0400</pubDate>
             <sparkle:version>4</sparkle:version>
