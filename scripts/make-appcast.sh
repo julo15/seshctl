@@ -89,7 +89,7 @@ if [[ -f "${NOTES_MD}" ]]; then
   fi
 elif [[ -f "${NOTES_HTML}" ]]; then
   # Stale render from a previous run with a since-deleted .md — clean up.
-  rm -f "${NOTES_HTML}"
+  trash "${NOTES_HTML}" 2>/dev/null || rm -f "${NOTES_HTML}"
 fi
 
 # generate_appcast signs every artifact in the dir with the Keychain private
@@ -142,8 +142,5 @@ PYEOF
 echo ""
 echo "==> Wrote ${DOCS_DIR}/appcast.xml"
 echo ""
-echo "Next steps:"
-echo "  1. git diff docs/appcast.xml   # review"
-echo "  2. git add docs/appcast.xml ${NOTES_MD#${REPO_DIR}/}"
-echo "  3. git commit -m \"appcast: ${VERSION}\""
-echo "  4. git push   # GitHub Pages rebuilds within ~60s"
+echo "Next: review the diff (\`git diff docs/appcast.xml\`), then run \`make publish\`"
+echo "      to commit + push + wait for Pages + create the GitHub Release."

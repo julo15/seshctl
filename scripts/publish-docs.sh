@@ -40,7 +40,10 @@ INFO_PLIST="Resources/Info.plist"
 echo "==> Publish docs for v${VERSION}"
 
 # --- Idempotency: if Pages already advertises this version, nothing to do. ---
-if curl -fsS "${APPCAST_URL}" 2>/dev/null \
+# Append a cache-buster query string and pass `Cache-Control: no-cache` so the
+# Fastly CDN in front of GitHub Pages can't serve us a stale appcast (its TTL
+# can stretch to several minutes after a Pages rebuild).
+if curl -fsS -H "Cache-Control: no-cache" "${APPCAST_URL}?_=$(date +%s)" 2>/dev/null \
     | grep -q "sparkle:shortVersionString>${VERSION}<"; then
   echo "  Pages already serves v${VERSION} — skipping publish-docs."
   exit 0
@@ -82,7 +85,7 @@ if git rev-parse --verify --quiet "refs/tags/v${VERSION}" >/dev/null; then
   echo "Error: tag v${VERSION} already exists locally." >&2
   exit 1
 fi
-if git ls-remote --tags origin "refs/tags/v${VERSION}" 2>/dev/null | grep -q "v${VERSION}"; then
+if git ls-remote --tags origin "refs/tags/v${VERSION}" 2>/dev/null | grep -qF $'\trefs/tags/v'"${VERSION}"; then
   echo "Error: tag v${VERSION} already exists on origin." >&2
   exit 1
 fi
@@ -129,7 +132,7 @@ TIMEOUT_S=300
 INTERVAL_S=5
 START_TS=$(date +%s)
 while true; do
-  if curl -fsS "${APPCAST_URL}" 2>/dev/null \
+  if curl -fsS -H "Cache-Control: no-cache" "${APPCAST_URL}?_=$(date +%s)" 2>/dev/null \
       | grep -q "sparkle:shortVersionString>${VERSION}<"; then
     elapsed=$(( $(date +%s) - START_TS ))
     echo "  Pages serves v${VERSION} (after ${elapsed}s)."
