@@ -2135,9 +2135,10 @@ struct SessionListViewModelTests {
         try content.write(toFile: path, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(atPath: path) }
 
+        let pid: Int = 9001
         let db = try SeshctlDatabase.temporary()
-        let session = try db.startSession(tool: .claude, directory: "/tmp/x", pid: 9001)
-        try db.updateSession(pid: 9001, tool: .claude, transcriptPath: path)
+        let session = try db.startSession(tool: .claude, directory: "/tmp/x", pid: pid)
+        try db.updateSession(pid: pid, tool: .claude, transcriptPath: path)
 
         let vm = SessionListViewModel(database: db, enableGC: false)
         vm.refresh()
@@ -2157,9 +2158,10 @@ struct SessionListViewModelTests {
         try content.write(toFile: path, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(atPath: path) }
 
+        let pid: Int = 9002
         let db = try SeshctlDatabase.temporary()
-        let session = try db.startSession(tool: .codex, directory: "/tmp/x", pid: 9002)
-        try db.updateSession(pid: 9002, tool: .codex, transcriptPath: path)
+        let session = try db.startSession(tool: .codex, directory: "/tmp/x", pid: pid)
+        try db.updateSession(pid: pid, tool: .codex, transcriptPath: path)
 
         let vm = SessionListViewModel(database: db, enableGC: false)
         vm.refresh()
@@ -2173,8 +2175,9 @@ struct SessionListViewModelTests {
     @Test("awaySummariesById empty when session has no transcriptPath")
     @MainActor
     func awaySummariesById_emptyWhenNoTranscriptPath() throws {
+        let pid: Int = 9003
         let db = try SeshctlDatabase.temporary()
-        let session = try db.startSession(tool: .claude, directory: "/tmp/x", pid: 9003)
+        let session = try db.startSession(tool: .claude, directory: "/tmp/x", pid: pid)
 
         let vm = SessionListViewModel(database: db, enableGC: false)
         vm.refresh()
@@ -2198,13 +2201,54 @@ struct SessionListViewModelTests {
         try content.write(toFile: path, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(atPath: path) }
 
+        let pid: Int = 9004
         let db = try SeshctlDatabase.temporary()
-        let session = try db.startSession(tool: .claude, directory: "/tmp/x", pid: 9004)
-        try db.updateSession(pid: 9004, tool: .claude, transcriptPath: path)
+        let session = try db.startSession(tool: .claude, directory: "/tmp/x", pid: pid)
+        try db.updateSession(pid: pid, tool: .claude, transcriptPath: path)
 
         let vm = SessionListViewModel(database: db, enableGC: false)
         vm.refresh()
 
         #expect(vm.awaySummariesById[session.id] == nil)
+    }
+
+    @Test("awaySummariesById re-scans after the transcript file is rewritten")
+    @MainActor
+    func awaySummariesById_rescansAfterTranscriptRewrite() throws {
+        let dir = NSTemporaryDirectory()
+        let path = (dir as NSString).appendingPathComponent("\(UUID().uuidString).jsonl")
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let firstContent = """
+        {"type":"system","subtype":"away_summary","content":"First recap.","timestamp":"2026-05-06T17:48:04.022Z","sessionId":"abc","cwd":"/work"}
+        """
+        try firstContent.write(toFile: path, atomically: true, encoding: .utf8)
+
+        let pid: Int = 9005
+        let db = try SeshctlDatabase.temporary()
+        let session = try db.startSession(tool: .claude, directory: "/tmp/x", pid: pid)
+        try db.updateSession(pid: pid, tool: .claude, transcriptPath: path)
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+        #expect(vm.awaySummariesById[session.id] == "First recap.")
+
+        // Rewrite the JSONL with a different recap, then explicitly bump
+        // the file's mtime to dodge macOS's 1-second mtime granularity
+        // (avoids same-second flakiness without needing a real sleep).
+        // If the cache keys on mtime correctly, the second refresh picks
+        // up "Second recap."; if the cache always serves the stale value,
+        // it stays on "First recap." and this test fails.
+        let secondContent = """
+        {"type":"system","subtype":"away_summary","content":"Second recap.","timestamp":"2026-05-06T17:55:00.000Z","sessionId":"abc","cwd":"/work"}
+        """
+        try secondContent.write(toFile: path, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(2)],
+            ofItemAtPath: path
+        )
+
+        vm.refresh()
+        #expect(vm.awaySummariesById[session.id] == "Second recap.")
     }
 }

@@ -171,6 +171,7 @@ public struct RemoteClaudeCodeRowView: View {
         previewText
             .lineLimit(4)
             .truncationMode(.tail)
+            // Mirrors SessionRowView's eyeballed preview line spacing.
             .lineSpacing(3)
             .frame(maxWidth: .infinity, alignment: .leading)
     }

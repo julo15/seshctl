@@ -182,6 +182,8 @@ public struct SessionRowView: View {
         previewText
             .lineLimit(4)
             .truncationMode(.tail)
+            // Eyeballed — small enough to keep 4-line previews compact, large enough
+            // that wrapped lines don't read as a single visual block.
             .lineSpacing(3)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
