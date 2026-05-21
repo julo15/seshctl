@@ -243,10 +243,10 @@ No new code component duplicates existing functionality.
 - [x] Added `appcast` target to `Makefile` (one-line `bash scripts/make-appcast.sh`). NOT chained into `dist` — keeps `make dist` testable in isolation.
 - [x] `dist/releases/` is covered by the existing gitignored `dist/` entry. No new `.gitignore` line needed.
 
-### Step 7: One-time GitHub Pages enablement (manual)
-- [ ] User toggles Pages on in the repo settings: Settings → Pages → Source: "Deploy from a branch" → Branch: `main`, Folder: `/docs`. Save.
-- [ ] Within ~60 seconds, `https://julo15.github.io/seshctl/` should serve `docs/index.md` or similar (or 404 if no index — that's fine, only the appcast.xml path matters).
-- [ ] Document this one-time step in `docs/release.md` so a future maintainer knows the dependency.
+### Step 7: One-time GitHub Pages enablement
+- [x] Enabled via `gh api -X POST repos/julo15/seshctl/pages -f 'source[branch]=main' -f 'source[path]=/docs'`. Source: main / `/docs`. Status: built. URL: https://julo15.github.io/seshctl/.
+- [x] Verified site serves (HTTP/2 from GitHub.com); root and appcast.xml return 404 only because no index.html exists and appcast.xml isn't on main yet — expected.
+- [x] Already documented in `docs/release.md` (Step 8).
 
 ### Step 8: Update documentation
 - [x] `docs/signing.md` — new "EdDSA key for Sparkle auto-updates" section: generation, 1Password backup (mandatory), idempotency, public-key rotation procedure, Phase 1B compatibility.
