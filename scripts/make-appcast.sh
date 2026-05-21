@@ -108,14 +108,31 @@ mv -f "${RELEASES_DIR}/appcast.xml" "${DOCS_DIR}/appcast.xml"
 # Releases under `v<VERSION>/Seshctl-<VERSION>.dmg`, so we rewrite each URL
 # in-place. This keeps the appcast EdDSA signature intact — signatures are
 # computed over the DMG content, not the URL string.
-echo "==> Rewriting enclosure URLs to GitHub Releases pattern"
+echo "==> Rewriting enclosure URLs to GitHub Releases pattern + stripping <sparkle:deltas>"
 python3 - "${DOCS_DIR}/appcast.xml" <<'PYEOF'
 import re, sys
 path = sys.argv[1]
 with open(path, 'r', encoding='utf-8') as f:
     content = f.read()
+
+# 1. Strip <sparkle:deltas>...</sparkle:deltas> blocks entirely.
+#    generate_appcast emits binary-delta enclosures pointing at the appcast's
+#    feed directory (GitHub Pages), but we don't host .delta files anywhere —
+#    publish-release.sh only uploads the full DMG. Leaving these in would have
+#    Sparkle attempt a 404'ing delta download before falling back to the full
+#    DMG. Cleaner to omit them; Sparkle works fine with just the full update.
+delta_block = re.compile(
+    r'\s*<sparkle:deltas>.*?</sparkle:deltas>',
+    re.DOTALL,
+)
+content, deltas_removed = delta_block.subn('', content)
+
+# 2. Rewrite full DMG <enclosure url> to GitHub Releases. generate_appcast
+#    defaults to feed-relative URLs (Pages); our DMGs live on Releases under
+#    `v<VERSION>/Seshctl-<VERSION>.dmg`. This keeps EdDSA signatures intact —
+#    signatures are over DMG content, not the URL string.
 pattern = re.compile(r'url="https://julo15\.github\.io/seshctl/Seshctl-([^"]+)\.dmg"')
-new_content, n = pattern.subn(
+content, n = pattern.subn(
     r'url="https://github.com/julo15/seshctl/releases/download/v\1/Seshctl-\1.dmg"',
     content,
 )
@@ -135,8 +152,8 @@ if n == 0:
     )
     sys.exit(1)
 with open(path, 'w', encoding='utf-8') as f:
-    f.write(new_content)
-print(f"  rewrote {n} enclosure URL(s)")
+    f.write(content)
+print(f"  rewrote {n} enclosure URL(s); stripped {deltas_removed} <sparkle:deltas> block(s)")
 PYEOF
 
 echo ""
