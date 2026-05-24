@@ -13,6 +13,7 @@ public struct SettingsPopover: View {
     @State private var showingConfirmDisconnect = false
     @AppStorage(AppearanceDefaults.repoAccentBarKey) private var repoAccentBarEnabled: Bool = AppearanceDefaults.repoAccentBarDefault
     @AppStorage(AppearanceDefaults.showStatusBarIconKey) private var showStatusBarIcon: Bool = AppearanceDefaults.showStatusBarIconDefault
+    @AppStorage(AppearanceDefaults.stackedRowLayoutKey) private var stackedRowLayoutEnabled: Bool = AppearanceDefaults.stackedRowLayoutDefault
 
     /// Optional callbacks for the bottom-of-popover Application section.
     /// Supplied by `AppDelegate` so the popover can offer the same uninstall
@@ -81,6 +82,15 @@ public struct SettingsPopover: View {
                     .toggleStyle(.switch)
                     .controlSize(.small)
                 Text("Tints a vertical bar, the worktree label, and the branch name so sessions from the same repo cluster visually across the list.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Toggle("Stacked row layout", isOn: $stackedRowLayoutEnabled)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .padding(.top, 4)
+                Text("Stacks the repo name, branch, and chat preview vertically so the preview spans the full row width. Off uses the legacy two-column layout with the sender on the left and preview on the right.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

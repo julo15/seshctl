@@ -33,6 +33,7 @@ public struct SessionRowView: View {
     var onDetail: (() -> Void)?
 
     @AppStorage(AppearanceDefaults.repoAccentBarKey) private var repoAccentBarEnabled: Bool = AppearanceDefaults.repoAccentBarDefault
+    @AppStorage(AppearanceDefaults.stackedRowLayoutKey) private var stackedRowLayoutEnabled: Bool = AppearanceDefaults.stackedRowLayoutDefault
 
     public init(session: Session, hostApp: HostAppInfo, isUnread: Bool = false, isBridged: Bool = false, showCloudAffordances: Bool = false, showAgentBadge: Bool = true, awaySummary: String? = nil, onDetail: (() -> Void)? = nil) {
         self.session = session
@@ -77,32 +78,34 @@ public struct SessionRowView: View {
         return .orange
     }
 
-    /// Single-column stacked row content: sender (line 1), branch / row-kind
-    /// glyphs (line 2), and the chat preview (line 3+) all flow vertically
-    /// in one column that spans the full content width. Replaces the prior
-    /// two-column "sender on the left, preview on the right" Gmail-style
-    /// layout — the preview now wraps under the sender, giving it the full
-    /// row width instead of competing with a fixed 180pt sender column.
-    ///
-    /// **Read-state treatment:** the sender + branch lines stay at full
-    /// opacity in both states — unread rows bold them for emphasis, read
-    /// rows render at regular weight. The preview block dims on read so
-    /// the row recedes visually without losing top-line legibility. Row
-    /// chrome (status dot, time, accent bar, icon, pill, chevron) stays
-    /// at full opacity throughout.
+    /// Branches between the new stacked layout and the legacy two-column
+    /// layout based on `AppearanceDefaults.stackedRowLayoutKey`. The
+    /// stacked path is the new default; the legacy path is kept for A/B
+    /// comparison and should be removed once the new design is finalized.
     @ViewBuilder
     private var mainContent: some View {
+        if stackedRowLayoutEnabled {
+            stackedContent
+        } else {
+            legacyContent
+        }
+    }
+
+    /// Single-column stacked row content: sender (line 1), branch / row-kind
+    /// glyphs (line 2), and the chat preview (line 3+) all flow vertically
+    /// in one column that spans the full content width. The preview wraps
+    /// under the sender, getting the full row width instead of competing
+    /// with a fixed 180pt sender column.
+    ///
+    /// **Read-state treatment:** sender stays bold at full opacity in both
+    /// states; the preview block dims on read so the row recedes visually
+    /// without losing top-line legibility. Row chrome (status dot, time,
+    /// accent bar, icon, pill, chevron) stays at full opacity throughout.
+    @ViewBuilder
+    private var stackedContent: some View {
         VStack(alignment: .leading, spacing: 6) {
-            // Sender line — just the repo name (or directory basename
-            // when the session has no git context), with the unread pill
-            // sitting immediately to its right when the row is unread.
-            // Worktree disambiguation moved to line 2's branch slot.
-            // Italic is reserved for R3's `.userPrompt` / `.statusHint`
-            // cases on the *preview* side — never duplicated on the
-            // sender side. Stale-row dimming happens at the row-opacity
-            // tier per R12a.
             HStack(spacing: 6) {
-                SenderText(display: session.senderDisplay, isUnread: isUnread)
+                SenderText(display: session.senderDisplay, isUnread: isUnread, isStacked: true)
                     .foregroundStyle(senderColor())
                 if isUnread {
                     UnreadPill()
@@ -110,10 +113,7 @@ public struct SessionRowView: View {
             }
             .fontWeight(.bold)
 
-            // Branch / row-kind line. Per R6, sits at the same metric
-            // size as the sender and demotes via lower-contrast color
-            // rather than smaller font.
-            subtitleRow
+            subtitleRow(stacked: true)
                 .fontWeight(isUnread ? .bold : .regular)
 
             previewView
@@ -123,10 +123,42 @@ public struct SessionRowView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// Line-2 row-kind-glyphs + branch (or directory-path fallback when
-    /// there's no git context).
+    /// Legacy two-column row content: the left column stacks the sender
+    /// (line 1) above the branch / row-kind glyphs (line 2) at a fixed
+    /// 180pt width; the right column hosts the chat preview, vertically
+    /// centered to span the full row height in the Gmail "subject +
+    /// preview reads as prominent as the sender" idiom.
     @ViewBuilder
-    private var subtitleRow: some View {
+    private var legacyContent: some View {
+        // Top-aligned so the sender column (line 1 + branch line 2) sits
+        // flush with the first line of the preview when the row grows to
+        // multiple wrapped lines, instead of floating to the vertical
+        // center of a tall preview block.
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    SenderText(display: session.senderDisplay, isUnread: isUnread, isStacked: false)
+                        .foregroundStyle(senderColor())
+                    if isUnread {
+                        UnreadPill()
+                    }
+                }
+
+                subtitleRow(stacked: false)
+            }
+            .fontWeight(isUnread ? .bold : .regular)
+            .frame(width: SenderColumnLayout.width, alignment: .leading)
+
+            previewView
+                .opacity(isUnread ? 1.0 : 0.6)
+        }
+    }
+
+    /// Line-2 row-kind-glyphs + branch (or directory-path fallback when
+    /// there's no git context). `stacked` selects the font size — legacy
+    /// mode matches the sender at 13/14pt, stacked mode demotes to 11/12pt.
+    @ViewBuilder
+    private func subtitleRow(stacked: Bool) -> some View {
         HStack(spacing: 4) {
             if showCloudAffordances {
                 Image(systemName: "laptopcomputer")
@@ -145,7 +177,7 @@ public struct SessionRowView: View {
 
             if let branch = session.gitBranch, !branch.isEmpty {
                 Text(branch)
-                    .font(.system(size: SenderColumnLayout.subtitleSize(isUnread: isUnread), design: .monospaced))
+                    .font(.system(size: SenderColumnLayout.subtitleSize(isUnread: isUnread, stacked: stacked), design: .monospaced))
                     .foregroundStyle(branchColor())
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -154,7 +186,7 @@ public struct SessionRowView: View {
                 // directory path with middle truncation, mirroring the
                 // pre-redesign behavior.
                 Text(directoryPath)
-                    .font(.system(size: SenderColumnLayout.subtitleSize(isUnread: isUnread), design: .monospaced))
+                    .font(.system(size: SenderColumnLayout.subtitleSize(isUnread: isUnread, stacked: stacked), design: .monospaced))
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                     .truncationMode(.middle)
