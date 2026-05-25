@@ -297,10 +297,19 @@ public actor EmbeddingService {
             let src = multi.dataPointer.assumingMemoryBound(to: Float.self)
             for i in 0..<expectedCount { floats[i] = src[i] }
         case .float16:
-            // CoreML 14+ MLMultiArray surfaces FP16 via `Float16`. Convert in a loop;
-            // the cost is negligible at 256 * 384 = 98k elements.
+            // CoreML 14+ MLMultiArray surfaces FP16 via `Float16`. Convert in a
+            // loop; the cost is negligible at 256 * 384 = 98k elements.
+            // `Float16` is unavailable on x86_64 macOS (the universal build
+            // compiles for both archs). On Intel Macs we fall through to the
+            // `default` MLMultiArray subscript path, which goes through
+            // NSNumber and handles every dtype correctly — slower but
+            // correct, and Intel Macs are an increasingly small audience.
+            #if arch(arm64)
             let src = multi.dataPointer.assumingMemoryBound(to: Float16.self)
             for i in 0..<expectedCount { floats[i] = Float(src[i]) }
+            #else
+            for i in 0..<expectedCount { floats[i] = multi[i].floatValue }
+            #endif
         case .double:
             let src = multi.dataPointer.assumingMemoryBound(to: Double.self)
             for i in 0..<expectedCount { floats[i] = Float(src[i]) }
