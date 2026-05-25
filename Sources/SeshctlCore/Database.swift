@@ -2,7 +2,11 @@ import Foundation
 import GRDB
 
 public struct SeshctlDatabase: Sendable {
-    let dbPool: DatabasePool
+    /// Exposed publicly so sibling modules (notably `SeshctlRecall`) can run
+    /// transactions against the same on-disk store without going through
+    /// `SeshctlDatabase`'s session-centric helpers. Keeping a single
+    /// `DatabasePool` per process is load-bearing for WAL concurrency.
+    public let dbPool: DatabasePool
 
     /// Opens (or creates) the database at the given path with WAL mode.
     public init(path: String) throws {
@@ -148,6 +152,42 @@ public struct SeshctlDatabase: Sendable {
             try db.alter(table: "remote_claude_code_sessions") { t in
                 t.add(column: "environment_kind", .text).notNull().defaults(to: "")
             }
+        }
+
+        // v13: native-recall tables. Backs `SeshctlRecall.VectorStore` +
+        // `Indexer`. `text_hash` is the dedup key — adapters re-walk
+        // transcripts on every refresh and the UNIQUE constraint prevents
+        // duplicates. `recall_embeddings.vector` is a raw FP32 little-endian
+        // byte buffer (384 floats = 1536 bytes) keyed by `entry_id` with FK
+        // cascade so wiping `recall_entries` clears the embeddings too.
+        migrator.registerMigration("v13_create_recall_tables") { db in
+            try db.create(table: "recall_entries") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("agent", .text).notNull()
+                t.column("role", .text).notNull()
+                t.column("session_id", .text).notNull()
+                t.column("project", .text).notNull()
+                t.column("timestamp", .double).notNull()
+                t.column("text", .text).notNull()
+                t.column("text_hash", .text).notNull().unique()
+            }
+            try db.create(table: "recall_embeddings") { t in
+                t.column("entry_id", .integer)
+                    .primaryKey()
+                    .references("recall_entries", onDelete: .cascade)
+                t.column("vector", .blob).notNull()
+            }
+            try db.create(table: "recall_cursors") { t in
+                t.column("adapter_name", .text).primaryKey()
+                t.column("cursor_json", .text).notNull()
+                t.column("updated_at", .double).notNull()
+            }
+            try db.create(
+                index: "recall_entries_timestamp", on: "recall_entries",
+                columns: ["timestamp"])
+            try db.create(
+                index: "recall_entries_agent", on: "recall_entries",
+                columns: ["agent"])
         }
 
         try migrator.migrate(dbPool)
