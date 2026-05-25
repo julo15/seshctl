@@ -87,6 +87,10 @@ struct SessionTreeView: View {
                 showCloudAffordances: connectionStore.hasClaudeConnection,
                 showAgentBadge: showAgentBadge,
                 awaySummary: viewModel.awaySummariesById[session.id],
+                // Tree view has no time-based section headers, so the age
+                // slot does the day-context work itself via relative-day
+                // shorthand ("1d") for yesterday.
+                yesterdayStyle: .relativeDay,
                 onDetail: onOpenDetail.map { handler in
                     {
                         viewModel.markSessionRead(session)
@@ -101,7 +105,8 @@ struct SessionTreeView: View {
                 isUnread: viewModel.unreadSessionIds.contains(remote.id),
                 isStale: connectionStore.state == .authExpired,
                 showAgentBadge: showAgentBadge,
-                awaySummary: connectionStore.remoteAwaySummariesById[remote.id]
+                awaySummary: connectionStore.remoteAwaySummariesById[remote.id],
+                yesterdayStyle: .relativeDay
             )
         }
     }

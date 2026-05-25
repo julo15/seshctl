@@ -54,6 +54,11 @@ public struct RemoteClaudeCodeRowView: View {
     /// session has no assistant turn — either way the row falls through to
     /// `.reply(title)`. See `RemoteClaudeCodeSession.previewContent(awaySummary:)`.
     public let awaySummary: String?
+    /// How yesterday-bucket timestamps render in the row's age slot — see
+    /// `SessionAgeDisplay.YesterdayStyle`. Driven by the parent view: the
+    /// time-sorted inbox passes `.timeOfDay`, the repo-grouped tree view
+    /// passes `.relativeDay`.
+    public let yesterdayStyle: SessionAgeDisplay.YesterdayStyle
 
     @AppStorage(AppearanceDefaults.repoAccentBarKey) private var repoAccentBarEnabled: Bool = AppearanceDefaults.repoAccentBarDefault
     @AppStorage(AppearanceDefaults.stackedRowLayoutKey) private var stackedRowLayoutEnabled: Bool = AppearanceDefaults.stackedRowLayoutDefault
@@ -65,7 +70,8 @@ public struct RemoteClaudeCodeRowView: View {
         isStale: Bool = false,
         showCloudAffordances: Bool = true,
         showAgentBadge: Bool = true,
-        awaySummary: String? = nil
+        awaySummary: String? = nil,
+        yesterdayStyle: SessionAgeDisplay.YesterdayStyle = .date
     ) {
         self.session = session
         self.isSelected = isSelected
@@ -74,12 +80,13 @@ public struct RemoteClaudeCodeRowView: View {
         self.showCloudAffordances = showCloudAffordances
         self.showAgentBadge = showAgentBadge
         self.awaySummary = awaySummary
+        self.yesterdayStyle = yesterdayStyle
     }
 
     public var body: some View {
         ResultRowLayout(
             status: { AnimatedStatusDot(kind: statusKind) },
-            ageDisplay: SessionAgeDisplay(timestamp: session.lastEventAt),
+            ageDisplay: SessionAgeDisplay(timestamp: session.lastEventAt, yesterdayStyle: yesterdayStyle),
             content: { mainContent },
             hostApp: nil,
             // Remote sessions live on claude.ai, not in a macOS app — use a
