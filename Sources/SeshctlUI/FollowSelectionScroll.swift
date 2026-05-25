@@ -67,13 +67,14 @@ extension View {
     }
 }
 
-/// Stable scroll-target id for a `DisplayRow`. Local rows keep the historical
-/// `"\(session.id)-\(status)"` shape so status changes don't break scroll
-/// identity; remote rows use `"remote-\(id)"`.
+/// Stable scroll-target id for a `DisplayRow`. Identity stays constant across
+/// status changes so SwiftUI can animate row reorders (status often flips on
+/// the same refresh tick that bumps `updatedAt` and re-sorts the row, so any
+/// status-dependent id would tear the view down right when it should move).
 func rowViewIdentity(for row: DisplayRow) -> String {
     switch row {
     case .local(let session):
-        return "\(session.id)-\(session.status.rawValue)"
+        return session.id
     case .remote(let remote):
         return "remote-\(remote.id)"
     }
