@@ -33,6 +33,13 @@ import Foundation
 ///    is stale. Return nil so callers fall through to `lastAsk` (the row
 ///    shows `You: <new prompt>` instead of stale assistant text). Mirrors
 ///    `TranscriptAwaySummaryScanner`'s "current state" invalidation.
+/// 3. **System events preserve pendingText.** `system` events (including
+///    `system/away_summary`) deliberately do NOT clear pendingText — only
+///    `user` events do. This asymmetry is what lets the consumer-side
+///    `awaySummariesById ?? latestAssistantById` collapse work: when Claude
+///    emits an away_summary after assistant text, both scanners produce a
+///    value for the same session and the collapse picks `awaySummary` first.
+///    Test `returnsLatestAssistantWhenAwaySummaryFollowsIt` pins this.
 public enum TranscriptLatestAssistantScanner {
 
     /// Scan a transcript file on disk for the most recent assistant text
@@ -47,6 +54,15 @@ public enum TranscriptLatestAssistantScanner {
 
     /// Pure, string-in form used by tests and callers that have the
     /// transcript content already in memory.
+    ///
+    /// Inner-loop note: within an assistant turn, the FIRST `text` block
+    /// wins, even when its content is empty or whitespace-only — the loop
+    /// does not keep scanning for a non-empty text block. Today's Claude
+    /// Code JSONL emits exactly one text block per assistant turn (verified),
+    /// so "first wins" matches reality. Test `returnsNilForEmptyTextBlock`
+    /// pins this. If Claude ever starts emitting
+    /// `[empty-text, real-text, tool_use]` shapes, the loop will need to
+    /// skip empty blocks and continue instead.
     public static func extractLatestAssistantText(transcript: String) -> String? {
         var pendingText: String?
         transcript.enumerateLines { line, _ in

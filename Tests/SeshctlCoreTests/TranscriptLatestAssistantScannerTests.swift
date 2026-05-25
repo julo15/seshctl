@@ -35,6 +35,16 @@ struct TranscriptLatestAssistantScannerTests {
         #expect(result == nil)
     }
 
+    @Test("newer assistant event missing message.content clears prior valid text — returns nil")
+    func clearsPendingTextOnMalformedAssistantEvent() {
+        let transcript = """
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Earlier text"}]}}
+        {"type":"assistant","message":{"role":"assistant"}}
+        """
+        let result = TranscriptLatestAssistantScanner.extractLatestAssistantText(transcript: transcript)
+        #expect(result == nil)
+    }
+
     @Test("newest assistant turn is thinking-only — returns nil")
     func returnsNilWhenNewestAssistantIsThinkingOnly() {
         let transcript = """
