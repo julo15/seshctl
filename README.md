@@ -70,7 +70,7 @@ Seshctl can list Claude Code sessions hosted on claude.ai (Cowork) alongside loc
 4. The magic link opens in your default browser, not the sheet. Instead, **right-click → Copy Link Address** in your mail client.
 5. Paste the URL into the **Paste magic-link URL** field at the top of the sheet and press Enter. Auth completes and the sheet dismisses.
 
-Once connected, remote sessions appear with a cloud glyph. The connection lasts until the cookie expires (~28 days) or you click **Disconnect**.
+Once connected, remote sessions appear with a cloud glyph. Each remote row previews the latest assistant message, refreshed every 30 seconds. The connection lasts until the cookie expires (~28 days) or you click **Disconnect**.
 
 Accounts with Google-only sign-in: add an email/password or passkey on claude.ai first, then use that here.
 

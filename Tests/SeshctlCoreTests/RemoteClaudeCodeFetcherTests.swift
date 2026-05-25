@@ -510,4 +510,208 @@ struct RemoteClaudeCodeFetcherTests {
         #expect(result.count == 1)
         #expect(result[0].repoUrl == "https://github.com/julo15/the-repo")
     }
+
+    // MARK: - fetchLatestAssistantText
+    //
+    // These tests live inside the same `.serialized` `RemoteClaudeCodeFetcher`
+    // suite as `refresh()`'s tests because both groups share the process-wide
+    // `MockURLProtocol.handler` static. Cross-suite parallelism otherwise
+    // clobbers the handler between concurrent tests.
+
+    @Test("fetchLatestAssistantText: missing sessionKey throws notConnected")
+    func fetchEventsMissingSessionKeyThrowsNotConnected() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let fetcher = RemoteClaudeCodeFetcher(
+            cookieSource: source([makeCookie(name: "sessionKeyLC")]),
+            urlSession: stubbedSession(),
+            database: db
+        )
+
+        await #expect(throws: RemoteClaudeCodeError.notConnected) {
+            try await fetcher.fetchLatestAssistantText(sessionId: "cse_test_123")
+        }
+    }
+
+    @Test("fetchLatestAssistantText: missing sessionKeyLC throws notConnected")
+    func fetchEventsMissingSessionKeyLCThrowsNotConnected() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let fetcher = RemoteClaudeCodeFetcher(
+            cookieSource: source([makeCookie(name: "sessionKey")]),
+            urlSession: stubbedSession(),
+            database: db
+        )
+
+        await #expect(throws: RemoteClaudeCodeError.notConnected) {
+            try await fetcher.fetchLatestAssistantText(sessionId: "cse_test_123")
+        }
+    }
+
+    @Test("fetchLatestAssistantText: request URL and headers are canonical")
+    func fetchEventsRequestURLAndHeadersAreCanonical() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let capture = RequestCapture()
+        let data = Data(fixtureSimpleAssistantEvents.utf8)
+
+        MockURLProtocol.handler = { request in
+            Task { await capture.set(request) }
+            let url = request.url ?? URL(string: "https://claude.ai/v1/code/sessions/cse_test_123/events?limit=10")!
+            return (httpResponse(status: 200, url: url), data)
+        }
+        defer { MockURLProtocol.handler = nil }
+
+        let fetcher = RemoteClaudeCodeFetcher(
+            cookieSource: source([
+                makeCookie(name: "sessionKey", value: "SK_VAL"),
+                makeCookie(name: "sessionKeyLC", value: "SKLC_VAL"),
+            ]),
+            urlSession: stubbedSession(),
+            database: db
+        )
+
+        _ = try await fetcher.fetchLatestAssistantText(sessionId: "cse_test_123")
+
+        let last = await capture.last
+        let req = try #require(last)
+
+        #expect(req.url?.absoluteString == "https://claude.ai/v1/code/sessions/cse_test_123/events?limit=10")
+        #expect(req.httpMethod == "GET")
+
+        let cookie = try #require(req.value(forHTTPHeaderField: "Cookie"))
+        #expect(cookie.contains("sessionKey=SK_VAL"))
+        #expect(cookie.contains("sessionKeyLC=SKLC_VAL"))
+
+        #expect(req.value(forHTTPHeaderField: "Origin") == "https://claude.ai")
+        #expect(req.value(forHTTPHeaderField: "Referer") == "https://claude.ai/code")
+        #expect(req.value(forHTTPHeaderField: "User-Agent") == RemoteClaudeCodeFetcher.safariUserAgent)
+        #expect(req.value(forHTTPHeaderField: "anthropic-beta") == "managed-agents-2026-04-01")
+        #expect(req.value(forHTTPHeaderField: "anthropic-version") == "2023-06-01")
+        #expect(req.value(forHTTPHeaderField: "Accept") == "application/json")
+    }
+
+    @Test("fetchLatestAssistantText: returns parsed assistant text on 200")
+    func fetchEventsReturnsParsedAssistantTextOn200() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let data = Data(fixtureSimpleAssistantEvents.utf8)
+        MockURLProtocol.handler = { request in
+            let url = request.url ?? URL(string: "https://claude.ai/v1/code/sessions/cse_test_123/events?limit=10")!
+            return (httpResponse(status: 200, url: url), data)
+        }
+        defer { MockURLProtocol.handler = nil }
+
+        let fetcher = RemoteClaudeCodeFetcher(
+            cookieSource: source([
+                makeCookie(name: "sessionKey"),
+                makeCookie(name: "sessionKeyLC"),
+            ]),
+            urlSession: stubbedSession(),
+            database: db
+        )
+
+        let result = try await fetcher.fetchLatestAssistantText(sessionId: "cse_test_123")
+        #expect(result == "Pushed.")
+    }
+
+    @Test("fetchLatestAssistantText: returns nil when parser finds no assistant text")
+    func fetchEventsReturnsNilWhenParserFindsNoAssistantText() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let data = Data(fixtureNoAssistantEvents.utf8)
+        MockURLProtocol.handler = { request in
+            let url = request.url ?? URL(string: "https://claude.ai/v1/code/sessions/cse_test_123/events?limit=10")!
+            return (httpResponse(status: 200, url: url), data)
+        }
+        defer { MockURLProtocol.handler = nil }
+
+        let fetcher = RemoteClaudeCodeFetcher(
+            cookieSource: source([
+                makeCookie(name: "sessionKey"),
+                makeCookie(name: "sessionKeyLC"),
+            ]),
+            urlSession: stubbedSession(),
+            database: db
+        )
+
+        let result = try await fetcher.fetchLatestAssistantText(sessionId: "cse_test_123")
+        #expect(result == nil)
+    }
+
+    @Test("fetchLatestAssistantText: 401 throws needsReauth")
+    func fetchEventsUnauthorizedThrowsNeedsReauth() async throws {
+        let db = try SeshctlDatabase.temporary()
+        MockURLProtocol.handler = { request in
+            let url = request.url ?? URL(string: "https://claude.ai/v1/code/sessions/cse_test_123/events?limit=10")!
+            return (httpResponse(status: 401, url: url), Data())
+        }
+        defer { MockURLProtocol.handler = nil }
+
+        let fetcher = RemoteClaudeCodeFetcher(
+            cookieSource: source([
+                makeCookie(name: "sessionKey"),
+                makeCookie(name: "sessionKeyLC"),
+            ]),
+            urlSession: stubbedSession(),
+            database: db
+        )
+
+        await #expect(throws: RemoteClaudeCodeError.needsReauth) {
+            try await fetcher.fetchLatestAssistantText(sessionId: "cse_test_123")
+        }
+    }
+
+    @Test("fetchLatestAssistantText: 500 throws http 500")
+    func fetchEventsServerErrorThrowsHTTP() async throws {
+        let db = try SeshctlDatabase.temporary()
+        MockURLProtocol.handler = { request in
+            let url = request.url ?? URL(string: "https://claude.ai/v1/code/sessions/cse_test_123/events?limit=10")!
+            return (httpResponse(status: 500, url: url), Data())
+        }
+        defer { MockURLProtocol.handler = nil }
+
+        let fetcher = RemoteClaudeCodeFetcher(
+            cookieSource: source([
+                makeCookie(name: "sessionKey"),
+                makeCookie(name: "sessionKeyLC"),
+            ]),
+            urlSession: stubbedSession(),
+            database: db
+        )
+
+        await #expect(throws: RemoteClaudeCodeError.http(500)) {
+            try await fetcher.fetchLatestAssistantText(sessionId: "cse_test_123")
+        }
+    }
 }
+
+// MARK: - events fixtures
+
+/// Minimal events-endpoint response with one assistant event whose first text
+/// block is "Pushed.".
+private let fixtureSimpleAssistantEvents: String = """
+{
+  "data": [
+    {
+      "event_type": "assistant",
+      "payload": {
+        "message": {
+          "content": [
+            { "type": "text", "text": "Pushed." }
+          ]
+        }
+      }
+    }
+  ],
+  "next_cursor": null
+}
+"""
+
+/// Events response with no assistant events (only `result`-type entries).
+private let fixtureNoAssistantEvents: String = """
+{
+  "data": [
+    {
+      "event_type": "result",
+      "payload": {}
+    }
+  ],
+  "next_cursor": null
+}
+"""

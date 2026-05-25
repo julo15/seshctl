@@ -176,8 +176,12 @@ enum PreviewContent: Equatable {
 /// Returns the trimmed content of `self` if it has any non-whitespace
 /// content; otherwise returns nil. Used to fold "nil", "" and whitespace-only
 /// strings into a single notion of "empty" for the preview-priority chain.
+///
+/// Intentionally module-internal (default visibility) rather than `fileprivate`
+/// so the sibling extension in `RemoteClaudeCodeSession+Display.swift` can
+/// reuse it without duplicating the trim semantics.
 extension Optional where Wrapped == String {
-    fileprivate var nonEmpty: String? {
+    var nonEmpty: String? {
         guard let value = self else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : value
@@ -278,7 +282,13 @@ extension Session {
     /// (including newlines) stripped, preserving internal newlines so a
     /// multi-line reply renders across multiple lines in the row preview.
     /// Returns nil when the trimmed result is empty.
-    private static func trimmedPreviewBody(of text: String) -> String? {
+    ///
+    /// Intentionally module-internal (default visibility) rather than
+    /// `private` so the sibling extension in
+    /// `RemoteClaudeCodeSession+Display.swift` can reuse it via
+    /// `Session.trimmedPreviewBody(of:)` without duplicating the trim
+    /// semantics.
+    static func trimmedPreviewBody(of text: String) -> String? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }

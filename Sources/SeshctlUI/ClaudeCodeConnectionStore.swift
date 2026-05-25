@@ -11,6 +11,7 @@ import SeshctlCore
 /// spin up a real `URLSession` or WebKit cookie store.
 public protocol RemoteClaudeCodeFetching: Sendable {
     func refresh() async throws -> [RemoteClaudeCodeSession]
+    func fetchLatestAssistantText(sessionId: String) async throws -> String?
 }
 
 extension RemoteClaudeCodeFetcher: RemoteClaudeCodeFetching {}
@@ -68,6 +69,38 @@ public final class ClaudeCodeConnectionStore: ObservableObject {
     private let fetcher: RemoteClaudeCodeFetching
     private var activeSheet: ClaudeCodeSignInSheet?
     private var periodicTimer: Timer?
+
+    /// Cache of `(lastEventAt, parsed assistant summary)` per remote session id.
+    /// Hit when the list endpoint reports the same `lastEventAt` we already
+    /// fetched against; miss when it advanced or the entry is absent. A nil
+    /// `summary` is a valid hit — means we already tried for THIS lastEventAt
+    /// and got nothing (no assistant event, or the fetch failed). We don't
+    /// retry until `lastEventAt` advances, so failures don't loop.
+    private var remoteAwaySummaryCache: [String: (lastEventAt: Date, summary: String?)] = [:]
+
+    /// Pairs a dispatched fetch task with a per-dispatch UUID so the Task's
+    /// `defer` cleanup can identity-check before wiping the dict entry. Without
+    /// the UUID, a slow Task A that finally returns after `disconnect()` +
+    /// reconnect + a fresh Task B dispatch under the same session id would
+    /// erase B's entry — making the next `fetchNow()` re-dispatch a duplicate.
+    private struct PendingAwaySummaryFetch {
+        let id: UUID
+        let task: Task<Void, Never>
+    }
+
+    /// In-flight `fetchLatestAssistantText` tasks keyed by session id. Used
+    /// both as the duplicate-dispatch guard AND as the awaitable handle so
+    /// tests can deterministically wait for pending fetches via
+    /// `awaitPendingAwaySummaryFetches()`. Entries remove themselves via
+    /// `defer` inside the Task body — but only if the slot still holds the
+    /// same dispatch UUID (see `PendingAwaySummaryFetch`).
+    private var awaySummaryFetchTasks: [String: PendingAwaySummaryFetch] = [:]
+
+    /// Published map of `session id → most recent assistant text` for pure-
+    /// remote rows. Sessions absent from this map fall through to the row's
+    /// existing `.reply(title)` preview. Computed lazily by per-session
+    /// events fetches dispatched from `fetchNow()`.
+    @Published public private(set) var remoteAwaySummariesById: [String: String] = [:]
 
     public init(
         database: SeshctlDatabase,
@@ -127,7 +160,105 @@ public final class ClaudeCodeConnectionStore: ObservableObject {
             result = .failure(error)
         }
 
+        // Update state BEFORE dispatching per-session fetches. The dispatched
+        // Tasks await `fetcher.fetchLatestAssistantText`, and their post-await
+        // `hasClaudeConnection` guard must observe the latest state — not a
+        // stale value from a prior fetch outcome. Setting state first decouples
+        // dispatch from any "must be synchronous through dispatch" invariant.
         state = Self.stateForFetchResult(result, previouslyConnectedAt: priorFetchAt)
+
+        // On success only — prune stale cache entries and dispatch per-session
+        // events fetches for any session whose `lastEventAt` advanced (or
+        // appeared for the first time). Failures intentionally skip this step
+        // so cached summaries survive auth-expired / transient-error blips.
+        if case .success(let rows) = result {
+            pruneRemoteAwaySummaryState(keepingIds: Set(rows.map(\.id)))
+            for session in rows {
+                dispatchAwaySummaryFetchIfNeeded(for: session)
+            }
+        }
+    }
+
+    /// Drop cache + map entries for session IDs no longer present in the
+    /// latest list response. Mirrors `pruneTranscriptAwaySummaryCache` on the
+    /// VM side. Does NOT cancel in-flight tasks for sessions that fell out of
+    /// the list — they may simply not appear in the next page (pagination) or
+    /// the user may resume one. Cancelling would just trade one race for
+    /// another; the next `fetchNow()` will either rediscover the session or
+    /// the task will complete and the guard in its body will drop the result.
+    private func pruneRemoteAwaySummaryState(keepingIds live: Set<String>) {
+        remoteAwaySummaryCache = remoteAwaySummaryCache.filter { live.contains($0.key) }
+        remoteAwaySummariesById = remoteAwaySummariesById.filter { live.contains($0.key) }
+    }
+
+    /// If we don't already have a cached summary for `session.lastEventAt`
+    /// (and no fetch is in flight for this id), spawn a Task to fetch the
+    /// latest assistant text and write the result into the cache + map.
+    /// Safe to call on every `fetchNow()`: the cache-hit and in-flight
+    /// guards make redundant calls cheap.
+    private func dispatchAwaySummaryFetchIfNeeded(for session: RemoteClaudeCodeSession) {
+        let id = session.id
+        let pinnedLastEventAt = session.lastEventAt
+
+        // Cache hit? Skip — we already have a result (possibly nil) for this exact lastEventAt.
+        if let cached = remoteAwaySummaryCache[id], cached.lastEventAt == pinnedLastEventAt {
+            return
+        }
+        // Already fetching? Skip — the in-flight task will write the result.
+        if awaySummaryFetchTasks[id] != nil {
+            return
+        }
+
+        let dispatchID = UUID()
+        let task = Task { @MainActor [weak self] in
+            defer {
+                // Identity-checked cleanup: only wipe OUR slot. A fresh dispatch
+                // (post-disconnect+reconnect) would have a different UUID under
+                // the same session id, so we must NOT remove its entry just
+                // because we share an id with the prior, now-superseded task.
+                if self?.awaySummaryFetchTasks[id]?.id == dispatchID {
+                    self?.awaySummaryFetchTasks.removeValue(forKey: id)
+                }
+            }
+            guard let self else { return }
+            let result: String?
+            do {
+                result = try await self.fetcher.fetchLatestAssistantText(sessionId: id)
+            } catch {
+                // Cache the failure against this lastEventAt so we don't retry
+                // until activity advances it. See doc on remoteAwaySummaryCache.
+                result = nil
+            }
+            // Disconnect-race guard: if the cache was cleared while we were
+            // awaiting (disconnect or .notConnected transition), don't repopulate.
+            guard self.hasClaudeConnection else { return }
+            self.remoteAwaySummaryCache[id] = (pinnedLastEventAt, result)
+            if let result {
+                self.remoteAwaySummariesById[id] = result
+            } else {
+                self.remoteAwaySummariesById.removeValue(forKey: id)
+            }
+        }
+        awaySummaryFetchTasks[id] = PendingAwaySummaryFetch(id: dispatchID, task: task)
+    }
+
+    /// Wait for all in-flight `fetchLatestAssistantText` tasks dispatched by
+    /// `fetchNow()` to complete. Used by tests to assert on cache state without
+    /// flaky `Task.yield()` loops. Safe to call when no fetches are in flight
+    /// (returns immediately).
+    public func awaitPendingAwaySummaryFetches() async {
+        // Snapshot the values — Task completions mutate the dict via defer,
+        // so iterating live would crash.
+        let tasks = awaySummaryFetchTasks.values.map(\.task)
+        for task in tasks {
+            _ = await task.value
+        }
+        // Some completions may have dispatched follow-up tasks (they shouldn't
+        // by design, but be defensive). Re-snapshot once and drain.
+        let followups = awaySummaryFetchTasks.values.map(\.task)
+        for task in followups {
+            _ = await task.value
+        }
     }
 
     /// Kicks off an initial fetch (if cookies are present) and schedules a
@@ -188,6 +319,14 @@ public final class ClaudeCodeConnectionStore: ObservableObject {
             // Cache clear is best-effort; the user's intent (to disconnect) is
             // preserved regardless.
         }
+        // Clear the away-summary cache + map and cancel any in-flight fetches.
+        // Must happen BEFORE the state transition so the disconnect-race guard
+        // (`hasClaudeConnection`) in pending Task closures fires correctly
+        // after the state flips to `.notConnected`.
+        remoteAwaySummaryCache.removeAll()
+        remoteAwaySummariesById = [:]
+        for pending in awaySummaryFetchTasks.values { pending.task.cancel() }
+        awaySummaryFetchTasks.removeAll()
         state = .notConnected
     }
 

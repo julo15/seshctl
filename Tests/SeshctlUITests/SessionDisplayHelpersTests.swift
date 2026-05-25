@@ -359,3 +359,71 @@ struct SessionPreviewContentAwaySummaryTests {
         )
     }
 }
+
+// MARK: - RemoteClaudeCodeSession.previewContent(awaySummary:) priority chain
+//
+// Remote rows have no `lastReply` / `lastAsk` chain — the title is the only
+// fallback. These tests pin the same priority semantics the local-side
+// `Session.previewContent(awaySummary:)` already has: non-empty summary wins
+// and renders as `.awaySummary`; nil / empty / whitespace falls through to
+// the existing `.reply(title)`.
+
+private func makeRemoteSession(
+    id: String = "cse_test",
+    title: String = "Untouched title",
+    lastEventAt: Date = Date()
+) -> RemoteClaudeCodeSession {
+    RemoteClaudeCodeSession(
+        id: id,
+        title: title,
+        model: "claude-opus-4-7",
+        repoUrl: "https://github.com/julo15/example",
+        branches: ["main"],
+        status: "active",
+        workerStatus: "idle",
+        connectionStatus: "connected",
+        lastEventAt: lastEventAt,
+        createdAt: Date(),
+        unread: false
+    )
+}
+
+@Suite("RemoteClaudeCodeSession.previewContent(awaySummary:)")
+struct RemoteClaudeCodeSessionPreviewContentAwaySummaryTests {
+
+    @Test("Non-nil summary returns .awaySummary (title is irrelevant)")
+    func summaryWinsOverTitle() {
+        let r = makeRemoteSession(title: "Untouched title")
+        #expect(
+            r.previewContent(awaySummary: "Shipped PR #42")
+                == .awaySummary("Shipped PR #42")
+        )
+    }
+
+    @Test("Multi-line summary preserves internal newlines, trims wrappers")
+    func multilineSummaryPreservesBodyTrimsEdges() {
+        let r = makeRemoteSession()
+        #expect(
+            r.previewContent(awaySummary: "  first line\nsecond line  ")
+                == .awaySummary("first line\nsecond line")
+        )
+    }
+
+    @Test("nil summary falls through to .reply(title)")
+    func nilSummaryFallsThrough() {
+        let r = makeRemoteSession(title: "Untouched title")
+        #expect(r.previewContent(awaySummary: nil) == .reply("Untouched title"))
+    }
+
+    @Test("Empty-string summary falls through to .reply(title)")
+    func emptySummaryFallsThrough() {
+        let r = makeRemoteSession(title: "Untouched title")
+        #expect(r.previewContent(awaySummary: "") == .reply("Untouched title"))
+    }
+
+    @Test("Whitespace-only summary falls through to .reply(title)")
+    func whitespaceSummaryFallsThrough() {
+        let r = makeRemoteSession(title: "Untouched title")
+        #expect(r.previewContent(awaySummary: "   \n  ") == .reply("Untouched title"))
+    }
+}

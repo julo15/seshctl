@@ -48,6 +48,12 @@ public struct RemoteClaudeCodeRowView: View {
     /// kind. Mirrors the same flag on `SessionRowView`; driven by
     /// `SessionListViewModel.hasMultipleAgentTypes`.
     public let showAgentBadge: Bool
+    /// Most recent assistant text for this remote session, if known.
+    /// Sourced from `ClaudeCodeConnectionStore.remoteAwaySummariesById` at the
+    /// row's construction site. Nil means we haven't fetched yet OR the
+    /// session has no assistant turn — either way the row falls through to
+    /// `.reply(title)`. See `RemoteClaudeCodeSession.previewContent(awaySummary:)`.
+    public let awaySummary: String?
 
     @AppStorage(AppearanceDefaults.repoAccentBarKey) private var repoAccentBarEnabled: Bool = AppearanceDefaults.repoAccentBarDefault
     @AppStorage(AppearanceDefaults.stackedRowLayoutKey) private var stackedRowLayoutEnabled: Bool = AppearanceDefaults.stackedRowLayoutDefault
@@ -58,7 +64,8 @@ public struct RemoteClaudeCodeRowView: View {
         isUnread: Bool = false,
         isStale: Bool = false,
         showCloudAffordances: Bool = true,
-        showAgentBadge: Bool = true
+        showAgentBadge: Bool = true,
+        awaySummary: String? = nil
     ) {
         self.session = session
         self.isSelected = isSelected
@@ -66,6 +73,7 @@ public struct RemoteClaudeCodeRowView: View {
         self.isStale = isStale
         self.showCloudAffordances = showCloudAffordances
         self.showAgentBadge = showAgentBadge
+        self.awaySummary = awaySummary
     }
 
     public var body: some View {
@@ -186,13 +194,15 @@ public struct RemoteClaudeCodeRowView: View {
         }
     }
 
-    /// Chat-preview column. Remote sessions always pass through the
-    /// `.reply` case (title-as-preview) — `previewContent` on
-    /// `RemoteClaudeCodeSession` is hardcoded to `.reply(title)` because
-    /// there's no `lastReply` / `lastAsk` priority chain. The other cases
-    /// are handled here for exhaustiveness in case the helper's contract
-    /// ever loosens, keeping the typography mapping consistent with
-    /// `SessionRowView.previewView` (15pt title3, bold-on-unread).
+    /// Chat-preview column. Remote sessions resolve to either `.awaySummary`
+    /// (when the connection store has a cached claude.ai recap for this
+    /// session — see `previewContent(awaySummary:)` on
+    /// `RemoteClaudeCodeSession`) or `.reply(title)` as the fallback. The
+    /// `.userPrompt` and `.statusHint` cases are handled here for
+    /// exhaustiveness only — remote sessions have no `lastReply` /
+    /// `lastAsk` priority chain that would surface them — keeping the
+    /// typography mapping consistent with `SessionRowView.previewView`
+    /// (15pt title3, bold-on-unread).
     ///
     /// Plain preview column — the unread pill moved up next to the sender
     /// (line 1), mirroring `SessionRowView.previewView`, so wrapped preview
@@ -209,7 +219,7 @@ public struct RemoteClaudeCodeRowView: View {
 
     @ViewBuilder
     private var previewText: some View {
-        switch session.previewContent {
+        switch session.previewContent(awaySummary: awaySummary) {
         case .reply(let text):
             Text(text)
                 .font(.title3)
@@ -227,11 +237,11 @@ public struct RemoteClaudeCodeRowView: View {
                 .italic()
                 .foregroundStyle(.tertiary)
         case .awaySummary(let text):
-            // Defensive — remote rows have no local JSONL transcript so the
-            // `awaySummary` case is unreachable today, but it must exist for
-            // the switch to be exhaustive. Mirror `SessionRowView`'s clock-
-            // led rendering so the behavior matches if the contract ever
-            // loosens.
+            // The claude.ai assistant-text recap fetched via
+            // `ClaudeCodeConnectionStore.remoteAwaySummariesById` (per-session
+            // cache populated by per-session `/events` calls). Rendered with
+            // a leading clock glyph and the same `.title3` / bold-on-unread
+            // typography as local rows so remote recaps read identically.
             (
                 Text(Image(systemName: "clock")).foregroundColor(.secondary)
                 + Text(" ")
