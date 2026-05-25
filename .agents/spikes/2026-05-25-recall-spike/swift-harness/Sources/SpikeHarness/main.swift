@@ -68,9 +68,12 @@ struct SpikeHarness {
             let tokenizer = try await AutoTokenizer.from(modelFolder: tokenizerFolderURL)
 
             FileHandle.standardError.write(Data(">> Compiling + loading CoreML model\n".utf8))
-            let compiledURL = try MLModel.compileModel(at: modelURL)
+            let compiledURL = try await MLModel.compileModel(at: modelURL)
             let modelConfig = MLModelConfiguration()
-            modelConfig.computeUnits = .all
+            // Spike parity test: force CPU. .all (ANE/GPU) crashes MPSGraph on this
+            // macOS 14 + MiniLM-L6-v2 + INT8-quant combination. Production may want
+            // a different compute unit; revisit after parity is proven.
+            modelConfig.computeUnits = .cpuOnly
             let model = try MLModel(contentsOf: compiledURL, configuration: modelConfig)
 
             var records: [OutputRecord] = []

@@ -226,18 +226,52 @@ The **spike-first structure** is what de-risks this. Phase 1 burns 1–2 days to
 
 ## Implementation Steps
 
-### Step 1: Parity spike (Phase 1 — GATE)
+### Step 1: Parity spike (Phase 1 — GATE) — DONE 2026-05-25
 
-A throwaway spike under `.agents/spikes/2026-05-25-recall-spike/`. Do not merge to main; commit on a feature branch named `julo/recall-spike` so the work is recoverable.
+The spike lives under `.agents/spikes/2026-05-25-recall-spike/`. Committed
+directly on `julo/native-recall-rewrite` (we skipped the separate
+`julo/recall-spike` branch — too much overhead for a single iteration).
 
-- [ ] Create `.agents/spikes/2026-05-25-recall-spike/` directory.
-- [ ] Write `scripts/convert-model.py`: runs `coremltools.convert(...)` on the upstream HuggingFace ONNX, applies INT8 quantization via `coremltools.optimize.coreml.linear_quantize_weights`, writes `all-MiniLM-L6-v2-int8.mlpackage` and copies the `tokenizer.json`. Document Python deps and the one-time setup in a `README.md` next to the script.
-- [ ] Run the conversion locally on Julian's Mac. Verify the `.mlpackage` size is between 20MB and 50MB. If size is wildly off, stop and reconsider quantization config.
-- [ ] In the spike directory, write a parity harness: a SwiftPM executable target that takes a `.mlpackage` + `tokenizer.json` and a list of 20 reference strings; loads the CoreML model and swift-transformers tokenizer; outputs token IDs and embeddings for each string.
-- [ ] Run the same 20 strings through Python recall's `encode()` (instrument `recall/embedding.py` temporarily to dump tokens + embeddings as JSON).
-- [ ] Diff: token IDs must match exactly; embeddings must match to ‖a−b‖_∞ ≤ 1e-3 (loose tolerance because CoreML may use FP16 / ANE).
-- [ ] **Gate criterion**: parity passes for all 20 strings → green-light Phase 2. Parity fails on any string → stop, document the failure, re-plan.
-- [ ] Commit the spike artifacts to the `julo/recall-spike` branch. Do not merge.
+- [x] Create `.agents/spikes/2026-05-25-recall-spike/` directory.
+- [x] Write `convert-model.py`: PyTorch trace → CoreML `mlprogram` →
+  `linear_quantize_weights`. Outputs `all-MiniLM-L6-v2-int8.mlpackage` +
+  `tokenizer.json` + `tokenizer_config.json`. 15–60MB size gate.
+- [x] Run the conversion locally — 21.91MB (inside the band).
+- [x] Build the parity harness: `swift-harness/` SwiftPM exec depending on
+  `huggingface/swift-transformers` pinned to **1.3.3**. Tokenizes via
+  `AutoTokenizer.from(modelFolder:)`, runs CoreML inference, mean-pools,
+  L2-normalizes, emits JSON.
+- [x] Run reference strings through `dump-python-reference.py` (HF
+  tokenizers + onnxruntime, matching recall's actual path).
+- [x] Diff token IDs (exact) + embeddings (1e-3 tolerance).
+  - Token IDs: **identical for all 20 strings**.
+  - Embedding L_inf: ~0.007 (above 1e-3) — caused by INT8 weight
+    quantization, NOT by anything in the Swift port (FP32-unquantized
+    variant tested as a control achieved L_inf ~1e-7).
+- [x] **Gate disposition**: strict per-embedding gate failed; added a
+  top-K retrieval test (`compare-topk.py`) as the de-facto production
+  gate. Result for the INT8 production variant:
+  - Top-1 agreement: 19/20
+  - Top-3 set agreement: 18/20
+  - Top-5 set agreement: 18/20
+  - Top-5 strict-list agreement: 12/20 (the 8 list-disagreements are
+    position-swaps within an identical document set at positions 4–5
+    where similarity scores are effectively tied).
+  Julian accepted this for production: ~22MB model, top-1 and top-3
+  stable, tail-position swaps acceptable for top-K semantic search.
+- [x] Commit spike artifacts on `julo/native-recall-rewrite`.
+
+**Canonical conversion config (load-bearing for Phase 7):**
+- `compute_precision = ct.precision.FLOAT32` (FP32 internal math —
+  marginally tighter numerical stability at no DMG-size cost vs FP16).
+- `linear_quantize_weights(mode="linear_symmetric", weight_threshold=512)`
+  (INT8 weights, this is what compresses 86MB → 22MB).
+- `minimum_deployment_target = ct.target.macOS14`.
+- `compute_units = ct.ComputeUnit.ALL` (declared in the saved .mlpackage;
+  the runtime EmbeddingService may select a narrower unit if MPSGraph
+  regresses on the production model — spike's harness had to fall back
+  to `cpuOnly` to avoid an ANE-path assertion failure for this exact
+  model+OS combination).
 
 ### Step 2: Scaffold the SeshctlRecall module
 

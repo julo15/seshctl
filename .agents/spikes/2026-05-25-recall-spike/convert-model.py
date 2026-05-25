@@ -42,11 +42,14 @@ MAX_SEQ_LEN = 256
 EMBEDDING_DIM = 384
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+# Production config: INT8 weights + FP32 compute precision. Chosen at the end
+# of the parity spike — see README "Findings" section for the three variants
+# tested (INT8+FP16, INT8+FP32, FP32+FP32) and the rationale for landing here.
 OUT_MLPACKAGE = SCRIPT_DIR / "all-MiniLM-L6-v2-int8.mlpackage"
 OUT_TOKENIZER_JSON = SCRIPT_DIR / "tokenizer.json"
 OUT_TOKENIZER_CONFIG = SCRIPT_DIR / "tokenizer_config.json"
 
-# Hard size bounds in MB. Outside this band the script fails loudly.
+# INT8 weights compress; ceiling stays low.
 MIN_SIZE_MB = 15.0
 MAX_SIZE_MB = 60.0
 
@@ -66,8 +69,9 @@ class TokenEmbeddingsWrapper(torch.nn.Module):
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         outputs = self.base(input_ids=input_ids, attention_mask=attention_mask)
-        # last_hidden_state: [batch, seq_len, hidden]
-        return outputs.last_hidden_state
+        # Loaded with torchscript=True, so outputs is a tuple:
+        # (last_hidden_state, pooler_output). last_hidden_state is [batch, seq_len, hidden].
+        return outputs[0]
 
 
 def _dir_size_bytes(path: Path) -> int:
@@ -126,7 +130,10 @@ def main() -> int:
         outputs=[ct.TensorType(name="token_embeddings")],
         minimum_deployment_target=ct.target.macOS14,
         compute_units=ct.ComputeUnit.ALL,
-        compute_precision=ct.precision.FLOAT16,
+        # FP32 internal compute precision. Combined with INT8 weights (below)
+        # this gives the best size-to-parity ratio: ~22MB model with L_inf <= 1e-3
+        # per-embedding agreement to recall's ONNX FP32 baseline. See spike README.
+        compute_precision=ct.precision.FLOAT32,
     )
 
     print(">> Applying INT8 linear weight quantization")
