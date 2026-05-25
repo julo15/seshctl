@@ -50,6 +50,7 @@ public struct RemoteClaudeCodeRowView: View {
     public let showAgentBadge: Bool
 
     @AppStorage(AppearanceDefaults.repoAccentBarKey) private var repoAccentBarEnabled: Bool = AppearanceDefaults.repoAccentBarDefault
+    @AppStorage(AppearanceDefaults.stackedRowLayoutKey) private var stackedRowLayoutEnabled: Bool = AppearanceDefaults.stackedRowLayoutDefault
 
     public init(
         session: RemoteClaudeCodeSession,
@@ -123,29 +124,59 @@ public struct RemoteClaudeCodeRowView: View {
         )
     }
 
-    /// Two-column row content mirroring `SessionRowView.mainContent`: the
-    /// left column stacks the sender (line 1) above the cloud + branch
-    /// subtitle (line 2) at a fixed width; the right column hosts the chat
-    /// preview vertically centered to span the full row height. Remote
-    /// rows always hit `.reply(title)` so the preview renders at primary
-    /// color and regular weight per the Gmail idiom.
-    ///
-    /// Read-state dimming applies to the content cluster only — chrome
-    /// (status dot, time, accent bar, icon, pill, chevron) stays at full
-    /// opacity. Mirrors `SessionRowView.mainContent`.
+    /// Branches between stacked and legacy row layouts. Mirrors the same
+    /// toggle on `SessionRowView` so local and remote rows stay visually
+    /// consistent under both modes.
     @ViewBuilder
     private var mainContent: some View {
-        // Top-aligned, mirroring `SessionRowView.mainContent`, so the sender
-        // column sits flush with the first line of a multi-line preview.
+        if stackedRowLayoutEnabled {
+            stackedContent
+        } else {
+            legacyContent
+        }
+    }
+
+    /// Single-column stacked row content mirroring
+    /// `SessionRowView.stackedContent`: sender (line 1), cloud + branch
+    /// subtitle (line 2), and the chat preview (line 3+) all flow vertically
+    /// in one column that spans the full content width.
+    @ViewBuilder
+    private var stackedContent: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                SenderText(display: session.senderDisplay, isUnread: isUnread, isStacked: true)
+                    .foregroundStyle(senderColor(for: repo))
+                if isUnread {
+                    UnreadPill()
+                }
+            }
+            .fontWeight(.bold)
+
+            subtitleRow(stacked: true)
+                .fontWeight(isUnread ? .bold : .regular)
+
+            previewView
+                .padding(.top, 6)
+                .opacity(isUnread ? 1.0 : 0.85)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Legacy two-column content mirroring
+    /// `SessionRowView.legacyContent`. Sender + branch sit at a fixed
+    /// 180pt column on the left; preview occupies the remaining width.
+    @ViewBuilder
+    private var legacyContent: some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
-                    SenderText(display: session.senderDisplay, isUnread: isUnread)
+                    SenderText(display: session.senderDisplay, isUnread: isUnread, isStacked: false)
+                        .foregroundStyle(senderColor(for: repo))
                     if isUnread {
                         UnreadPill()
                     }
                 }
-                subtitleRow
+                subtitleRow(stacked: false)
             }
             .fontWeight(isUnread ? .bold : .regular)
             .frame(width: SenderColumnLayout.width, alignment: .leading)
@@ -182,12 +213,12 @@ public struct RemoteClaudeCodeRowView: View {
         case .reply(let text):
             Text(text)
                 .font(.title3)
-                .fontWeight(isUnread ? .bold : .regular)
+                .fontWeight(isUnread ? previewUnreadWeight : .regular)
                 .foregroundStyle(.primary)
         case .userPrompt(let text):
             Text("You: " + text)
                 .font(.title3)
-                .fontWeight(isUnread ? .bold : .regular)
+                .fontWeight(isUnread ? previewUnreadWeight : .regular)
                 .italic()
                 .foregroundStyle(.secondary)
         case .statusHint(let text):
@@ -203,21 +234,31 @@ public struct RemoteClaudeCodeRowView: View {
             // loosens.
             (
                 Text(Image(systemName: "clock")).foregroundColor(.secondary)
-                + Text("  ")
+                + Text(" ")
                 + Text(text)
             )
                 .font(.title3)
-                .fontWeight(isUnread ? .bold : .regular)
+                .fontWeight(isUnread ? previewUnreadWeight : .regular)
                 .foregroundStyle(.primary)
         }
+    }
+
+    /// Unread preview font weight. Legacy mode uses `.bold` to preserve
+    /// the pre-stacked-layout shipped behavior; stacked mode picks
+    /// `.semibold` so the preview doesn't compete with the always-bold
+    /// sender heading. Mirrors `SessionRowView.previewUnreadWeight`.
+    private var previewUnreadWeight: Font.Weight {
+        stackedRowLayoutEnabled ? .semibold : .bold
     }
 
     /// Line 2: `cloud.fill` prefix glyph + branch. Constrained to the
     /// sender column's fixed width via the parent VStack `.frame`, so long
     /// branches ellipsize cleanly. Renders nothing when `branchDisplay`
-    /// is nil so the row reads as single-line (R11).
+    /// is nil so the row reads as single-line (R11). `stacked` selects
+    /// the font size — legacy mode matches the sender at 13/14pt, stacked
+    /// demotes to 11/12pt.
     @ViewBuilder
-    private var subtitleRow: some View {
+    private func subtitleRow(stacked: Bool) -> some View {
         if let branch = session.branchDisplay, !branch.isEmpty {
             HStack(spacing: 4) {
                 if showCloudAffordances {
@@ -227,7 +268,7 @@ public struct RemoteClaudeCodeRowView: View {
                         .help("Runs on claude.ai only")
                 }
                 Text(branch)
-                    .font(.system(size: SenderColumnLayout.textSize(isUnread: isUnread), design: .monospaced))
+                    .font(.system(size: SenderColumnLayout.subtitleSize(isUnread: isUnread, stacked: stacked), design: .monospaced))
                     .foregroundStyle(branchColor(for: repo))
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -245,5 +286,15 @@ public struct RemoteClaudeCodeRowView: View {
             return color
         }
         return .secondary
+    }
+
+    /// Sender (repo name) color. Mirrors `branchColor(for:)` but falls
+    /// back to `.primary` instead of `.secondary` so the sender keeps its
+    /// row-heading treatment when per-repo coloring is off.
+    private func senderColor(for repoName: String?) -> Color {
+        if repoAccentBarEnabled, let color = repoAccentColor(for: repoName) {
+            return color
+        }
+        return .primary
     }
 }

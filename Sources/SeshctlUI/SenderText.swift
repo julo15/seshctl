@@ -1,21 +1,38 @@
 import SwiftUI
 
 /// Layout constants for the line-1 sender column. Centralized so a future
-/// width-tuning pass touches one place; the row views consume `width`
-/// rather than spelling out a literal.
+/// tuning pass touches one place; the row views consume the named
+/// accessors rather than spelling out literals.
 enum SenderColumnLayout {
-    /// Fixed sender-column width (pt). Plan-documented starting point — to
-    /// be tuned against real session-DB repo-name distribution post-Phase-1
-    /// soak. See `.agents/plans/2026-04-29-1730-row-ui-gmail-redesign.md`
-    /// (R1, "Sender column width" deferred question).
+    /// Legacy fixed sender-column width (pt). Retained for callers that
+    /// still want a column-style frame; the stacked row layout introduced
+    /// after the Gmail two-column pass no longer constrains the sender to
+    /// this width. See `.agents/plans/2026-04-29-1730-row-ui-gmail-redesign.md`.
     static let width: CGFloat = 180
 
-    /// Sender / branch font size. The column uses a monospace face, so bold
-    /// alone doesn't widen glyphs the way it does in proportional faces — to
-    /// mimic the "unread reads bigger" effect Gmail gets for free, bump the
-    /// size 1pt on unread rows. Read rows match `.body` on macOS.
-    static func textSize(isUnread: Bool) -> CGFloat {
-        isUnread ? 14 : 13
+    /// Sender (line 1) font size. In stacked mode the sender reads as the
+    /// row's primary heading — bumped above the preview body size so the
+    /// repo/folder name stands out against the chat text below. In the
+    /// legacy two-column layout the sender and the branch line share a
+    /// font size and demote via color, so both fall back to 13/14pt.
+    /// The monospace face doesn't widen on bold, so we bump 1pt on unread
+    /// to mimic the Gmail "unread reads bigger" effect.
+    static func senderSize(isUnread: Bool, stacked: Bool) -> CGFloat {
+        if stacked {
+            return isUnread ? 16 : 15
+        }
+        return isUnread ? 14 : 13
+    }
+
+    /// Subtitle (line 2) font size — branch label or directory-path
+    /// fallback. In stacked mode it's demoted below the sender and below
+    /// the preview so line 2 reads as quiet context. In legacy mode it
+    /// matches the sender size and demotes via color only (R6).
+    static func subtitleSize(isUnread: Bool, stacked: Bool) -> CGFloat {
+        if stacked {
+            return isUnread ? 12 : 11
+        }
+        return isUnread ? 14 : 13
     }
 }
 
@@ -32,13 +49,19 @@ struct SenderText: View {
     /// `Session.senderDisplay` / `RemoteClaudeCodeSession.senderDisplay`.
     let display: String
     /// When true, render at the bumped unread size (see
-    /// `SenderColumnLayout.textSize(isUnread:)`). Bold weight is applied by
-    /// the parent VStack — this only adjusts size.
+    /// `SenderColumnLayout.senderSize(isUnread:stacked:)`). Bold weight is
+    /// applied by the parent — this only adjusts size.
     var isUnread: Bool = false
+    /// Whether the parent row is using the stacked layout. Selects the
+    /// matching sender size from `SenderColumnLayout.senderSize`. Defaults
+    /// to `true` so previews and tests that construct `SenderText` directly
+    /// get the new layout's typography without having to know about the
+    /// legacy flag.
+    var isStacked: Bool = true
 
     var body: some View {
         Text(display)
-            .font(.system(size: SenderColumnLayout.textSize(isUnread: isUnread), design: .monospaced))
+            .font(.system(size: SenderColumnLayout.senderSize(isUnread: isUnread, stacked: isStacked), design: .monospaced))
             .lineLimit(1)
             .truncationMode(.tail)
     }
