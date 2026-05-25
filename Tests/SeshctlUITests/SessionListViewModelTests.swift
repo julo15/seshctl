@@ -1236,6 +1236,55 @@ struct SessionListViewModelTests {
         #expect(vm.recallErrorMessage == nil)
     }
 
+    @Test("Backspacing query to empty clears recallErrorMessage")
+    @MainActor
+    func recallErrorMessageClearedByBackspaceToEmpty() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.recallSearchProvider = { _, _ in
+            throw RecallError.searchFailed("boom")
+        }
+        vm.enterSearch()
+        vm.appendSearchCharacter("a")
+        vm.appendSearchCharacter("b")
+
+        await waitForRecall { vm.recallErrorMessage != nil }
+        #expect(vm.recallErrorMessage != nil)
+
+        // Two backspaces: "ab" -> "a" -> "". The second one trips the
+        // empty-query early-return in triggerRecallSearch.
+        vm.deleteSearchCharacter()
+        vm.deleteSearchCharacter()
+
+        // Polling because the second delete still calls triggerRecallSearch
+        // which dispatches a debounceTask. The error should be cleared
+        // synchronously inside the empty-query guard, but poll briefly
+        // to be robust to any future restructuring.
+        await waitForRecall(timeout: 0.5) { vm.recallErrorMessage == nil }
+        #expect(vm.recallErrorMessage == nil)
+        #expect(vm.searchQuery == "")
+        #expect(vm.isSearching == true)  // still in search mode
+    }
+
+    @Test("clearSearchQuery clears recallErrorMessage")
+    @MainActor
+    func recallErrorMessageClearedByClearSearchQuery() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.recallSearchProvider = { _, _ in
+            throw RecallError.searchFailed("boom")
+        }
+        vm.enterSearch()
+        vm.appendSearchCharacter("t")
+
+        await waitForRecall { vm.recallErrorMessage != nil }
+        #expect(vm.recallErrorMessage != nil)
+
+        vm.clearSearchQuery()
+        #expect(vm.recallErrorMessage == nil)
+        #expect(vm.searchQuery == "")
+    }
+
     @Test("New search clears prior recallErrorMessage")
     @MainActor
     func recallErrorMessageClearedByNewSearch() async throws {

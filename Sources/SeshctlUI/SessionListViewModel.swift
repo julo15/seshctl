@@ -48,6 +48,12 @@ public final class SessionListViewModel: ObservableObject {
     @Published public private(set) var recallIndexingDone: Int?
     @Published public private(set) var recallIndexingTotal: Int?
     @Published public private(set) var recallUnavailable: Bool = false
+    /// User-facing one-line failure message for the semantic search
+    /// section. Populated for `.timeout` and `.searchFailed` (the
+    /// detail is truncated via `firstLine` to keep the row compact).
+    /// Left nil for `.notInstalled` — that path uses the existing
+    /// `recallUnavailable` "Install recall" prompt instead. Cleared on
+    /// every new search, on `exitSearch()`, and when the query empties.
     @Published public private(set) var recallErrorMessage: String?
     @Published public private(set) var recallGeneration: Int = 0
     /// One-time toast flag: set to `true` when the user presses `x` with a
@@ -799,6 +805,7 @@ public final class SessionListViewModel: ObservableObject {
         isSearching = true
         searchQuery = ""
         selectedIndex = 0
+        recallErrorMessage = nil
     }
 
     public func exitSearch() {
@@ -962,6 +969,7 @@ public final class SessionListViewModel: ObservableObject {
         let query = searchQuery
         guard !query.isEmpty else {
             recallResults = []
+            recallErrorMessage = nil
             isRecallSearching = false
             return
         }
@@ -1027,7 +1035,12 @@ public final class SessionListViewModel: ObservableObject {
                 case .timeout:
                     self?.recallErrorMessage = "Semantic search timed out"
                 case .searchFailed(let msg):
-                    self?.recallErrorMessage = "Semantic search failed: \(Self.firstLine(msg))"
+                    let cleaned = msg.replacingOccurrences(
+                        of: "^recall exited with status \\d+: ",
+                        with: "",
+                        options: .regularExpression
+                    )
+                    self?.recallErrorMessage = "Semantic search failed: \(Self.firstLine(cleaned))"
                 }
                 self?.clearRecallSearchState()
             } catch {
