@@ -381,6 +381,10 @@ public struct SessionListView: View {
                 showCloudAffordances: connectionStore.hasClaudeConnection,
                 showAgentBadge: showAgentBadge,
                 awaySummary: viewModel.awaySummariesById[session.id],
+                // List view has a Yesterday section header, so the per-row
+                // slot shows the more specific clock time for yesterday rows
+                // instead of repeating the day.
+                yesterdayStyle: .timeOfDay,
                 onDetail: onOpenDetail.map { handler in
                     {
                         viewModel.markSessionRead(session)
@@ -395,7 +399,8 @@ public struct SessionListView: View {
                 isUnread: viewModel.unreadSessionIds.contains(remote.id),
                 isStale: connectionStore.state == .authExpired,
                 showAgentBadge: showAgentBadge,
-                awaySummary: connectionStore.remoteAwaySummariesById[remote.id]
+                awaySummary: connectionStore.remoteAwaySummariesById[remote.id],
+                yesterdayStyle: .timeOfDay
             )
         }
     }

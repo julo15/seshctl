@@ -120,7 +120,8 @@ struct SessionAgeDisplayTests {
         year: Int, month: Int, day: Int,
         hour: Int = 12, minute: Int = 0, second: Int = 0,
         nowYear: Int = 2026, nowMonth: Int = 4, nowDay: Int = 15,
-        nowHour: Int = 12, nowMinute: Int = 0
+        nowHour: Int = 12, nowMinute: Int = 0,
+        yesterdayStyle: SessionAgeDisplay.YesterdayStyle = .date
     ) -> SessionAgeDisplay {
         let cal = Self.utcCalendar
         let timestamp = cal.date(from: DateComponents(
@@ -132,7 +133,11 @@ struct SessionAgeDisplayTests {
             hour: nowHour, minute: nowMinute
         ))!
         return SessionAgeDisplay(
-            timestamp: timestamp, now: now, calendar: cal, locale: testLocale
+            timestamp: timestamp,
+            now: now,
+            calendar: cal,
+            locale: testLocale,
+            yesterdayStyle: yesterdayStyle
         )
     }
 
@@ -251,5 +256,121 @@ struct SessionAgeDisplayTests {
     func labelFutureNextDay() {
         let display = Self.displayAt(year: 2026, month: 4, day: 16, hour: 9)
         #expect(display.label == "Apr 16")
+    }
+
+    // MARK: yesterdayStyle branches
+    //
+    // The yesterday-bucket branch picks between three renderings driven by the
+    // calling view: `.date` (legacy `"Apr 14"`), `.timeOfDay` (locale-formatted
+    // clock time), and `.relativeDay` (`"1d"` shorthand). Today and older days
+    // are not affected by the flag — locked in below.
+
+    /// `Calendar.isDateInYesterday` resolves "yesterday" against the wall
+    /// clock, not `now`. Use the same anchor as the `bucket` tests so the
+    /// .yesterday branch fires deterministically.
+    @Test(".timeOfDay yesterday → locale-formatted clock time")
+    func labelYesterdayTimeOfDay() {
+        let cal = Self.utcCalendar
+        let now = Self.todayNoonUTC()
+        let startOfToday = cal.startOfDay(for: now)
+        let yesterdayEvening = cal.date(byAdding: .hour, value: -2, to: startOfToday)!
+        let display = SessionAgeDisplay(
+            timestamp: yesterdayEvening,
+            now: now,
+            calendar: cal,
+            locale: Self.testLocale,
+            yesterdayStyle: .timeOfDay
+        )
+        // en_US `jmm` template → `"10:00\u{202F}PM"` (narrow no-break space
+        // between time and AM/PM marker on macOS 13+).
+        #expect(display.label == "10:00\u{202F}PM")
+    }
+
+    @Test(".relativeDay yesterday → \"1d\"")
+    func labelYesterdayRelativeDay() {
+        let cal = Self.utcCalendar
+        let now = Self.todayNoonUTC()
+        let startOfToday = cal.startOfDay(for: now)
+        let yesterdayEvening = cal.date(byAdding: .hour, value: -2, to: startOfToday)!
+        let display = SessionAgeDisplay(
+            timestamp: yesterdayEvening,
+            now: now,
+            calendar: cal,
+            locale: Self.testLocale,
+            yesterdayStyle: .relativeDay
+        )
+        #expect(display.label == "1d")
+    }
+
+    @Test(".timeOfDay does not affect 2-days-ago → MMM d")
+    func labelTwoDaysAgoIgnoresTimeOfDay() {
+        // `displayAt`'s pinned `now = 2026-04-15` means `2026-04-13` is two
+        // days ago — `isDateInYesterday` returns false, the yesterday switch
+        // is skipped, and the cascade falls through to the month-day branch.
+        let display = Self.displayAt(
+            year: 2026, month: 4, day: 13, hour: 18,
+            yesterdayStyle: .timeOfDay
+        )
+        #expect(display.label == "Apr 13")
+    }
+
+    @Test(".relativeDay does not affect 2-days-ago → MMM d")
+    func labelTwoDaysAgoIgnoresRelativeDay() {
+        // Same anchor as the `.timeOfDay` twin above — 2-days-ago should NOT
+        // collapse to "2d" because we explicitly opted out of multi-day
+        // relative shorthand in the design.
+        let display = Self.displayAt(
+            year: 2026, month: 4, day: 13, hour: 18,
+            yesterdayStyle: .relativeDay
+        )
+        #expect(display.label == "Apr 13")
+    }
+
+    /// Cross-midnight `< 1h` still wins over the yesterday-style branch, in
+    /// both modes — locks in that the seconds/minutes formatter sits above
+    /// the yesterday switch in the cascade.
+    @Test(".timeOfDay yesterday < 1h ago → \"45m\" (seconds/minutes branch wins)")
+    func labelCrossMidnightUnderOneHourTimeOfDay() {
+        let display = Self.displayAt(
+            year: 2026, month: 4, day: 14, hour: 23, minute: 30,
+            nowYear: 2026, nowMonth: 4, nowDay: 15, nowHour: 0, nowMinute: 15,
+            yesterdayStyle: .timeOfDay
+        )
+        #expect(display.label == "45m")
+    }
+
+    @Test(".relativeDay yesterday < 1h ago → \"45m\" (seconds/minutes branch wins)")
+    func labelCrossMidnightUnderOneHourRelativeDay() {
+        let display = Self.displayAt(
+            year: 2026, month: 4, day: 14, hour: 23, minute: 30,
+            nowYear: 2026, nowMonth: 4, nowDay: 15, nowHour: 0, nowMinute: 15,
+            yesterdayStyle: .relativeDay
+        )
+        #expect(display.label == "45m")
+    }
+
+    /// Cross-midnight `≥ 1h, < 24h` in `.relativeDay` mode: the elapsed time
+    /// is ~2 hours, but the day bucket says yesterday — by design, tree view
+    /// shows the consistent day-bucket signal ("1d") rather than the elapsed
+    /// hours, because the tree view has no time-based section headers and
+    /// the user is grouping by repo, not recency. Locks in the trade-off.
+    ///
+    /// Anchored against the wall clock (not `displayAt`'s synthetic
+    /// 2026-04-15 anchor) because `Calendar.isDateInYesterday` resolves
+    /// "yesterday" against the real `Date()`, not against the injected `now`.
+    @Test(".relativeDay yesterday 2h ago across midnight → \"1d\" (day-bucket wins over hours)")
+    func labelCrossMidnightTwoHoursRelativeDay() {
+        let cal = Self.utcCalendar
+        let startOfToday = cal.startOfDay(for: Date())
+        let now = cal.date(byAdding: .hour, value: 2, to: startOfToday)!
+        let timestamp = cal.date(byAdding: .minute, value: -5, to: startOfToday)!
+        let display = SessionAgeDisplay(
+            timestamp: timestamp,
+            now: now,
+            calendar: cal,
+            locale: Self.testLocale,
+            yesterdayStyle: .relativeDay
+        )
+        #expect(display.label == "1d")
     }
 }

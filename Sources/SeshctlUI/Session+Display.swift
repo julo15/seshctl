@@ -1,22 +1,42 @@
 import Foundation
 import SeshctlCore
 
-struct SessionAgeDisplay {
+public struct SessionAgeDisplay {
+    /// How to render a yesterday-bucket timestamp. Today and older days are
+    /// unaffected.
+    ///
+    /// - `.date` (legacy default) — `"Apr 14"`, matches the older-day format.
+    /// - `.timeOfDay` — locale-formatted clock time like `"10:40 PM"`. Used in
+    ///   the time-sorted inbox view where a `Yesterday` section header already
+    ///   gives day context, so the time-of-day is the more useful per-row
+    ///   detail.
+    /// - `.relativeDay` — `"1d"`, mirroring the `"30s"` / `"5m"` / `"12h"`
+    ///   relative shorthand. Used in the repo-grouped tree view where there's
+    ///   no day-based section header.
+    public enum YesterdayStyle {
+        case date
+        case timeOfDay
+        case relativeDay
+    }
+
     let timestamp: Date
     let now: Date
     let calendar: Calendar
     let locale: Locale
+    let yesterdayStyle: YesterdayStyle
 
-    init(
+    public init(
         timestamp: Date,
         now: Date = Date(),
         calendar: Calendar = .current,
-        locale: Locale = .current
+        locale: Locale = .current,
+        yesterdayStyle: YesterdayStyle = .date
     ) {
         self.timestamp = timestamp
         self.now = now
         self.calendar = calendar
         self.locale = locale
+        self.yesterdayStyle = yesterdayStyle
     }
 
     /// Human-readable timestamp string for the row's left-side time slot.
@@ -27,8 +47,10 @@ struct SessionAgeDisplay {
     /// - Less than 1 hour ago (past) → minutes (`"1m"`, `"59m"`).
     /// - Same calendar day, ≥ 1 hour past (or future-today clock skew) → hours
     ///   (`"1h"`, `"23h"`); future-today is clamped to `"0s"`.
-    /// - Different day, same calendar year → abbreviated month + day
-    ///   (`"Apr 28"`).
+    /// - Yesterday → driven by `yesterdayStyle` (see enum doc): `"Apr 14"`,
+    ///   `"10:40 PM"`, or `"1d"`.
+    /// - 2+ days ago, same calendar year → abbreviated month + day
+    ///   (`"Apr 13"`).
     /// - Different year → abbreviated month + day + year (`"Apr 28, 2025"`).
     ///
     /// The cross-midnight edge case (timestamp is yesterday but `< 1h` ago)
@@ -48,6 +70,17 @@ struct SessionAgeDisplay {
         if calendar.isDate(timestamp, inSameDayAs: now) {
             if secondsSince < 0 { return "0s" }   // future-today clamp
             return "\(Int(secondsSince) / 3600)h"
+        }
+        if calendar.isDateInYesterday(timestamp) {
+            switch yesterdayStyle {
+            case .date:
+                break   // fall through to month-day formatter below
+            case .timeOfDay:
+                return Self.timeOfDayFormatter(locale: locale, calendar: calendar)
+                    .string(from: timestamp)
+            case .relativeDay:
+                return "1d"
+            }
         }
         let timestampYear = calendar.component(.year, from: timestamp)
         let nowYear = calendar.component(.year, from: now)
@@ -77,6 +110,24 @@ struct SessionAgeDisplay {
             formatter.calendar = calendar
             formatter.timeZone = calendar.timeZone
             formatter.setLocalizedDateFormatFromTemplate("MMM d")
+            return formatter
+        }
+    }
+
+    private static func timeOfDayFormatter(locale: Locale, calendar: Calendar) -> DateFormatter {
+        formatterCache.formatter(
+            kind: "timeOfDay",
+            locale: locale,
+            timeZone: calendar.timeZone
+        ) {
+            let formatter = DateFormatter()
+            formatter.locale = locale
+            formatter.calendar = calendar
+            formatter.timeZone = calendar.timeZone
+            // `jmm` resolves to the locale-preferred hour + minute pattern with
+            // the right AM/PM placement — `h:mm a` in en_US, `HH:mm` in 24h
+            // locales.
+            formatter.setLocalizedDateFormatFromTemplate("jmm")
             return formatter
         }
     }

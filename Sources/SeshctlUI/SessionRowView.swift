@@ -29,13 +29,18 @@ public struct SessionRowView: View {
     /// `Session.previewContent(awaySummary:)`. Sourced from
     /// `SessionListViewModel.awaySummariesById`.
     var awaySummary: String? = nil
+    /// How yesterday-bucket timestamps render in the row's age slot — see
+    /// `SessionAgeDisplay.YesterdayStyle`. Driven by the parent view: the
+    /// time-sorted inbox passes `.timeOfDay`, the repo-grouped tree view
+    /// passes `.relativeDay`.
+    var yesterdayStyle: SessionAgeDisplay.YesterdayStyle = .date
 
     var onDetail: (() -> Void)?
 
     @AppStorage(AppearanceDefaults.repoAccentBarKey) private var repoAccentBarEnabled: Bool = AppearanceDefaults.repoAccentBarDefault
     @AppStorage(AppearanceDefaults.stackedRowLayoutKey) private var stackedRowLayoutEnabled: Bool = AppearanceDefaults.stackedRowLayoutDefault
 
-    public init(session: Session, hostApp: HostAppInfo, isUnread: Bool = false, isBridged: Bool = false, showCloudAffordances: Bool = false, showAgentBadge: Bool = true, awaySummary: String? = nil, onDetail: (() -> Void)? = nil) {
+    public init(session: Session, hostApp: HostAppInfo, isUnread: Bool = false, isBridged: Bool = false, showCloudAffordances: Bool = false, showAgentBadge: Bool = true, awaySummary: String? = nil, yesterdayStyle: SessionAgeDisplay.YesterdayStyle = .date, onDetail: (() -> Void)? = nil) {
         self.session = session
         self.hostApp = hostApp
         self.isUnread = isUnread
@@ -43,6 +48,7 @@ public struct SessionRowView: View {
         self.showCloudAffordances = showCloudAffordances
         self.showAgentBadge = showAgentBadge
         self.awaySummary = awaySummary
+        self.yesterdayStyle = yesterdayStyle
         self.onDetail = onDetail
     }
 
@@ -294,6 +300,6 @@ public struct SessionRowView: View {
     }
 
     private var ageDisplay: SessionAgeDisplay {
-        SessionAgeDisplay(timestamp: session.updatedAt)
+        SessionAgeDisplay(timestamp: session.updatedAt, yesterdayStyle: yesterdayStyle)
     }
 }
