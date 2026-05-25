@@ -213,12 +213,12 @@ public struct RemoteClaudeCodeRowView: View {
         case .reply(let text):
             Text(text)
                 .font(.title3)
-                .fontWeight(isUnread ? .semibold : .regular)
+                .fontWeight(isUnread ? previewUnreadWeight : .regular)
                 .foregroundStyle(.primary)
         case .userPrompt(let text):
             Text("You: " + text)
                 .font(.title3)
-                .fontWeight(isUnread ? .semibold : .regular)
+                .fontWeight(isUnread ? previewUnreadWeight : .regular)
                 .italic()
                 .foregroundStyle(.secondary)
         case .statusHint(let text):
@@ -238,9 +238,17 @@ public struct RemoteClaudeCodeRowView: View {
                 + Text(text)
             )
                 .font(.title3)
-                .fontWeight(isUnread ? .semibold : .regular)
+                .fontWeight(isUnread ? previewUnreadWeight : .regular)
                 .foregroundStyle(.primary)
         }
+    }
+
+    /// Unread preview font weight. Legacy mode uses `.bold` to preserve
+    /// the pre-stacked-layout shipped behavior; stacked mode picks
+    /// `.semibold` so the preview doesn't compete with the always-bold
+    /// sender heading. Mirrors `SessionRowView.previewUnreadWeight`.
+    private var previewUnreadWeight: Font.Weight {
+        stackedRowLayoutEnabled ? .semibold : .bold
     }
 
     /// Line 2: `cloud.fill` prefix glyph + branch. Constrained to the

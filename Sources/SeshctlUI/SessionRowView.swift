@@ -222,12 +222,12 @@ public struct SessionRowView: View {
         case .reply(let text):
             Text(text)
                 .font(.title3)
-                .fontWeight(isUnread ? .semibold : .regular)
+                .fontWeight(isUnread ? previewUnreadWeight : .regular)
                 .foregroundStyle(.primary)
         case .userPrompt(let text):
             Text("You: " + text)
                 .font(.title3)
-                .fontWeight(isUnread ? .semibold : .regular)
+                .fontWeight(isUnread ? previewUnreadWeight : .regular)
                 .italic()
                 .foregroundStyle(.secondary)
         case .statusHint(let text):
@@ -249,9 +249,16 @@ public struct SessionRowView: View {
                 + Text(text)
             )
                 .font(.title3)
-                .fontWeight(isUnread ? .semibold : .regular)
+                .fontWeight(isUnread ? previewUnreadWeight : .regular)
                 .foregroundStyle(.primary)
         }
+    }
+
+    /// Unread preview font weight. Legacy mode used `.bold` to match the
+    /// pre-stacked-layout shipped behavior; stacked mode picks `.semibold`
+    /// so the preview doesn't compete with the always-bold sender heading.
+    private var previewUnreadWeight: Font.Weight {
+        stackedRowLayoutEnabled ? .semibold : .bold
     }
 
     /// Branch label color. When per-repo color coding is on, tints with the
