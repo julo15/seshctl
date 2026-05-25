@@ -162,8 +162,8 @@ Resolved during the planning conversation:
 - [x] No change to `Session+Display.swift` — the existing `previewContent(awaySummary:)` accepts the combined optional unchanged.
 
 ### Step 4: Update AGENTS.md
-- [ ] Edit the "Transcript-Derived Row Signals" section: change "Two row signals" → "Three row signals", add `latestAssistantById` (via `TranscriptLatestAssistantScanner` → `transcriptLatestAssistantCache`) to the enumeration.
-- [ ] Add a sentence explaining the consumer-side collapse (`awaySummariesById[id] ?? latestAssistantById[id]`) and why it's safe (the two can't both have values for the same session in practice, and away-summary wins on the theoretical race).
+- [x] Edit the "Transcript-Derived Row Signals" section: change "Two row signals" → "Three row signals", add `latestAssistantById` (via `TranscriptLatestAssistantScanner` → `transcriptLatestAssistantCache`) to the enumeration.
+- [x] Add a sentence explaining the consumer-side collapse (`awaySummariesById[id] ?? latestAssistantById[id]`) and why it's safe (the two can't both have values for the same session in practice, and away-summary wins on the theoretical race).
 
 ### Step 5: Write Tests
 - [x] Create `Tests/SeshctlCoreTests/TranscriptLatestAssistantScannerTests.swift` mirroring `RemoteEventsParserTests.swift` shape:
