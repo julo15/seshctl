@@ -48,6 +48,13 @@ public final class SessionListViewModel: ObservableObject {
     @Published public private(set) var recallIndexingDone: Int?
     @Published public private(set) var recallIndexingTotal: Int?
     @Published public private(set) var recallUnavailable: Bool = false
+    /// User-facing one-line failure message for the semantic search
+    /// section. Populated for `.timeout` and `.searchFailed` (the
+    /// detail is truncated via `firstLine` to keep the row compact).
+    /// Left nil for `.notInstalled` — that path uses the existing
+    /// `recallUnavailable` "Install recall" prompt instead. Cleared on
+    /// every new search, on `exitSearch()`, and when the query empties.
+    @Published public private(set) var recallErrorMessage: String?
     @Published public private(set) var recallGeneration: Int = 0
     /// One-time toast flag: set to `true` when the user presses `x` with a
     /// cloud row selected. The view observes this, renders a toast, then
@@ -798,6 +805,7 @@ public final class SessionListViewModel: ObservableObject {
         isSearching = true
         searchQuery = ""
         selectedIndex = 0
+        recallErrorMessage = nil
     }
 
     public func exitSearch() {
@@ -808,6 +816,7 @@ public final class SessionListViewModel: ObservableObject {
         debounceTask?.cancel()
         recallSearchTask?.cancel()
         recallResults = []
+        recallErrorMessage = nil
         clearRecallSearchState()
     }
 
@@ -842,6 +851,7 @@ public final class SessionListViewModel: ObservableObject {
     public func clearSearchQuery() {
         searchQuery = ""
         selectedIndex = 0
+        recallErrorMessage = nil
         triggerRecallSearch()
     }
 
@@ -959,6 +969,7 @@ public final class SessionListViewModel: ObservableObject {
         let query = searchQuery
         guard !query.isEmpty else {
             recallResults = []
+            recallErrorMessage = nil
             isRecallSearching = false
             return
         }
@@ -972,10 +983,26 @@ public final class SessionListViewModel: ObservableObject {
 
     private var recallSearchGeneration: Int = 0
 
+    /// Test seam: replace to inject canned recall outcomes.
+    internal var recallSearchProvider: @Sendable (String, (@Sendable (Int, Int) -> Void)?) async throws -> RecallSearchResponse = { query, onIndexing in
+        try await RecallService.search(query: query, onIndexing: onIndexing)
+    }
+
+    private static func firstLine(_ s: String, maxLength: Int = 200) -> String {
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        let line = trimmed.components(separatedBy: .newlines).first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) ?? trimmed
+        if line.count > maxLength {
+            let idx = line.index(line.startIndex, offsetBy: maxLength)
+            return String(line[..<idx]) + "…"
+        }
+        return line
+    }
+
     private func executeRecallSearch(query: String) {
         guard !recallUnavailable else { return }
         isRecallSearching = true
         recallResults = []
+        recallErrorMessage = nil
         recallIndexingDone = nil
         recallIndexingTotal = nil
         recallSearchGeneration += 1
@@ -990,7 +1017,8 @@ public final class SessionListViewModel: ObservableObject {
                         self?.recallIndexingTotal = total
                     }
                 }
-                let response = try await RecallService.search(query: query, onIndexing: onIndexing)
+                guard let provider = self?.recallSearchProvider else { return }
+                let response = try await provider(query, onIndexing)
                 guard !Task.isCancelled else { return }
                 // Filter out recall hits for sessions we're already showing as local rows.
                 let shownIds = Set((self?.orderedRows ?? []).compactMap { row -> String? in
@@ -1001,12 +1029,23 @@ public final class SessionListViewModel: ObservableObject {
                 self?.clearRecallSearchState()
             } catch let recallError as RecallError {
                 guard !Task.isCancelled else { return }
-                if case .notInstalled = recallError {
+                switch recallError {
+                case .notInstalled:
                     self?.recallUnavailable = true
+                case .timeout:
+                    self?.recallErrorMessage = "Semantic search timed out"
+                case .searchFailed(let msg):
+                    let cleaned = msg.replacingOccurrences(
+                        of: "^recall exited with status \\d+: ",
+                        with: "",
+                        options: .regularExpression
+                    )
+                    self?.recallErrorMessage = "Semantic search failed: \(Self.firstLine(cleaned))"
                 }
                 self?.clearRecallSearchState()
             } catch {
                 guard !Task.isCancelled else { return }
+                self?.recallErrorMessage = "Semantic search failed: \(Self.firstLine(error.localizedDescription))"
                 self?.clearRecallSearchState()
             }
         }
