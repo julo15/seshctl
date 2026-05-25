@@ -194,13 +194,15 @@ public struct RemoteClaudeCodeRowView: View {
         }
     }
 
-    /// Chat-preview column. Remote sessions always pass through the
-    /// `.reply` case (title-as-preview) — `previewContent` on
-    /// `RemoteClaudeCodeSession` is hardcoded to `.reply(title)` because
-    /// there's no `lastReply` / `lastAsk` priority chain. The other cases
-    /// are handled here for exhaustiveness in case the helper's contract
-    /// ever loosens, keeping the typography mapping consistent with
-    /// `SessionRowView.previewView` (15pt title3, bold-on-unread).
+    /// Chat-preview column. Remote sessions resolve to either `.awaySummary`
+    /// (when the connection store has a cached claude.ai recap for this
+    /// session — see `previewContent(awaySummary:)` on
+    /// `RemoteClaudeCodeSession`) or `.reply(title)` as the fallback. The
+    /// `.userPrompt` and `.statusHint` cases are handled here for
+    /// exhaustiveness only — remote sessions have no `lastReply` /
+    /// `lastAsk` priority chain that would surface them — keeping the
+    /// typography mapping consistent with `SessionRowView.previewView`
+    /// (15pt title3, bold-on-unread).
     ///
     /// Plain preview column — the unread pill moved up next to the sender
     /// (line 1), mirroring `SessionRowView.previewView`, so wrapped preview
@@ -235,11 +237,11 @@ public struct RemoteClaudeCodeRowView: View {
                 .italic()
                 .foregroundStyle(.tertiary)
         case .awaySummary(let text):
-            // Defensive — remote rows have no local JSONL transcript so the
-            // `awaySummary` case is unreachable today, but it must exist for
-            // the switch to be exhaustive. Mirror `SessionRowView`'s clock-
-            // led rendering so the behavior matches if the contract ever
-            // loosens.
+            // The claude.ai assistant-text recap fetched via
+            // `ClaudeCodeConnectionStore.remoteAwaySummariesById` (per-session
+            // cache populated by per-session `/events` calls). Rendered with
+            // a leading clock glyph and the same `.title3` / bold-on-unread
+            // typography as local rows so remote recaps read identically.
             (
                 Text(Image(systemName: "clock")).foregroundColor(.secondary)
                 + Text(" ")

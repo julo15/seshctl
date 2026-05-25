@@ -56,7 +56,8 @@ private actor StubFetcher: RemoteClaudeCodeFetching {
 
 private func makeRemoteSession(
     id: String = "cse_test_\(UUID().uuidString)",
-    lastEventAt: Date = Date()
+    lastEventAt: Date = Date(),
+    environmentKind: String = ""
 ) -> RemoteClaudeCodeSession {
     RemoteClaudeCodeSession(
         id: id,
@@ -69,7 +70,8 @@ private func makeRemoteSession(
         connectionStatus: "connected",
         lastEventAt: lastEventAt,
         createdAt: Date(),
-        unread: false
+        unread: false,
+        environmentKind: environmentKind
     )
 }
 
@@ -399,6 +401,38 @@ struct ClaudeCodeConnectionStoreAwaySummaryTests {
         #expect(calls == 1)
     }
 
+    @Test("transport error caches nil; does not retry on same lastEventAt")
+    func transportErrorCachesNilAndStopsRetry() async throws {
+        // Parallel to `failedFetchCachesNilAndStopsRetry`, but exercises the
+        // URLError-style transport failure path instead of HTTP 5xx. Same
+        // negative-caching contract applies: a transport failure should land
+        // as `(lastEventAt, nil)` so we don't hammer a flapping network.
+        let db = try SeshctlDatabase.temporary()
+        let session1 = makeRemoteSession(id: "cse_transport_failing")
+        let fetcher = StubFetcher(result: .success([session1]))
+        await fetcher.setAssistantText(
+            .failure(RemoteClaudeCodeError.transport("simulated network failure")),
+            forSessionID: session1.id
+        )
+
+        let store = ClaudeCodeConnectionStore(
+            database: db,
+            fetcher: fetcher,
+            initialState: .connected(lastFetchAt: nil)
+        )
+
+        await store.fetchNow()
+        await store.awaitPendingAwaySummaryFetches()
+
+        #expect(store.remoteAwaySummariesById[session1.id] == nil)
+
+        await store.fetchNow()
+        await store.awaitPendingAwaySummaryFetches()
+
+        let calls = await fetcher.assistantTextCallCount(for: session1.id)
+        #expect(calls == 1)
+    }
+
     @Test("prune drops cache entries for sessions absent from latest list")
     func pruneDropsAbsentSessions() async throws {
         let db = try SeshctlDatabase.temporary()
@@ -489,6 +523,84 @@ struct ClaudeCodeConnectionStoreAwaySummaryTests {
         // Either the task cancelled cleanly, or its hasClaudeConnection
         // guard fired after the await — in both cases the map stays empty.
         #expect(store.remoteAwaySummariesById.isEmpty)
+    }
+
+    @Test("disconnect+reconnect does not duplicate-dispatch under same session id")
+    func taskIdentityCheckPreventsDuplicateDispatchAfterDisconnectReconnect() async throws {
+        // Regression guard for the in-flight-defer identity race. Without UUID
+        // tagging on each dispatch, Task A's defer (firing after disconnect +
+        // reconnect + Task B has been registered) would erase B's dict entry,
+        // causing a subsequent fetchNow() to dispatch a duplicate Task C.
+        // With identity-tagged cleanup, A's defer no-ops because the slot now
+        // holds B's UUID, and the post-reconnect fetch count stays at exactly 2.
+        let db = try SeshctlDatabase.temporary()
+        let session1 = makeRemoteSession(id: "cse_identity_race")
+        let fetcher = StubFetcher(result: .success([session1]))
+        await fetcher.setAssistantText(.success("after-reconnect"), forSessionID: session1.id)
+        // Delay the assistant-text call long enough that Task A is still
+        // mid-await when we call disconnect().
+        await fetcher.setAssistantTextDelay(nanoseconds: 100_000_000) // 100ms
+
+        let store = ClaudeCodeConnectionStore(
+            database: db,
+            fetcher: fetcher,
+            initialState: .connected(lastFetchAt: nil)
+        )
+
+        // Task A dispatched and sleeping inside fetchLatestAssistantText.
+        await store.fetchNow()
+
+        // Cancel Task A and clear cache + dict.
+        await store.disconnect()
+
+        // Let Task A's cancellation propagate through Task.sleep, the body
+        // return, and its defer fire. With identity-checked cleanup, this
+        // defer is a no-op because the dict was already cleared by disconnect.
+        await store.awaitPendingAwaySummaryFetches()
+
+        // Reconnect by re-issuing fetchNow() — success path lands us back in
+        // `.connected` and dispatches a fresh Task B for the same session id.
+        await store.fetchNow()
+        await store.awaitPendingAwaySummaryFetches()
+
+        // Post-condition: exactly one extra dispatch (A pre-disconnect +
+        // B post-reconnect = 2 total). A third call would indicate the
+        // duplicate-dispatch race re-emerged.
+        let calls = await fetcher.assistantTextCallCount(for: session1.id)
+        #expect(calls == 2)
+        #expect(store.remoteAwaySummariesById[session1.id] == "after-reconnect")
+    }
+
+    @Test("skipsEventsFetchForBridgedSessions")
+    func skipsEventsFetchForBridgedSessions() async throws {
+        // BridgeMatcher hides bridged remotes in favor of their local twin, so
+        // fetching the away_summary for a bridged session would just populate
+        // an entry that no visible row ever consults. Guarding at dispatch
+        // avoids the wasted HTTP round-trip — and the test verifies that the
+        // bridged row never triggers a call while a sibling non-bridge row does.
+        let db = try SeshctlDatabase.temporary()
+        let bridged = makeRemoteSession(id: "cse_bridged_skip", environmentKind: "bridge")
+        let pureRemote = makeRemoteSession(id: "cse_pure_remote", environmentKind: "")
+        let fetcher = StubFetcher(result: .success([bridged, pureRemote]))
+        await fetcher.setAssistantText(.success("real"), forSessionID: pureRemote.id)
+        // Intentionally leave bridged's stub entry unset — if dispatch leaks
+        // through, the call count below will detect it regardless of payload.
+
+        let store = ClaudeCodeConnectionStore(
+            database: db,
+            fetcher: fetcher,
+            initialState: .connected(lastFetchAt: nil)
+        )
+
+        await store.fetchNow()
+        await store.awaitPendingAwaySummaryFetches()
+
+        let bridgedCalls = await fetcher.assistantTextCallCount(for: bridged.id)
+        let pureCalls = await fetcher.assistantTextCallCount(for: pureRemote.id)
+        #expect(bridgedCalls == 0)
+        #expect(pureCalls == 1)
+        #expect(store.remoteAwaySummariesById[bridged.id] == nil)
+        #expect(store.remoteAwaySummariesById[pureRemote.id] == "real")
     }
 }
 

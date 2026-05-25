@@ -335,8 +335,9 @@ public actor RemoteClaudeCodeFetcher {
     /// body through `RemoteEventsParser.extractLatestAssistantText`.
     ///
     /// Returns:
-    /// - The trimmed first non-empty line of the most-recent assistant event's
-    ///   first `type == "text"` content block, when one exists.
+    /// - The trimmed text body of the most-recent assistant event's first
+    ///   `type == "text"` content block, preserving internal newlines, when
+    ///   one exists.
     /// - `nil` when the session has no assistant events yet, or the latest
     ///   assistant turn was tool-call-only (no text block). This is a valid
     ///   "no recap available" signal — callers should fall through to the
@@ -409,6 +410,10 @@ public actor RemoteClaudeCodeFetcher {
         //    JSON (returns nil) so we don't classify decode failures here as
         //    errors — a malformed events body is a "no recap available" outcome
         //    that self-heals on the next `last_event_at` advance.
-        return RemoteEventsParser.extractLatestAssistantText(eventsResponseData: data)
+        let parsed = RemoteEventsParser.extractLatestAssistantText(eventsResponseData: data)
+        if parsed == nil && data.count > 200 {
+            fetcherLogger.info("events response parsed to nil; possible schema drift (\(data.count, privacy: .public) bytes)")
+        }
+        return parsed
     }
 }

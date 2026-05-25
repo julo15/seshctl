@@ -168,6 +168,26 @@ struct RemoteEventsParserTests {
         #expect(result == "Here is the file content.")
     }
 
+    @Test("walks past a thinking block to the first text block")
+    func walksPastThinking() {
+        // Claude 4.x extended-thinking responses interleave `thinking` blocks
+        // before the final `text` block. The parser should walk past them the
+        // same way it walks past `tool_use`.
+        let body: [String: Any] = [
+            "data": [
+                assistantEvent(content: [
+                    [
+                        "type": "thinking",
+                        "thinking": "Let me reason through this step by step...",
+                    ] as [String: Any],
+                    ["type": "text", "text": "Here is my final answer."] as [String: Any],
+                ]),
+            ] as [Any],
+        ]
+        let result = RemoteEventsParser.extractLatestAssistantText(eventsResponseData: makeJSON(body))
+        #expect(result == "Here is my final answer.")
+    }
+
     @Test("assistant event with empty content array returns nil")
     func emptyContentArray() {
         let body: [String: Any] = [

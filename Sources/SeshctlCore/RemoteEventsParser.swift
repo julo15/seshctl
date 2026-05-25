@@ -19,15 +19,17 @@ import Foundation
 public enum RemoteEventsParser {
 
     /// Extract the latest assistant text from a `/v1/code/sessions/<id>/events`
-    /// response body. Returns `nil` when:
+    /// response body. Returns the trimmed text body of the most recent
+    /// assistant event's first `type == "text"` content block, preserving
+    /// internal newlines — downstream display layers truncate visually via
+    /// SwiftUI `.lineLimit(...)`.
+    ///
+    /// Returns `nil` when:
     /// - the body isn't a JSON object,
     /// - `data` is missing, not an array, or empty,
     /// - no event has `event_type == "assistant"`,
     /// - the first assistant event has no `type == "text"` content block, or
     /// - the matched text is empty after trimming wrapper whitespace.
-    ///
-    /// Internal newlines are preserved — downstream display layers truncate
-    /// visually via SwiftUI `.lineLimit(...)`.
     public static func extractLatestAssistantText(eventsResponseData: Data) -> String? {
         guard let parsed = try? JSONSerialization.jsonObject(with: eventsResponseData),
               let root = parsed as? [String: Any]
@@ -59,6 +61,9 @@ public enum RemoteEventsParser {
                 if trimmed.isEmpty { return nil }
                 return trimmed
             }
+            // Newest assistant turn is tool_use-only (no text block). Deliberate:
+            // older assistant text is stale once a newer turn has fired, so the
+            // right UX is "no recap" rather than walking further back.
             return nil
         }
         return nil

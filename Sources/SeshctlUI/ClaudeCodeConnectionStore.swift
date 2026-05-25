@@ -78,12 +78,23 @@ public final class ClaudeCodeConnectionStore: ObservableObject {
     /// retry until `lastEventAt` advances, so failures don't loop.
     private var remoteAwaySummaryCache: [String: (lastEventAt: Date, summary: String?)] = [:]
 
+    /// Pairs a dispatched fetch task with a per-dispatch UUID so the Task's
+    /// `defer` cleanup can identity-check before wiping the dict entry. Without
+    /// the UUID, a slow Task A that finally returns after `disconnect()` +
+    /// reconnect + a fresh Task B dispatch under the same session id would
+    /// erase B's entry — making the next `fetchNow()` re-dispatch a duplicate.
+    private struct PendingAwaySummaryFetch {
+        let id: UUID
+        let task: Task<Void, Never>
+    }
+
     /// In-flight `fetchLatestAssistantText` tasks keyed by session id. Used
     /// both as the duplicate-dispatch guard AND as the awaitable handle so
     /// tests can deterministically wait for pending fetches via
     /// `awaitPendingAwaySummaryFetches()`. Entries remove themselves via
-    /// `defer` inside the Task body.
-    private var awaySummaryFetchTasks: [String: Task<Void, Never>] = [:]
+    /// `defer` inside the Task body — but only if the slot still holds the
+    /// same dispatch UUID (see `PendingAwaySummaryFetch`).
+    private var awaySummaryFetchTasks: [String: PendingAwaySummaryFetch] = [:]
 
     /// Published map of `session id → most recent assistant text` for pure-
     /// remote rows. Sessions absent from this map fall through to the row's
@@ -149,6 +160,13 @@ public final class ClaudeCodeConnectionStore: ObservableObject {
             result = .failure(error)
         }
 
+        // Update state BEFORE dispatching per-session fetches. The dispatched
+        // Tasks await `fetcher.fetchLatestAssistantText`, and their post-await
+        // `hasClaudeConnection` guard must observe the latest state — not a
+        // stale value from a prior fetch outcome. Setting state first decouples
+        // dispatch from any "must be synchronous through dispatch" invariant.
+        state = Self.stateForFetchResult(result, previouslyConnectedAt: priorFetchAt)
+
         // On success only — prune stale cache entries and dispatch per-session
         // events fetches for any session whose `lastEventAt` advanced (or
         // appeared for the first time). Failures intentionally skip this step
@@ -159,8 +177,6 @@ public final class ClaudeCodeConnectionStore: ObservableObject {
                 dispatchAwaySummaryFetchIfNeeded(for: session)
             }
         }
-
-        state = Self.stateForFetchResult(result, previouslyConnectedAt: priorFetchAt)
     }
 
     /// Drop cache + map entries for session IDs no longer present in the
@@ -181,6 +197,11 @@ public final class ClaudeCodeConnectionStore: ObservableObject {
     /// Safe to call on every `fetchNow()`: the cache-hit and in-flight
     /// guards make redundant calls cheap.
     private func dispatchAwaySummaryFetchIfNeeded(for session: RemoteClaudeCodeSession) {
+        // Bridged sessions are hidden by BridgeMatcher in favor of their local twin
+        // (which already gets its own away_summary via the local JSONL transcript).
+        // Skip the events fetch — the result would never reach a visible row.
+        guard session.environmentKind != "bridge" else { return }
+
         let id = session.id
         let pinnedLastEventAt = session.lastEventAt
 
@@ -193,8 +214,17 @@ public final class ClaudeCodeConnectionStore: ObservableObject {
             return
         }
 
-        awaySummaryFetchTasks[id] = Task { @MainActor [weak self] in
-            defer { self?.awaySummaryFetchTasks.removeValue(forKey: id) }
+        let dispatchID = UUID()
+        let task = Task { @MainActor [weak self] in
+            defer {
+                // Identity-checked cleanup: only wipe OUR slot. A fresh dispatch
+                // (post-disconnect+reconnect) would have a different UUID under
+                // the same session id, so we must NOT remove its entry just
+                // because we share an id with the prior, now-superseded task.
+                if self?.awaySummaryFetchTasks[id]?.id == dispatchID {
+                    self?.awaySummaryFetchTasks.removeValue(forKey: id)
+                }
+            }
             guard let self else { return }
             let result: String?
             do {
@@ -214,6 +244,7 @@ public final class ClaudeCodeConnectionStore: ObservableObject {
                 self.remoteAwaySummariesById.removeValue(forKey: id)
             }
         }
+        awaySummaryFetchTasks[id] = PendingAwaySummaryFetch(id: dispatchID, task: task)
     }
 
     /// Wait for all in-flight `fetchLatestAssistantText` tasks dispatched by
@@ -223,13 +254,13 @@ public final class ClaudeCodeConnectionStore: ObservableObject {
     public func awaitPendingAwaySummaryFetches() async {
         // Snapshot the values — Task completions mutate the dict via defer,
         // so iterating live would crash.
-        let tasks = Array(awaySummaryFetchTasks.values)
+        let tasks = awaySummaryFetchTasks.values.map(\.task)
         for task in tasks {
             _ = await task.value
         }
         // Some completions may have dispatched follow-up tasks (they shouldn't
         // by design, but be defensive). Re-snapshot once and drain.
-        let followups = Array(awaySummaryFetchTasks.values)
+        let followups = awaySummaryFetchTasks.values.map(\.task)
         for task in followups {
             _ = await task.value
         }
@@ -299,7 +330,7 @@ public final class ClaudeCodeConnectionStore: ObservableObject {
         // after the state flips to `.notConnected`.
         remoteAwaySummaryCache.removeAll()
         remoteAwaySummariesById = [:]
-        for task in awaySummaryFetchTasks.values { task.cancel() }
+        for pending in awaySummaryFetchTasks.values { pending.task.cancel() }
         awaySummaryFetchTasks.removeAll()
         state = .notConnected
     }
