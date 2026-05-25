@@ -50,30 +50,14 @@ private struct SpikeArtifacts {
 
 @Suite("EmbeddingService")
 struct EmbeddingServiceTests {
-    // 1. Production initializer must fail with a clear error until Phase 7
-    //    ships the bundled .mlpackage. This pins the lazy-load path AND
-    //    proves Phase 7 is the only thing left to flip it on.
-    @Test("Production init fails when the bundled model isn't present yet")
-    func productionInitFailsWithoutBundledModel() async throws {
-        do {
-            _ = try await EmbeddingService()
-            Issue.record("expected EmbeddingService() to throw — bundled model shouldn't exist yet")
-        } catch let error as EmbeddingServiceError {
-            switch error {
-            case .modelResourceNotFound, .tokenizerResourceNotFound:
-                // Either is acceptable — both indicate the Phase 7 artifacts
-                // haven't been shipped yet.
-                break
-            case .missingOutputFeature, .unexpectedOutputShape:
-                Issue.record("unexpected EmbeddingServiceError variant: \(error)")
-            }
-        } catch {
-            // If the bundled model DOES exist (e.g. someone has run Phase 7
-            // already), the init may instead fail somewhere in CoreML
-            // compilation. We don't want to wedge the test in that case;
-            // log and pass to surface the situation but not block CI.
-            Issue.record("EmbeddingService() threw a non-EmbeddingServiceError: \(error). If the bundled model is now present, update this test.")
-        }
+    // 1. Production initializer loads the bundled .mlpackage from
+    //    Bundle.module/Models/ — proves the Phase 7 resource pipeline works
+    //    end-to-end. If this regresses, check that Sources/SeshctlRecall/
+    //    Models/all-MiniLM-L6-v2-int8.mlpackage and the two tokenizer JSONs
+    //    are checked in and that Package.swift's .copy("Models") is intact.
+    @Test("Production init loads the bundled model successfully")
+    func productionInitLoadsBundledModel() async throws {
+        _ = try await EmbeddingService()
     }
 
     // 2. The explicit-URL initializer should succeed against the spike's

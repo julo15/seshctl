@@ -52,13 +52,12 @@ struct RecallServiceTests {
         }
     }
 
-    @Test("Search with configure() but no bundled model throws (Phase 7 will flip this)")
-    func searchWithoutBundledModelThrows() async throws {
-        RecallService._resetForTests()
-        let db = try SeshctlDatabase.temporary()
-        RecallService.configure(database: db)
-        await #expect(throws: (any Error).self) {
-            _ = try await RecallService.search(query: "hello world")
-        }
-    }
+    // Note: there is no full end-to-end search test in this suite. The
+    // RecallStack's Indexer would walk the developer's real ~/.claude/projects,
+    // ~/.codex, ~/.gemini directories and index thousands of entries — slow,
+    // non-deterministic, and not appropriate for a unit-test pass. The Phase 7
+    // bundled-model wiring is covered by EmbeddingServiceTests.productionInit
+    // LoadsBundledModel; an injectable-adapters test-only API is a possible
+    // future addition if we want to assert search() returns empty against a
+    // pristine DB.
 }

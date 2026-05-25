@@ -74,29 +74,36 @@ public actor EmbeddingService {
 
     // MARK: - Initialization.
 
-    /// Production initializer: loads the bundled model + tokenizer from
-    /// `Bundle.module`. Fails with `EmbeddingServiceError.modelResourceNotFound`
-    /// or `.tokenizerResourceNotFound` until Phase 7 ships the real model files.
+    /// Production initializer: loads the bundled model + tokenizer.
+    ///
+    /// Resource resolution order:
+    /// 1. `Bundle.main.resourceURL/Models/` — `.app/Contents/Resources/Models/`.
+    ///    `scripts/build-app-bundle.sh` copies the SwiftPM-generated
+    ///    `Models/` dir here when assembling the .app, which is the
+    ///    conventional macOS app bundle location for resource files.
+    /// 2. `Bundle.module/Models/` — SwiftPM-generated bundle. Used by
+    ///    `swift test` and dev/CLI flows where there is no .app wrapper.
+    ///
+    /// The two-step lookup exists because SwiftPM's generated
+    /// `Bundle.module` accessor (which expects the bundle at
+    /// `Bundle.main.bundleURL/seshctl_SeshctlRecall.bundle`) doesn't
+    /// match the standard macOS .app layout (resources live under
+    /// `Contents/Resources/`). Trying main.resourceURL first means a
+    /// shipped .app doesn't need the SwiftPM-generated bundle at all.
     public init() async throws {
-        guard let modelURL = Bundle.module.url(
-            forResource: Self.bundledModelResourceName,
-            withExtension: Self.bundledModelResourceExtension,
-            subdirectory: Self.bundledModelsSubdirectory
-        ) else {
+        let modelURL: URL
+        let tokenizerFolderURL: URL
+
+        if let resolved = Self.resolveBundledResources() {
+            modelURL = resolved.modelURL
+            tokenizerFolderURL = resolved.tokenizerFolderURL
+        } else {
             throw EmbeddingServiceError.modelResourceNotFound(
-                "expected Bundle.module/\(Self.bundledModelsSubdirectory)/"
-                + "\(Self.bundledModelResourceName).\(Self.bundledModelResourceExtension) "
-                + "— ship the converted .mlpackage in Phase 7"
-            )
-        }
-        // `.copy("Models")` preserves the directory itself inside the
-        // bundle, so the tokenizer files live next to the model. We resolve
-        // the directory URL by stripping the model filename.
-        let tokenizerFolderURL = modelURL.deletingLastPathComponent()
-        guard FileManager.default.fileExists(atPath: tokenizerFolderURL.path) else {
-            throw EmbeddingServiceError.tokenizerResourceNotFound(
-                "expected tokenizer folder at \(tokenizerFolderURL.path) — "
-                + "co-locate tokenizer.json + tokenizer_config.json in Phase 7"
+                "expected Models/\(Self.bundledModelResourceName)"
+                + ".\(Self.bundledModelResourceExtension) "
+                + "in .app/Contents/Resources/ or SwiftPM Bundle.module — "
+                + "check that scripts/build-app-bundle.sh copies Models/ "
+                + "and that .copy(\"Models\") is intact in Package.swift"
             )
         }
 
@@ -106,6 +113,36 @@ public actor EmbeddingService {
         )
         self.model = loadedModel
         self.tokenizer = loadedTokenizer
+    }
+
+    /// Locate the bundled `.mlpackage` and tokenizer folder. Returns `nil`
+    /// if neither the .app resources path nor `Bundle.module` has them.
+    private static func resolveBundledResources() -> (modelURL: URL, tokenizerFolderURL: URL)? {
+        let fm = FileManager.default
+        let modelFilename = "\(bundledModelResourceName).\(bundledModelResourceExtension)"
+
+        // 1. .app/Contents/Resources/Models/<model>.mlpackage
+        if let resourceURL = Bundle.main.resourceURL {
+            let modelsDir = resourceURL.appendingPathComponent(bundledModelsSubdirectory)
+            let modelURL = modelsDir.appendingPathComponent(modelFilename)
+            if fm.fileExists(atPath: modelURL.path) {
+                return (modelURL, modelsDir)
+            }
+        }
+
+        // 2. SwiftPM Bundle.module/Models/<model>.mlpackage — dev + test path.
+        if let modelURL = Bundle.module.url(
+            forResource: bundledModelResourceName,
+            withExtension: bundledModelResourceExtension,
+            subdirectory: bundledModelsSubdirectory
+        ) {
+            let tokenizerFolderURL = modelURL.deletingLastPathComponent()
+            if fm.fileExists(atPath: tokenizerFolderURL.path) {
+                return (modelURL, tokenizerFolderURL)
+            }
+        }
+
+        return nil
     }
 
     /// Test/dev initializer: explicit URLs for the .mlpackage and the
