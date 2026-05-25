@@ -24,6 +24,8 @@ public struct SessionListView: View {
     var onCheckForUpdates: (() -> Void)?
     var onQuit: (() -> Void)?
 
+    private static let firstOpenAnimationGate: TimeInterval = 0.5
+
     public init(
         viewModel: SessionListViewModel,
         connectionStore: ClaudeCodeConnectionStore,
@@ -317,7 +319,7 @@ public struct SessionListView: View {
                         // `panelDidShow()` would otherwise spring every row into
                         // its new position on every reopen.
                         .animation(
-                            Date().timeIntervalSince(viewModel.lastPanelShownAt) > 0.5
+                            Date().timeIntervalSince(viewModel.lastPanelShownAt) > Self.firstOpenAnimationGate
                                 ? .spring(response: 0.32, dampingFraction: 0.86)
                                 : nil,
                             value: ordered.map(\.id)

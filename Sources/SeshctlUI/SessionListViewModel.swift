@@ -40,6 +40,9 @@ public final class SessionListViewModel: ObservableObject {
     /// last-known list (rendered before the panel was hidden) to the current
     /// list (loaded by the immediate `refresh()` in `panelDidShow()`) would
     /// run a full spring on every reopen.
+    /// Write-ordering matters: `panelDidShow()` must set this *before* calling
+    /// `refresh()` so the @Published mutations from refresh land in the same
+    /// body-recomputation pass with the fresh timestamp visible.
     @Published public private(set) var lastPanelShownAt: Date = .distantPast
     /// Per-transcript cache: `path → (mtime, cseId)`. Lets `refresh()` skip
     /// re-reading a live Claude transcript when its file mtime hasn't
@@ -265,13 +268,20 @@ public final class SessionListViewModel: ObservableObject {
             pruneTranscriptAwaySummaryCache(keepingPaths: livePaths)
             pruneTranscriptBridgeCache(keepingPaths: livePaths)
             // Re-pin `selectedIndex` to the previously-selected row's new
-            // position. If the row vanished (closed, filtered out), leave
-            // `selectedIndex` alone — existing clamp/empty handling takes
-            // over from there.
-            if let id = priorSelectedRowId,
-               let newIndex = orderedRows.firstIndex(where: { $0.id == id }),
-               newIndex != selectedIndex {
-                selectedIndex = newIndex
+            // position. If the row vanished (closed + filtered out of
+            // `orderedRows`), clamp `selectedIndex` to the new array bounds
+            // so the highlight lands on a real row instead of silently
+            // sliding onto whichever row now occupies the old slot —
+            // the exact bug the re-pin fixes for the reorder case.
+            // Empty list → `-1` (the nothing-selected sentinel).
+            if let id = priorSelectedRowId {
+                if let newIndex = orderedRows.firstIndex(where: { $0.id == id }) {
+                    if newIndex != selectedIndex {
+                        selectedIndex = newIndex
+                    }
+                } else {
+                    selectedIndex = min(selectedIndex, orderedRows.count - 1)
+                }
             }
             error = nil
         } catch {
