@@ -3,6 +3,7 @@ import Combine
 import Darwin
 import Foundation
 import SeshctlCore
+import SeshctlRecall
 
 @MainActor
 public final class SessionListViewModel: ObservableObject {

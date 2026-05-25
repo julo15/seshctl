@@ -4,6 +4,7 @@ import Testing
 import GRDB
 
 @testable import SeshctlCore
+@testable import SeshctlRecall
 @testable import SeshctlUI
 
 
