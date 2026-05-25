@@ -81,9 +81,19 @@ public actor Indexer {
             }
 
             total += newEntries.count
+            // Capture pre-encode `done` so the embedder's per-batch callback
+            // can be lifted to the global (cross-adapter) progress space.
+            // Without this, the user sees zero progress until ALL of an
+            // adapter's entries finish embedding — ~7 minutes for an
+            // 8000-row Claude history.
+            let baseDone = done
+            let totalSnapshot = total
             let embeddings = try await embedder.encode(
                 newEntries.map(\.text),
-                batchSize: batchSize
+                batchSize: batchSize,
+                onProgress: { batchDone, _ in
+                    onProgress?(baseDone + batchDone, totalSnapshot)
+                }
             )
             precondition(
                 embeddings.count == newEntries.count,
