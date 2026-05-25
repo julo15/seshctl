@@ -1,0 +1,34 @@
+# Phase 1 parity-spike Python dependencies.
+#
+# All pins are exact for reproducibility — the spike is a gate, and a quietly
+# upgrading dependency could mask a parity regression in either direction.
+# Bump deliberately when re-running the spike on a newer toolchain.
+#
+# CPU-only torch is sufficient — the conversion script traces the model on
+# CPU and CoreML handles ANE/GPU execution at inference time.
+
+# PyTorch — required by `transformers` + `coremltools.convert(traced_model, ...)`.
+# Note: this wheel is ~600MB. CPU-only is fine for tracing.
+torch==2.5.1
+
+# HuggingFace Transformers — loads sentence-transformers/all-MiniLM-L6-v2 via
+# AutoModel/AutoTokenizer. The `accelerate` extra isn't needed for tracing.
+transformers==4.46.3
+
+# CoreML Tools — converts the traced PyTorch model to mlprogram and runs
+# INT8 weight quantization via coremltools.optimize.coreml.linear_quantize_weights.
+# 8.x is current as of late 2025 and supports mlprogram + linear_quantize_weights.
+coremltools==8.1
+
+# NumPy — already a transitive of coremltools/transformers/onnxruntime but
+# pinned here so the spike doesn't silently float across major versions.
+numpy==1.26.4
+
+# Hugging Face `tokenizers` — used by dump-python-reference.py to match the
+# exact tokenization path of recall/embedding.py. Pulled in transitively by
+# transformers but pinned explicitly because parity depends on it.
+tokenizers==0.20.3
+
+# ONNX Runtime — used by dump-python-reference.py to reproduce recall's
+# inference path byte-for-byte (recall uses onnxruntime, NOT torch, at runtime).
+onnxruntime==1.20.1

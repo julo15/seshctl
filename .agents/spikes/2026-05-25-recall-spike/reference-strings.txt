@@ -1,0 +1,20 @@
+how do I add a new column to a SQLite table
+the build fails with 'undefined symbol' on macOS
+I need to debug a memory leak in my Rust program
+what's the difference between async and await in Python
+show me how to set up GitHub Actions for a Node.js project
+fix the off-by-one error in the loop counter
+refactor this function to use map instead of a for loop
+add error handling for the network request
+write a unit test for the user authentication flow
+the deployment to production is failing with a 500 error from the load balancer
+explain how Kafka consumer groups work and partition assignment
+I'm getting a CORS error in the browser when calling my API
+optimize this SQL query for better performance
+implement OAuth2 login with Google as an identity provider
+the React component re-renders too often
+what's the proper way to handle JWT tokens
+add a dark mode toggle to the settings page
+convert this Python script to TypeScript
+the test passes locally but fails in CI
+design a REST API for a blog application with users, posts, and comments
