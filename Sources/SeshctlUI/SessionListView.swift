@@ -295,6 +295,20 @@ public struct SessionListView: View {
                                     .padding(.horizontal, 16)
                                     .padding(.vertical, 8)
                                 }
+
+                                if let errorMessage = viewModel.recallErrorMessage {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "exclamationmark.triangle")
+                                            .foregroundStyle(.orange)
+                                        Text(errorMessage)
+                                            .font(.system(.footnote, design: .monospaced))
+                                            .foregroundStyle(.orange)
+                                            .lineLimit(1)
+                                            .truncationMode(.tail)
+                                    }
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 8)
+                                }
                             }
                         }
                         .padding(.vertical, 4)

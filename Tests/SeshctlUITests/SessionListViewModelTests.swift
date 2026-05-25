@@ -1148,6 +1148,140 @@ struct SessionListViewModelTests {
         #expect(vm.searchQuery == "")
     }
 
+    /// Poll until `condition()` is true or `timeout` elapses. Used by recall tests
+    /// to wait for async debounce + Task continuations to land under heavy
+    /// parallel @MainActor contention (a fixed sleep is flaky on loaded CI).
+    @MainActor
+    private func waitForRecall(
+        timeout: TimeInterval = 3.0,
+        _ condition: () -> Bool
+    ) async {
+        let start = Date()
+        while !condition() && Date().timeIntervalSince(start) < timeout {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
+    @Test("recallErrorMessage is populated when search fails")
+    @MainActor
+    func recallErrorMessagePopulatedOnSearchFailed() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.recallSearchProvider = { _, _ in
+            throw RecallError.searchFailed("boom: traceback line 1\ntraceback line 2")
+        }
+        vm.enterSearch()
+        vm.appendSearchCharacter("t")
+
+        await waitForRecall { vm.recallErrorMessage != nil }
+
+        #expect(vm.recallErrorMessage != nil)
+        #expect(vm.recallErrorMessage?.contains("Semantic search failed") == true)
+        #expect(vm.recallErrorMessage?.contains("boom") == true)
+        #expect(vm.recallErrorMessage?.contains("traceback line 2") == false)
+        #expect(vm.isRecallSearching == false)
+        #expect(vm.recallUnavailable == false)
+    }
+
+    @Test("recallErrorMessage is populated on timeout")
+    @MainActor
+    func recallErrorMessagePopulatedOnTimeout() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.recallSearchProvider = { _, _ in
+            throw RecallError.timeout
+        }
+        vm.enterSearch()
+        vm.appendSearchCharacter("t")
+
+        await waitForRecall { vm.recallErrorMessage != nil }
+
+        #expect(vm.recallErrorMessage == "Semantic search timed out")
+        #expect(vm.isRecallSearching == false)
+        #expect(vm.recallUnavailable == false)
+    }
+
+    @Test("recallErrorMessage stays nil for notInstalled (uses recallUnavailable instead)")
+    @MainActor
+    func recallErrorMessageNilOnNotInstalled() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.recallSearchProvider = { _, _ in
+            throw RecallError.notInstalled
+        }
+        vm.enterSearch()
+        vm.appendSearchCharacter("t")
+
+        await waitForRecall { vm.recallUnavailable }
+
+        #expect(vm.recallErrorMessage == nil)
+        #expect(vm.recallUnavailable == true)
+    }
+
+    @Test("exitSearch clears recallErrorMessage")
+    @MainActor
+    func recallErrorMessageClearedByExitSearch() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.recallSearchProvider = { _, _ in
+            throw RecallError.searchFailed("boom")
+        }
+        vm.enterSearch()
+        vm.appendSearchCharacter("t")
+
+        await waitForRecall { vm.recallErrorMessage != nil }
+        #expect(vm.recallErrorMessage != nil)
+
+        vm.exitSearch()
+        #expect(vm.recallErrorMessage == nil)
+    }
+
+    @Test("New search clears prior recallErrorMessage")
+    @MainActor
+    func recallErrorMessageClearedByNewSearch() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.recallSearchProvider = { _, _ in
+            throw RecallError.searchFailed("oldboom")
+        }
+        vm.enterSearch()
+        vm.appendSearchCharacter("t")
+
+        await waitForRecall { vm.recallErrorMessage != nil }
+        #expect(vm.recallErrorMessage != nil)
+
+        // Swap in a successful provider, then trigger a new search by changing the query.
+        vm.recallSearchProvider = { _, _ in
+            RecallSearchResponse(results: [], indexingCount: nil)
+        }
+        vm.appendSearchCharacter("x")
+
+        await waitForRecall { vm.recallErrorMessage == nil && !vm.isRecallSearching }
+        #expect(vm.recallErrorMessage == nil)
+    }
+
+    @Test("firstLine truncates long error messages with ellipsis")
+    @MainActor
+    func firstLineTruncatesLongMessages() async throws {
+        let longLineOne = String(repeating: "a", count: 300)
+        let longMessage = "\(longLineOne)\nsecond line content"
+
+        let db = try SeshctlDatabase.temporary()
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.recallSearchProvider = { _, _ in
+            throw RecallError.searchFailed(longMessage)
+        }
+        vm.enterSearch()
+        vm.appendSearchCharacter("t")
+
+        await waitForRecall { vm.recallErrorMessage != nil }
+
+        let message = try #require(vm.recallErrorMessage)
+        #expect(message.count < longMessage.count)
+        #expect(message.contains("…"))
+        #expect(message.contains("second line content") == false)
+    }
+
     @Test("selectedRecallResult returns nil when not searching")
     @MainActor
     func selectedRecallResultNilWhenNotSearching() throws {
