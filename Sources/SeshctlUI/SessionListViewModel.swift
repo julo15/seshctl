@@ -73,13 +73,15 @@ public final class SessionListViewModel: ObservableObject {
     @Published public private(set) var isRecallSearching: Bool = false
     @Published public private(set) var recallIndexingDone: Int?
     @Published public private(set) var recallIndexingTotal: Int?
-    @Published public private(set) var recallUnavailable: Bool = false
     /// User-facing one-line failure message for the semantic search
-    /// section. Populated for `.timeout` and `.searchFailed` (the
-    /// detail is truncated via `firstLine` to keep the row compact).
-    /// Left nil for `.notInstalled` — that path uses the existing
-    /// `recallUnavailable` "Install recall" prompt instead. Cleared on
-    /// every new search, on `exitSearch()`, and when the query empties.
+    /// section. Populated on any `RecallError` (the detail is truncated
+    /// via `firstLine` to keep the row compact). Cleared on every new
+    /// search, on `exitSearch()`, and when the query empties.
+    ///
+    /// (v0.5.0 native recall: `.notInstalled` is no longer reachable —
+    /// the native EmbeddingService is always available — but the case
+    /// stays in `RecallError` and we route it through this same message
+    /// path defensively.)
     @Published public private(set) var recallErrorMessage: String?
     @Published public private(set) var recallGeneration: Int = 0
     /// One-time toast flag: set to `true` when the user presses `x` with a
@@ -1112,7 +1114,6 @@ public final class SessionListViewModel: ObservableObject {
     }
 
     private func executeRecallSearch(query: String) {
-        guard !recallUnavailable else { return }
         isRecallSearching = true
         recallResults = []
         recallErrorMessage = nil
@@ -1144,7 +1145,10 @@ public final class SessionListViewModel: ObservableObject {
                 guard !Task.isCancelled else { return }
                 switch recallError {
                 case .notInstalled:
-                    self?.recallUnavailable = true
+                    // Unreachable in v0.5.0+ (native recall is always
+                    // available). Surface defensively as an error message
+                    // so a future regression doesn't fall through silently.
+                    self?.recallErrorMessage = "Semantic search unavailable"
                 case .timeout:
                     self?.recallErrorMessage = "Semantic search timed out"
                 case .searchFailed(let msg):
