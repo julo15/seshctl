@@ -150,16 +150,16 @@ Resolved during the planning conversation:
 - [x] Doc-comment cross-references `TranscriptAwaySummaryScanner` and `RemoteEventsParser`, calls out the tool-use-only → nil rule, and the user-turn-clears-pending rule.
 
 ### Step 2: Cache + publish in `SessionListViewModel`
-- [ ] Add `@Published public private(set) var latestAssistantById: [String: String] = [:]` next to `awaySummariesById` (with parallel doc-comment).
-- [ ] Add `private var transcriptLatestAssistantCache: [String: (mtime: Date, text: String?)] = [:]` next to `transcriptAwaySummaryCache`.
-- [ ] Add `fileprivate func cachedLatestAssistant(for session: Session) -> String?` mirroring `cachedAwaySummary(for:)` — Claude-only guard, mtime check, cache write.
-- [ ] Add `fileprivate func pruneTranscriptLatestAssistantCache(keepingPaths paths: [String])` mirroring `pruneTranscriptAwaySummaryCache`.
-- [ ] Inside `refresh()` (around line 235, next to the existing away-summary build): build `latest: [String: String]` from `cachedLatestAssistant(for:)`, assign to `latestAssistantById`, and call `pruneTranscriptLatestAssistantCache(keepingPaths: livePaths)`.
+- [x] Add `@Published public private(set) var latestAssistantById: [String: String] = [:]` next to `awaySummariesById` (with parallel doc-comment).
+- [x] Add `private var transcriptLatestAssistantCache: [String: (mtime: Date, text: String?)] = [:]` next to `transcriptAwaySummaryCache`.
+- [x] Add `fileprivate func cachedLatestAssistant(for session: Session) -> String?` mirroring `cachedAwaySummary(for:)` — Claude-only guard, mtime check, cache write.
+- [x] Add `fileprivate func pruneTranscriptLatestAssistantCache(keepingPaths paths: [String])` mirroring `pruneTranscriptAwaySummaryCache`.
+- [x] Inside `refresh()` (around line 235, next to the existing away-summary build): build `latest: [String: String]` from `cachedLatestAssistant(for:)`, assign to `latestAssistantById`, and call `pruneTranscriptLatestAssistantCache(keepingPaths: livePaths)`.
 
 ### Step 3: Consume in row construction
-- [ ] In `Sources/SeshctlUI/SessionListView.swift`, find each row-construction site that passes `awaySummary: viewModel.awaySummariesById[session.id]` and replace with `awaySummary: viewModel.awaySummariesById[session.id] ?? viewModel.latestAssistantById[session.id]`.
-- [ ] Same change in `Sources/SeshctlUI/SessionTreeView.swift`.
-- [ ] No change to `Session+Display.swift` — the existing `previewContent(awaySummary:)` accepts the combined optional unchanged.
+- [x] In `Sources/SeshctlUI/SessionListView.swift`, find each row-construction site that passes `awaySummary: viewModel.awaySummariesById[session.id]` and replace with `awaySummary: viewModel.awaySummariesById[session.id] ?? viewModel.latestAssistantById[session.id]`.
+- [x] Same change in `Sources/SeshctlUI/SessionTreeView.swift`.
+- [x] No change to `Session+Display.swift` — the existing `previewContent(awaySummary:)` accepts the combined optional unchanged.
 
 ### Step 4: Update AGENTS.md
 - [ ] Edit the "Transcript-Derived Row Signals" section: change "Two row signals" → "Three row signals", add `latestAssistantById` (via `TranscriptLatestAssistantScanner` → `transcriptLatestAssistantCache`) to the enumeration.
@@ -179,7 +179,7 @@ Resolved during the planning conversation:
   - `skipsMalformedLinesAndKeepsScanning` — assistant text, garbage line, more lines → still returns the assistant text.
   - `returnsNilForEmptyTextBlock` — assistant turn whose text block is whitespace-only → returns nil.
   - `trimsWrapperWhitespace` — assistant text with leading/trailing whitespace + internal newlines → trims wrappers, preserves internal newlines.
-- [ ] Extend `Tests/SeshctlUITests/SessionListViewModelTests.swift` (or its existing companion file for the away-summary cache tests) with:
+- [x] Extend `Tests/SeshctlUITests/SessionListViewModelTests.swift` (or its existing companion file for the away-summary cache tests) with:
   - `latestAssistantPublishedAfterRefresh` — wire a fixture transcript on disk with assistant text, run `refresh()`, assert `viewModel.latestAssistantById[session.id]` is non-nil and matches.
   - `latestAssistantCacheReusedAcrossRefreshes` — mock or wrap the scanner call count via mtime invariance check; assert the scanner is not re-invoked when mtime is unchanged across two refreshes.
   - `latestAssistantCacheInvalidatedOnMtimeChange` — touch the file (advance mtime), refresh, assert the value updates.

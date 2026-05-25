@@ -2533,4 +2533,179 @@ struct SessionListViewModelTests {
         #expect(vm.selectedIndex == 0)
         #expect(vm.selectedSession?.pid == 1111)
     }
+
+    // MARK: - Latest Assistant Integration Tests
+    //
+    // Sibling of the away-summary block above: pin the end-to-end glue
+    // from `SessionListViewModel.refresh()` through
+    // `cachedLatestAssistant(for:)` / `TranscriptLatestAssistantScanner`
+    // into the published `latestAssistantById` map. Scanner-unit
+    // coverage lives in `TranscriptLatestAssistantScannerTests`; these
+    // exercise the cache + prune + non-Claude-guard seams so a refresh()
+    // refactor can't silently regress the "live mid-response recap" UX.
+    //
+    // Fixture pattern mirrors the away-summary tests above byte-for-byte:
+    // JSONL written to a `NSTemporaryDirectory()` temp file, path
+    // plumbed via `db.updateSession(..., transcriptPath:)`. Fixture
+    // bodies are inlined per-test for the same reasons.
+
+    @Test("latestAssistantById populated from Claude transcript")
+    @MainActor
+    func latestAssistantById_publishedAfterRefresh() throws {
+        let dir = NSTemporaryDirectory()
+        let path = (dir as NSString).appendingPathComponent("\(UUID().uuidString).jsonl")
+        let content = """
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hello world"}]},"timestamp":"2026-05-25T01:00:00.000Z","sessionId":"abc"}
+        """
+        try content.write(toFile: path, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let pid: Int = 9101
+        let db = try SeshctlDatabase.temporary()
+        let session = try db.startSession(tool: .claude, directory: "/tmp/x", pid: pid)
+        try db.updateSession(pid: pid, tool: .claude, transcriptPath: path)
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+
+        #expect(vm.latestAssistantById[session.id] == "Hello world")
+    }
+
+    @Test("latestAssistantById is stable across refreshes when transcript is unchanged")
+    @MainActor
+    func latestAssistantById_cacheReusedOnUnchangedMtime() throws {
+        let dir = NSTemporaryDirectory()
+        let path = (dir as NSString).appendingPathComponent("\(UUID().uuidString).jsonl")
+        let content = """
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Cached value"}]},"timestamp":"2026-05-25T01:00:00.000Z","sessionId":"abc"}
+        """
+        try content.write(toFile: path, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let pid: Int = 9102
+        let db = try SeshctlDatabase.temporary()
+        let session = try db.startSession(tool: .claude, directory: "/tmp/x", pid: pid)
+        try db.updateSession(pid: pid, tool: .claude, transcriptPath: path)
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+        let firstMtime = (try FileManager.default.attributesOfItem(atPath: path))[.modificationDate] as? Date
+        #expect(vm.latestAssistantById[session.id] == "Cached value")
+
+        vm.refresh()
+        let secondMtime = (try FileManager.default.attributesOfItem(atPath: path))[.modificationDate] as? Date
+        // mtime didn't advance between refreshes (no write happened), so the
+        // cache key matched on the second refresh and the published value
+        // remained stable. Companion invalidation test below covers the
+        // re-scan path when mtime does advance.
+        #expect(firstMtime == secondMtime)
+        #expect(vm.latestAssistantById[session.id] == "Cached value")
+    }
+
+    @Test("latestAssistantById re-scans after the transcript file mtime advances")
+    @MainActor
+    func latestAssistantById_cacheInvalidatedOnMtimeChange() throws {
+        let dir = NSTemporaryDirectory()
+        let path = (dir as NSString).appendingPathComponent("\(UUID().uuidString).jsonl")
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let firstContent = """
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"First text"}]},"timestamp":"2026-05-25T01:00:00.000Z","sessionId":"abc"}
+        """
+        try firstContent.write(toFile: path, atomically: true, encoding: .utf8)
+
+        let pid: Int = 9103
+        let db = try SeshctlDatabase.temporary()
+        let session = try db.startSession(tool: .claude, directory: "/tmp/x", pid: pid)
+        try db.updateSession(pid: pid, tool: .claude, transcriptPath: path)
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+        #expect(vm.latestAssistantById[session.id] == "First text")
+
+        // Rewrite with new assistant text and explicitly bump the
+        // mtime to dodge macOS's 1-second mtime granularity (mirrors
+        // the away-summary rewrite test above).
+        let secondContent = """
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Second text"}]},"timestamp":"2026-05-25T01:00:30.000Z","sessionId":"abc"}
+        """
+        try secondContent.write(toFile: path, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(2)],
+            ofItemAtPath: path
+        )
+
+        vm.refresh()
+        #expect(vm.latestAssistantById[session.id] == "Second text")
+    }
+
+    @Test("latestAssistantById drops entries for sessions that leave the live list")
+    @MainActor
+    func latestAssistantById_prunedWhenSessionRemoved() throws {
+        let dir = NSTemporaryDirectory()
+        let pathA = (dir as NSString).appendingPathComponent("\(UUID().uuidString).jsonl")
+        let pathB = (dir as NSString).appendingPathComponent("\(UUID().uuidString).jsonl")
+        let contentA = """
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Alpha text"}]},"timestamp":"2026-05-25T01:00:00.000Z","sessionId":"a"}
+        """
+        let contentB = """
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Beta text"}]},"timestamp":"2026-05-25T01:00:00.000Z","sessionId":"b"}
+        """
+        try contentA.write(toFile: pathA, atomically: true, encoding: .utf8)
+        try contentB.write(toFile: pathB, atomically: true, encoding: .utf8)
+        defer {
+            try? FileManager.default.removeItem(atPath: pathA)
+            try? FileManager.default.removeItem(atPath: pathB)
+        }
+
+        let pidA: Int = 9104
+        let pidB: Int = 9105
+        let db = try SeshctlDatabase.temporary()
+        let sessionA = try db.startSession(tool: .claude, directory: "/tmp/a", pid: pidA)
+        try db.updateSession(pid: pidA, tool: .claude, transcriptPath: pathA)
+        let sessionB = try db.startSession(tool: .claude, directory: "/tmp/b", pid: pidB)
+        try db.updateSession(pid: pidB, tool: .claude, transcriptPath: pathB)
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+        #expect(vm.latestAssistantById[sessionA.id] == "Alpha text")
+        #expect(vm.latestAssistantById[sessionB.id] == "Beta text")
+
+        // End session B then immediately GC it out of the DB so it
+        // drops out of `listSessions`. The next refresh should rebuild
+        // `latestAssistantById` without B's entry and prune the cache
+        // entry for B's transcript path.
+        try db.endSession(pid: pidB, tool: .claude)
+        _ = try db.gc(olderThan: -1)
+
+        vm.refresh()
+        #expect(vm.latestAssistantById[sessionA.id] == "Alpha text")
+        #expect(vm.latestAssistantById[sessionB.id] == nil)
+    }
+
+    @Test("latestAssistantById empty for non-Claude tool")
+    @MainActor
+    func latestAssistantById_skippedForNonClaudeTools() throws {
+        let dir = NSTemporaryDirectory()
+        let path = (dir as NSString).appendingPathComponent("\(UUID().uuidString).jsonl")
+        // Valid Claude-shaped assistant turn — proves the entry is
+        // omitted because of the `.claude`-only guard inside
+        // `cachedLatestAssistant`, not because the scanner couldn't
+        // parse the line.
+        let content = """
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hello world"}]},"timestamp":"2026-05-25T01:00:00.000Z","sessionId":"abc"}
+        """
+        try content.write(toFile: path, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let pid: Int = 9106
+        let db = try SeshctlDatabase.temporary()
+        let session = try db.startSession(tool: .codex, directory: "/tmp/x", pid: pid)
+        try db.updateSession(pid: pid, tool: .codex, transcriptPath: path)
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+
+        #expect(vm.latestAssistantById[session.id] == nil)
+    }
 }

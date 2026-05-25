@@ -91,7 +91,7 @@ struct SessionTreeView: View {
                 isBridged: viewModel.bridgedLocalIds.contains(session.id),
                 showCloudAffordances: connectionStore.hasClaudeConnection,
                 showAgentBadge: showAgentBadge,
-                awaySummary: viewModel.awaySummariesById[session.id],
+                awaySummary: viewModel.awaySummariesById[session.id] ?? viewModel.latestAssistantById[session.id],
                 // Tree view has no time-based section headers, so the age
                 // slot does the day-context work itself via relative-day
                 // shorthand ("1d") for yesterday.
