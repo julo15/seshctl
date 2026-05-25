@@ -197,11 +197,6 @@ public final class ClaudeCodeConnectionStore: ObservableObject {
     /// Safe to call on every `fetchNow()`: the cache-hit and in-flight
     /// guards make redundant calls cheap.
     private func dispatchAwaySummaryFetchIfNeeded(for session: RemoteClaudeCodeSession) {
-        // Bridged sessions are hidden by BridgeMatcher in favor of their local twin
-        // (which already gets its own away_summary via the local JSONL transcript).
-        // Skip the events fetch — the result would never reach a visible row.
-        guard session.environmentKind != "bridge" else { return }
-
         let id = session.id
         let pinnedLastEventAt = session.lastEventAt
 

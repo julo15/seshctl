@@ -56,8 +56,7 @@ private actor StubFetcher: RemoteClaudeCodeFetching {
 
 private func makeRemoteSession(
     id: String = "cse_test_\(UUID().uuidString)",
-    lastEventAt: Date = Date(),
-    environmentKind: String = ""
+    lastEventAt: Date = Date()
 ) -> RemoteClaudeCodeSession {
     RemoteClaudeCodeSession(
         id: id,
@@ -71,7 +70,7 @@ private func makeRemoteSession(
         lastEventAt: lastEventAt,
         createdAt: Date(),
         unread: false,
-        environmentKind: environmentKind
+        environmentKind: ""
     )
 }
 
@@ -569,38 +568,6 @@ struct ClaudeCodeConnectionStoreAwaySummaryTests {
         let calls = await fetcher.assistantTextCallCount(for: session1.id)
         #expect(calls == 2)
         #expect(store.remoteAwaySummariesById[session1.id] == "after-reconnect")
-    }
-
-    @Test("skipsEventsFetchForBridgedSessions")
-    func skipsEventsFetchForBridgedSessions() async throws {
-        // BridgeMatcher hides bridged remotes in favor of their local twin, so
-        // fetching the away_summary for a bridged session would just populate
-        // an entry that no visible row ever consults. Guarding at dispatch
-        // avoids the wasted HTTP round-trip — and the test verifies that the
-        // bridged row never triggers a call while a sibling non-bridge row does.
-        let db = try SeshctlDatabase.temporary()
-        let bridged = makeRemoteSession(id: "cse_bridged_skip", environmentKind: "bridge")
-        let pureRemote = makeRemoteSession(id: "cse_pure_remote", environmentKind: "")
-        let fetcher = StubFetcher(result: .success([bridged, pureRemote]))
-        await fetcher.setAssistantText(.success("real"), forSessionID: pureRemote.id)
-        // Intentionally leave bridged's stub entry unset — if dispatch leaks
-        // through, the call count below will detect it regardless of payload.
-
-        let store = ClaudeCodeConnectionStore(
-            database: db,
-            fetcher: fetcher,
-            initialState: .connected(lastFetchAt: nil)
-        )
-
-        await store.fetchNow()
-        await store.awaitPendingAwaySummaryFetches()
-
-        let bridgedCalls = await fetcher.assistantTextCallCount(for: bridged.id)
-        let pureCalls = await fetcher.assistantTextCallCount(for: pureRemote.id)
-        #expect(bridgedCalls == 0)
-        #expect(pureCalls == 1)
-        #expect(store.remoteAwaySummariesById[bridged.id] == nil)
-        #expect(store.remoteAwaySummariesById[pureRemote.id] == "real")
     }
 }
 
