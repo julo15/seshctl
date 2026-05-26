@@ -3,68 +3,108 @@ import Foundation
 /// Parses Claude Code JSONL transcripts into conversation turns.
 public enum TranscriptParser {
 
-    /// Compute the transcript file URL for a session.
-    /// If the session has a stored transcriptPath, use it directly.
-    /// Otherwise falls back to Claude's computed path from conversationId.
-    public static func transcriptURL(for session: Session) -> URL? {
-        // If a transcript path is stored directly, use it
-        if let path = session.transcriptPath {
-            return URL(fileURLWithPath: path)
-        }
-        // Fall back to Claude's computed path
-        guard let convId = session.conversationId else { return nil }
-        return transcriptURL(conversationId: convId, directory: session.directory)
-    }
+    /// `~/.claude/projects` — the root under which Claude Code writes per-cwd
+    /// transcript dirs. Default for all path-resolution functions below.
+    /// Overridable for tests.
+    public static let defaultProjectsRoot: URL = FileManager.default
+        .homeDirectoryForCurrentUser
+        .appendingPathComponent(".claude/projects")
 
     /// Compute the transcript file URL from raw fields (no Session required).
     public static func transcriptURL(conversationId: String, directory: String) -> URL {
-        let encoded = encodePath(directory)
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        return home.appendingPathComponent(".claude/projects/\(encoded)/\(conversationId).jsonl")
+        transcriptURL(conversationId: conversationId, directory: directory, projectsRoot: defaultProjectsRoot)
     }
 
-    /// Encode a directory path the way Claude Code does:
-    /// `/Users/foo/bar` → `-Users-foo-bar`
-    public static func encodePath(_ path: String) -> String {
-        path.replacingOccurrences(of: "/", with: "-")
+    /// Same as above but with an overridable `projectsRoot` for tests and
+    /// resolver internals.
+    public static func transcriptURL(conversationId: String, directory: String, projectsRoot: URL) -> URL {
+        projectsRoot.appendingPathComponent("\(encodePath(directory))/\(conversationId).jsonl")
     }
+
+    /// Encode a directory path the way Claude Code does. Empirically Claude
+    /// replaces any character outside `[A-Za-z0-9_-]` with `-`, so e.g.
+    /// `/Users/julianlo/Documents/me/seshctl/.claude/worktrees/julo+row` →
+    /// `-Users-julianlo-Documents-me-seshctl--claude-worktrees-julo-row`. The
+    /// original `/` → `-` transform missed `.` (the `.claude` segment) and
+    /// `+` (worktree branch names), which is what made the resolver's leg-B
+    /// probe miss the worktree case before this was widened.
+    public static func encodePath(_ path: String) -> String {
+        var encoded = ""
+        encoded.reserveCapacity(path.count)
+        for scalar in path.unicodeScalars {
+            if Self.unreservedPathScalars.contains(scalar) {
+                encoded.unicodeScalars.append(scalar)
+            } else {
+                encoded.append("-")
+            }
+        }
+        return encoded
+    }
+
+    private static let unreservedPathScalars: CharacterSet = {
+        var set = CharacterSet()
+        set.insert(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        set.insert(charactersIn: "abcdefghijklmnopqrstuvwxyz")
+        set.insert(charactersIn: "0123456789")
+        set.insert(charactersIn: "_-")
+        return set
+    }()
 
     /// Resolve a session's transcript to a file that actually exists on disk.
     ///
     /// Three-step probe:
     /// 1. `session.transcriptPath` if it exists (the value the Claude hook
     ///    forwarded most recently),
-    /// 2. else the computed `~/.claude/projects/<encoded dir>/<convId>.jsonl`,
-    /// 3. else any `~/.claude/projects/<X>/<convId>.jsonl` that exists.
+    /// 2. else the computed `<projectsRoot>/<encoded dir>/<convId>.jsonl`,
+    /// 3. else any `<projectsRoot>/<X>/<convId>.jsonl` that exists.
     ///
-    /// Why the third leg exists: Claude Code names the transcript file from
-    /// the cwd at session start and never moves it, but the hook payload's
-    /// `transcript_path` is re-derived from the *current* cwd on every event
-    /// — and Claude's path encoding additionally collapses `.` and `+` to
-    /// `-`, neither of which `encodePath` reproduces. So whenever the user
-    /// `cd`s elsewhere mid-session (e.g. into `.claude/worktrees/<name>`),
-    /// the stored and computed paths both point at directories that don't
-    /// exist. Conversation ids are UUIDs, so the filename is unique across
-    /// the projects tree — the first hit is the right file.
-    public static func resolveExistingTranscript(for session: Session) -> URL? {
-        let fm = FileManager.default
-        if let path = session.transcriptPath, fm.fileExists(atPath: path) {
+    /// Leg 3 exists because Claude Code names the transcript file from the
+    /// cwd at session start and never moves it, but the hook payload's
+    /// `transcript_path` is re-derived from the *current* cwd on every
+    /// event. So whenever the user `cd`s elsewhere mid-session (e.g. into
+    /// `.claude/worktrees/<name>`), the stored path points at a directory
+    /// that doesn't exist. Even with the widened `encodePath` (which catches
+    /// most `cd` cases via leg 2), the glob is the belt-and-suspenders for
+    /// any future encoding-rule drift on Claude's side. Conversation ids
+    /// are UUIDs, so a single filename matches at most one path under
+    /// `projectsRoot`.
+    public static func resolveExistingTranscript(
+        for session: Session,
+        projectsRoot: URL = defaultProjectsRoot
+    ) -> URL? {
+        if let path = session.transcriptPath, FileManager.default.fileExists(atPath: path) {
             return URL(fileURLWithPath: path)
         }
         guard let convId = session.conversationId else { return nil }
-        let computed = transcriptURL(conversationId: convId, directory: session.directory)
+        return resolveExistingTranscript(
+            conversationId: convId,
+            directory: session.directory,
+            projectsRoot: projectsRoot
+        )
+    }
+
+    /// Resolve a transcript from raw conversation-id + directory fields.
+    /// Used by the recall-result branch in the detail view (no `Session`
+    /// available) and by the `for session:` overload after leg 1. Runs
+    /// legs 2 and 3 only — there's no stored `transcriptPath` to consult.
+    public static func resolveExistingTranscript(
+        conversationId: String,
+        directory: String,
+        projectsRoot: URL = defaultProjectsRoot
+    ) -> URL? {
+        let fm = FileManager.default
+        let computed = transcriptURL(conversationId: conversationId, directory: directory, projectsRoot: projectsRoot)
         if fm.fileExists(atPath: computed.path) {
             return computed
         }
-        return findTranscript(conversationId: convId)
+        return findTranscript(conversationId: conversationId, in: projectsRoot)
     }
 
     /// Walk `projectsRoot` one level deep looking for `<conversationId>.jsonl`.
     /// The `projectsRoot` parameter is overridable for testing only.
     public static func findTranscript(
         conversationId: String,
-        in projectsRoot: URL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude/projects")
+        in projectsRoot: URL = defaultProjectsRoot
     ) -> URL? {
         let fm = FileManager.default
         let filename = "\(conversationId).jsonl"
