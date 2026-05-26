@@ -13,9 +13,11 @@ final class FloatingPanel: NSPanel {
     static let borderWidth: CGFloat = 1
     static let borderAlpha: CGFloat = 0.15
     /// Black-tint alpha layered between the blur and the SwiftUI content
-    /// to push the panel closer to Spotlight's near-black-glass look in
-    /// dark mode (the bare `.underWindowBackground` material on its own
-    /// reads as too gray). Tune freely; 0.0 disables the tint.
+    /// to push the panel closer to Spotlight's near-black-glass look (the
+    /// bare `.underWindowBackground` material on its own reads as too
+    /// gray). The panel forces `.darkAqua` appearance so this tint is
+    /// always evaluated against a dark material. Tune freely; 0.0
+    /// disables the tint.
     static let darkTintAlpha: CGFloat = 0.35
 
     var onKeyDown: ((UInt16, String?, NSEvent.ModifierFlags) -> Void)?
@@ -43,7 +45,11 @@ final class FloatingPanel: NSPanel {
         isReleasedWhenClosed = false
         animationBehavior = .utilityWindow
 
-        // Visual style — Spotlight-like translucent glass
+        // Visual style — Spotlight-like translucent glass. Pin the panel
+        // to `.darkAqua` regardless of system appearance so the dark-glass
+        // chrome stays consistent in light mode too (Spotlight does the
+        // same — it's always dark-glass).
+        appearance = NSAppearance(named: .darkAqua)
         backgroundColor = .clear
         isOpaque = false
         hasShadow = true
@@ -55,8 +61,10 @@ final class FloatingPanel: NSPanel {
         // masksToBounds clips everything to the rounded rect, and the window
         // shadow follows the resulting alpha mask.
         let effect = NSVisualEffectView(frame: NSRect(origin: .zero, size: FloatingPanel.panelSize))
-        // `.underWindowBackground` is the densest vibrancy material; pairs
-        // with the black tint below to land at Spotlight-grade darkness.
+        // `.underWindowBackground` is among the densest vibrancy
+        // materials; paired with the black tint below it lands at
+        // Spotlight-grade darkness. Off-label for in-window content but
+        // empirically the closest visual match.
         effect.material = .underWindowBackground
         effect.blendingMode = .behindWindow
         effect.state = .active

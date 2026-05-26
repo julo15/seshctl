@@ -10,15 +10,44 @@ final class FloatingPanelTests: XCTestCase {
         XCTAssertEqual(panel.backgroundColor, .clear, "Panel backgroundColor should be .clear.")
     }
 
-    func test_contentViewIsVisualEffectWithHUDMaterial() {
+    func test_contentViewIsVisualEffectWithUnderWindowMaterial() {
         let panel = FloatingPanel(rootView: EmptyView())
         guard let effect = panel.contentView as? NSVisualEffectView else {
             XCTFail("Expected contentView to be an NSVisualEffectView, got \(String(describing: panel.contentView)).")
             return
         }
-        XCTAssertEqual(effect.material, .hudWindow, "Visual effect material should be .hudWindow.")
+        XCTAssertEqual(effect.material, .underWindowBackground, "Visual effect material should be .underWindowBackground.")
         XCTAssertEqual(effect.blendingMode, .behindWindow, "Visual effect blending mode should be .behindWindow.")
         XCTAssertEqual(effect.state, .active, "Visual effect state should be .active.")
+    }
+
+    func test_panelForcesDarkAppearance() {
+        let panel = FloatingPanel(rootView: EmptyView())
+        XCTAssertEqual(panel.appearance?.name, .darkAqua, "Panel should pin appearance to .darkAqua so the dark-glass chrome stays consistent in light mode.")
+    }
+
+    func test_darkTintOverlaySitsBetweenBlurAndHostingView() {
+        let panel = FloatingPanel(rootView: EmptyView())
+        guard let effect = panel.contentView as? NSVisualEffectView else {
+            XCTFail("Expected contentView to be an NSVisualEffectView.")
+            return
+        }
+        XCTAssertEqual(effect.subviews.count, 2, "Effect view should have two subviews: the dark tint behind and the hosting view in front.")
+        guard let tint = effect.subviews.first else {
+            XCTFail("Expected effect view's first subview to be the tint overlay.")
+            return
+        }
+        // The tint is a plain NSView, not an NSHostingView.
+        let tintTypeName = String(describing: type(of: tint))
+        XCTAssertFalse(tintTypeName.hasPrefix("NSHostingView<"), "First subview should be the plain NSView tint, not the hosting view.")
+        XCTAssertTrue(tint.wantsLayer, "Tint subview should be layer-backed.")
+        guard let layer = tint.layer, let cgColor = layer.backgroundColor else {
+            XCTFail("Tint subview should have a backing layer with a background color.")
+            return
+        }
+        XCTAssertEqual(cgColor.alpha, FloatingPanel.darkTintAlpha, accuracy: 0.001, "Tint background alpha should match darkTintAlpha.")
+        XCTAssertTrue(tint.autoresizingMask.contains(.width), "Tint autoresizing mask should contain .width.")
+        XCTAssertTrue(tint.autoresizingMask.contains(.height), "Tint autoresizing mask should contain .height.")
     }
 
     func test_contentViewHasRoundedCornersAndBorder() {
@@ -38,21 +67,22 @@ final class FloatingPanelTests: XCTestCase {
         XCTAssertNotNil(layer.borderColor, "Border color should be set.")
     }
 
-    func test_hostingViewIsPinnedSubviewOfEffectView() {
+    func test_hostingViewIsTopmostSubviewOfEffectView() {
         let panel = FloatingPanel(rootView: EmptyView())
         guard let effect = panel.contentView as? NSVisualEffectView else {
             XCTFail("Expected contentView to be an NSVisualEffectView.")
             return
         }
-        XCTAssertEqual(effect.subviews.count, 1, "Effect view should have exactly one subview (the hosting view).")
-        guard let hostingView = effect.subviews.first else {
-            XCTFail("Expected effect view to have a subview.")
+        // Hosting view is the LAST subview so it renders on top of the
+        // dark-tint overlay added in front of the blur.
+        guard let hostingView = effect.subviews.last else {
+            XCTFail("Expected effect view to have at least one subview.")
             return
         }
         let typeName = String(describing: type(of: hostingView))
         XCTAssertTrue(
             typeName.hasPrefix("NSHostingView<"),
-            "Expected subview to be an NSHostingView, got type \(typeName)."
+            "Expected last subview to be an NSHostingView (topmost in z-order), got type \(typeName)."
         )
         XCTAssertTrue(
             hostingView.autoresizingMask.contains(.width),
