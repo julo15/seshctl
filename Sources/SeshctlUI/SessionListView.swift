@@ -186,7 +186,7 @@ public struct SessionListView: View {
 
                 ScrollViewReader { proxy in
                     ScrollView {
-                        VStack(spacing: 4) {
+                        LazyVStack(spacing: 4) {
                             ForEach(Array(ordered.enumerated()), id: \.element.id) { index, row in
                                 if index < activeCount {
                                     let bucket = activeBuckets[index]
@@ -392,7 +392,7 @@ public struct SessionListView: View {
                 isBridged: viewModel.bridgedLocalIds.contains(session.id),
                 showCloudAffordances: connectionStore.hasClaudeConnection,
                 showAgentBadge: showAgentBadge,
-                awaySummary: viewModel.awaySummariesById[session.id],
+                awaySummary: viewModel.awaySummariesById[session.id] ?? viewModel.latestAssistantById[session.id],
                 // List view has a Yesterday section header, so the per-row
                 // slot shows the more specific clock time for yesterday rows
                 // instead of repeating the day.

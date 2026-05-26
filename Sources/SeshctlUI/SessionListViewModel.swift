@@ -44,6 +44,16 @@ public final class SessionListViewModel: ObservableObject {
     /// `refresh()` so the @Published mutations from refresh land in the same
     /// body-recomputation pass with the fresh timestamp visible.
     @Published public private(set) var lastPanelShownAt: Date = .distantPast
+    /// Latest in-progress assistant text per local Claude session, keyed by
+    /// `session.id`. Sessions without a current assistant-text turn are
+    /// absent (the row falls through to its existing preview chain).
+    /// Computed in `refresh()` via `TranscriptLatestAssistantScanner` with
+    /// `transcriptLatestAssistantCache` providing mtime-based reuse so
+    /// re-reads of unchanged transcripts are skipped on the 2-second refresh
+    /// cadence. Surfaced to the row recap via a consumer-side collapse
+    /// (`awaySummariesById[id] ?? latestAssistantById[id]`) into the existing
+    /// `previewContent(awaySummary:)` slot — no new display branch.
+    @Published public private(set) var latestAssistantById: [String: String] = [:]
     /// Per-transcript cache: `path → (mtime, cseId)`. Lets `refresh()` skip
     /// re-reading a live Claude transcript when its file mtime hasn't
     /// advanced. Bounded by `sessions.count` on each refresh (entries for
@@ -53,6 +63,11 @@ public final class SessionListViewModel: ObservableObject {
     /// `transcriptBridgeCache` for Claude Code recaps. Pruned by
     /// `pruneTranscriptAwaySummaryCache(keepingPaths:)` on each refresh.
     private var transcriptAwaySummaryCache: [String: (mtime: Date, summary: String?)] = [:]
+    /// Per-transcript cache: `path → (mtime, latestAssistantText)`. Mirrors
+    /// `transcriptAwaySummaryCache` for the live in-progress assistant text.
+    /// Pruned by `pruneTranscriptLatestAssistantCache(keepingPaths:)` on each
+    /// refresh.
+    private var transcriptLatestAssistantCache: [String: (mtime: Date, text: String?)] = [:]
     @Published public private(set) var recallResults: [RecallResult] = []
     @Published public private(set) var isRecallSearching: Bool = false
     @Published public private(set) var recallIndexingDone: Int?
@@ -266,6 +281,14 @@ public final class SessionListViewModel: ObservableObject {
             awaySummariesById = summaries
             let livePaths = sessions.compactMap(\.transcriptPath)
             pruneTranscriptAwaySummaryCache(keepingPaths: livePaths)
+            var latest: [String: String] = [:]
+            for session in sessions {
+                if let text = cachedLatestAssistant(for: session) {
+                    latest[session.id] = text
+                }
+            }
+            latestAssistantById = latest
+            pruneTranscriptLatestAssistantCache(keepingPaths: livePaths)
             pruneTranscriptBridgeCache(keepingPaths: livePaths)
             // Re-pin `selectedIndex` to the previously-selected row's new
             // position. If the row vanished (closed + filtered out of
@@ -780,11 +803,37 @@ public final class SessionListViewModel: ObservableObject {
         return summary
     }
 
+    /// Scan `session.transcriptPath` for the latest in-progress assistant
+    /// text, re-using a previous result when the transcript's mtime hasn't
+    /// advanced. Mirrors `cachedAwaySummary(for:)`. Non-Claude tools return
+    /// nil without a filesystem hit — only Claude Code transcripts are
+    /// shaped for `TranscriptLatestAssistantScanner`.
+    fileprivate func cachedLatestAssistant(for session: Session) -> String? {
+        guard session.tool == .claude else { return nil }
+        guard let path = session.transcriptPath else { return nil }
+        let mtime = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+        if let mtime, let cached = transcriptLatestAssistantCache[path], cached.mtime == mtime {
+            return cached.text
+        }
+        let text = TranscriptLatestAssistantScanner.extractLatestAssistantText(transcriptPath: path)
+        if let mtime {
+            transcriptLatestAssistantCache[path] = (mtime, text)
+        }
+        return text
+    }
+
     /// Drop cache entries for transcripts whose owning session is no longer
     /// in the live list. Mirrors `pruneTranscriptBridgeCache`.
     fileprivate func pruneTranscriptAwaySummaryCache(keepingPaths paths: [String]) {
         let live = Set(paths)
         transcriptAwaySummaryCache = transcriptAwaySummaryCache.filter { live.contains($0.key) }
+    }
+
+    /// Drop cache entries for transcripts whose owning session is no longer
+    /// in the live list. Mirrors `pruneTranscriptAwaySummaryCache`.
+    fileprivate func pruneTranscriptLatestAssistantCache(keepingPaths paths: [String]) {
+        let live = Set(paths)
+        transcriptLatestAssistantCache = transcriptLatestAssistantCache.filter { live.contains($0.key) }
     }
 
     public func markSessionRead(_ session: Session) {
