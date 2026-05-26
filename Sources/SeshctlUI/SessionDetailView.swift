@@ -20,7 +20,7 @@ public struct SessionDetailView: View {
                         .foregroundStyle(.tertiary)
                     Text(dirLabel)
                         .font(.system(.title2, design: .monospaced, weight: .medium))
-                        .foregroundStyle(Color.cyan.opacity(0.7))
+                        .foregroundStyle(.secondary)
                 }
                 if let branch = viewModel.gitBranch {
                     Text("·")
