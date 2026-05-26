@@ -279,7 +279,12 @@ public final class SessionListViewModel: ObservableObject {
                 }
             }
             awaySummariesById = summaries
-            let livePaths = sessions.compactMap(\.transcriptPath)
+            // Prune by resolved path — the cache helpers above key entries on
+            // the resolved transcript file, which may differ from
+            // `session.transcriptPath` when the session has cd'd elsewhere
+            // (e.g. into a worktree) mid-session. Using `transcriptPath`
+            // directly would evict live entries on every refresh.
+            let livePaths = sessions.compactMap { TranscriptParser.resolveExistingTranscript(for: $0)?.path }
             pruneTranscriptAwaySummaryCache(keepingPaths: livePaths)
             var latest: [String: String] = [:]
             for session in sessions {
@@ -758,14 +763,17 @@ public final class SessionListViewModel: ObservableObject {
         lastFocusedAt = Date()
     }
 
-    /// Scan `session.transcriptPath` for a `bridge_status` cse_id, re-using a
+    /// Scan the session's transcript for a `bridge_status` cse_id, re-using a
     /// previous result when the transcript's mtime hasn't advanced. Non-Claude
     /// tools return nil without a filesystem hit — Codex/Gemini transcripts
     /// can't contain a Claude bridge event, and skipping them avoids multi-MB
-    /// reads on every 2-second refresh.
+    /// reads on every 2-second refresh. The transcript is resolved via
+    /// `TranscriptParser.resolveExistingTranscript(for:)` so sessions that
+    /// `cd`'d mid-session (the row-recap-broken-after-worktree-entry case)
+    /// still find their file.
     fileprivate func cachedBridgedRemoteId(for session: Session) -> String? {
         guard session.tool == .claude else { return nil }
-        guard let path = session.transcriptPath else { return nil }
+        guard let path = TranscriptParser.resolveExistingTranscript(for: session)?.path else { return nil }
         let mtime = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
         if let mtime, let cached = transcriptBridgeCache[path], cached.mtime == mtime {
             return cached.cseId
@@ -784,14 +792,14 @@ public final class SessionListViewModel: ObservableObject {
         transcriptBridgeCache = transcriptBridgeCache.filter { live.contains($0.key) }
     }
 
-    /// Scan `session.transcriptPath` for the latest `away_summary` content,
+    /// Scan the session's transcript for the latest `away_summary` content,
     /// re-using a previous result when the transcript's mtime hasn't
     /// advanced. Mirrors `cachedBridgedRemoteId(for:)`. Non-Claude tools
     /// return nil without a filesystem hit — only Claude Code writes
     /// `away_summary` records.
     fileprivate func cachedAwaySummary(for session: Session) -> String? {
         guard session.tool == .claude else { return nil }
-        guard let path = session.transcriptPath else { return nil }
+        guard let path = TranscriptParser.resolveExistingTranscript(for: session)?.path else { return nil }
         let mtime = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
         if let mtime, let cached = transcriptAwaySummaryCache[path], cached.mtime == mtime {
             return cached.summary
@@ -803,14 +811,17 @@ public final class SessionListViewModel: ObservableObject {
         return summary
     }
 
-    /// Scan `session.transcriptPath` for the latest in-progress assistant
+    /// Scan the session's transcript for the latest in-progress assistant
     /// text, re-using a previous result when the transcript's mtime hasn't
     /// advanced. Mirrors `cachedAwaySummary(for:)`. Non-Claude tools return
     /// nil without a filesystem hit — only Claude Code transcripts are
-    /// shaped for `TranscriptLatestAssistantScanner`.
+    /// shaped for `TranscriptLatestAssistantScanner`. Path resolution goes
+    /// through `TranscriptParser.resolveExistingTranscript(for:)` so
+    /// mid-session cwd changes (e.g. into a worktree) don't strand the
+    /// recap on a non-existent path.
     fileprivate func cachedLatestAssistant(for session: Session) -> String? {
         guard session.tool == .claude else { return nil }
-        guard let path = session.transcriptPath else { return nil }
+        guard let path = TranscriptParser.resolveExistingTranscript(for: session)?.path else { return nil }
         let mtime = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
         if let mtime, let cached = transcriptLatestAssistantCache[path], cached.mtime == mtime {
             return cached.text

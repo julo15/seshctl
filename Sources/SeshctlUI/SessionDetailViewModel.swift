@@ -95,24 +95,27 @@ public final class SessionDetailViewModel: ObservableObject {
         let tool: SessionTool
 
         if let session {
-            guard let sessionURL = TranscriptParser.transcriptURL(for: session) else {
+            guard let sessionURL = TranscriptParser.resolveExistingTranscript(for: session) else {
                 error = "No transcript available"
                 return
             }
             url = sessionURL
             tool = session.tool
         } else if let recallResult {
-            url = TranscriptParser.transcriptURL(
+            let computed = TranscriptParser.transcriptURL(
                 conversationId: recallResult.sessionId,
                 directory: recallResult.project
             )
+            if FileManager.default.fileExists(atPath: computed.path) {
+                url = computed
+            } else if let found = TranscriptParser.findTranscript(conversationId: recallResult.sessionId) {
+                url = found
+            } else {
+                error = "No transcript available"
+                return
+            }
             tool = SessionTool(rawValue: recallResult.agent) ?? .claude
         } else {
-            error = "No transcript available"
-            return
-        }
-
-        guard FileManager.default.fileExists(atPath: url.path) else {
             error = "No transcript available"
             return
         }

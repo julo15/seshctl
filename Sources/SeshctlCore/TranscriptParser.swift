@@ -29,6 +29,59 @@ public enum TranscriptParser {
         path.replacingOccurrences(of: "/", with: "-")
     }
 
+    /// Resolve a session's transcript to a file that actually exists on disk.
+    ///
+    /// Three-step probe:
+    /// 1. `session.transcriptPath` if it exists (the value the Claude hook
+    ///    forwarded most recently),
+    /// 2. else the computed `~/.claude/projects/<encoded dir>/<convId>.jsonl`,
+    /// 3. else any `~/.claude/projects/<X>/<convId>.jsonl` that exists.
+    ///
+    /// Why the third leg exists: Claude Code names the transcript file from
+    /// the cwd at session start and never moves it, but the hook payload's
+    /// `transcript_path` is re-derived from the *current* cwd on every event
+    /// — and Claude's path encoding additionally collapses `.` and `+` to
+    /// `-`, neither of which `encodePath` reproduces. So whenever the user
+    /// `cd`s elsewhere mid-session (e.g. into `.claude/worktrees/<name>`),
+    /// the stored and computed paths both point at directories that don't
+    /// exist. Conversation ids are UUIDs, so the filename is unique across
+    /// the projects tree — the first hit is the right file.
+    public static func resolveExistingTranscript(for session: Session) -> URL? {
+        let fm = FileManager.default
+        if let path = session.transcriptPath, fm.fileExists(atPath: path) {
+            return URL(fileURLWithPath: path)
+        }
+        guard let convId = session.conversationId else { return nil }
+        let computed = transcriptURL(conversationId: convId, directory: session.directory)
+        if fm.fileExists(atPath: computed.path) {
+            return computed
+        }
+        return findTranscript(conversationId: convId)
+    }
+
+    /// Walk `projectsRoot` one level deep looking for `<conversationId>.jsonl`.
+    /// The `projectsRoot` parameter is overridable for testing only.
+    public static func findTranscript(
+        conversationId: String,
+        in projectsRoot: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/projects")
+    ) -> URL? {
+        let fm = FileManager.default
+        let filename = "\(conversationId).jsonl"
+        guard let entries = try? fm.contentsOfDirectory(
+            at: projectsRoot,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else { return nil }
+        for entry in entries {
+            let candidate = entry.appendingPathComponent(filename)
+            if fm.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+        return nil
+    }
+
     /// Parse a JSONL transcript file into conversation turns.
     public static func parse(url: URL) throws -> [ConversationTurn] {
         let data = try Data(contentsOf: url)

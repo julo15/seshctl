@@ -382,6 +382,103 @@ struct TranscriptParserTests {
         #expect(url == expected)
     }
 
+    // MARK: - resolveExistingTranscript
+
+    /// Build a Session with explicit `transcriptPath` so the existence-probe
+    /// chain in `resolveExistingTranscript` can be exercised.
+    private func makeSessionWithTranscriptPath(
+        conversationId: String?,
+        directory: String,
+        transcriptPath: String?
+    ) -> Session {
+        Session(
+            id: "test-id",
+            conversationId: conversationId,
+            tool: .claude,
+            directory: directory,
+            launchDirectory: nil,
+            hostWorkspaceFolder: nil,
+            lastAsk: nil,
+            lastReply: nil,
+            status: .idle,
+            pid: 1234,
+            hostAppBundleId: nil,
+            hostAppName: nil,
+            windowId: nil,
+            transcriptPath: transcriptPath,
+            startedAt: Date(),
+            updatedAt: Date()
+        )
+    }
+
+    @Test("findTranscript locates jsonl by conversation id across project dirs")
+    func findTranscriptLocatesByConversationId() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("transcript-find-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+
+        let projectDir = root.appendingPathComponent("-Users-foo-some-other-place")
+        try fm.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        let convId = UUID().uuidString
+        let file = projectDir.appendingPathComponent("\(convId).jsonl")
+        try Data("{}".utf8).write(to: file)
+
+        // `contentsOfDirectory(at:)` canonicalizes /var → /private/var on
+        // macOS, so compare standardized URLs rather than raw paths.
+        let found = TranscriptParser.findTranscript(conversationId: convId, in: root)
+        #expect(found?.standardizedFileURL == file.standardizedFileURL)
+    }
+
+    @Test("findTranscript returns nil when projects root is absent")
+    func findTranscriptMissingRoot() {
+        let nonexistent = FileManager.default.temporaryDirectory
+            .appendingPathComponent("does-not-exist-\(UUID().uuidString)")
+        #expect(TranscriptParser.findTranscript(conversationId: "anything", in: nonexistent) == nil)
+    }
+
+    @Test("findTranscript returns nil when no matching jsonl exists")
+    func findTranscriptNoMatch() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("transcript-find-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+
+        let projectDir = root.appendingPathComponent("-Users-foo-bar")
+        try fm.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        // A jsonl file for a *different* conversation id.
+        let otherFile = projectDir.appendingPathComponent("\(UUID().uuidString).jsonl")
+        try Data("{}".utf8).write(to: otherFile)
+
+        #expect(TranscriptParser.findTranscript(conversationId: UUID().uuidString, in: root) == nil)
+    }
+
+    @Test("resolveExistingTranscript prefers stored transcriptPath when it exists")
+    func resolveUsesStoredPath() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("transcript-resolve-\(UUID().uuidString)")
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+
+        let stored = dir.appendingPathComponent("stored.jsonl")
+        try Data("{}".utf8).write(to: stored)
+
+        let session = makeSessionWithTranscriptPath(
+            conversationId: "abc-123",
+            directory: "/Users/foo/bar",
+            transcriptPath: stored.path
+        )
+        #expect(TranscriptParser.resolveExistingTranscript(for: session)?.path == stored.path)
+    }
+
+    @Test("resolveExistingTranscript returns nil when session has no conversation id and stored path is missing")
+    func resolveReturnsNilWhenStoredMissingAndNoConvId() {
+        let session = makeSessionWithTranscriptPath(
+            conversationId: nil,
+            directory: "/Users/foo/bar",
+            transcriptPath: "/does/not/exist.jsonl"
+        )
+        #expect(TranscriptParser.resolveExistingTranscript(for: session) == nil)
+    }
+
     // MARK: - ConversationTurn.id
 
     @Test("Same timestamp different text produces different IDs")
