@@ -93,6 +93,21 @@ struct TranscriptLatestAssistantScannerTests {
         #expect(result == nil)
     }
 
+    @Test("tool_result user event then next assistant text — returns the new text")
+    func surfacesNextAssistantTextAfterToolResult() {
+        // Pins the documented user-boundary policy on the common Bash flow:
+        // the tool_result user event clears pendingText, and the subsequent
+        // assistant text event repopulates it.
+        let transcript = """
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Reading the file..."}]}}
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"cat foo"}}]}}
+        {"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"x","content":"file contents"}]}}
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Found the answer."}]}}
+        """
+        let result = TranscriptLatestAssistantScanner.extractLatestAssistantText(transcript: transcript)
+        #expect(result == "Found the answer.")
+    }
+
     @Test("system/away_summary after assistant text does NOT clear — still returns assistant text")
     func returnsLatestAssistantWhenAwaySummaryFollowsIt() {
         let transcript = """
