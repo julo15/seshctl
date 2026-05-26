@@ -286,7 +286,7 @@ public struct RemoteClaudeCodeRowView: View {
                 }
                 Text(branch)
                     .font(.system(size: SenderColumnLayout.subtitleSize(isUnread: isUnread, stacked: stacked), design: .monospaced))
-                    .foregroundStyle(branchColor(for: repo))
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
@@ -295,19 +295,11 @@ public struct RemoteClaudeCodeRowView: View {
         }
     }
 
-    /// Branch label color. Remote rows have no dir-label slot so the
-    /// branch always picks up the repo accent when coloring is on; when
-    /// off, the historic `.secondary` treatment.
-    private func branchColor(for repoName: String?) -> Color {
-        if repoAccentBarEnabled, let color = repoAccentColor(for: repoName) {
-            return color
-        }
-        return .secondary
-    }
-
-    /// Sender (repo name) color. Mirrors `branchColor(for:)` but falls
-    /// back to `.primary` instead of `.secondary` so the sender keeps its
-    /// row-heading treatment when per-repo coloring is off.
+    /// Sender (repo name) color. When per-repo color coding is on, picks
+    /// up the repo accent so rows from the same repo cluster visually;
+    /// otherwise falls back to `.primary` so the sender keeps its
+    /// row-heading treatment. The branch slot stays `.secondary` either
+    /// way — only the repo-name field carries the accent.
     private func senderColor(for repoName: String?) -> Color {
         if repoAccentBarEnabled, let color = repoAccentColor(for: repoName) {
             return color

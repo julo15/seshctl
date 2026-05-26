@@ -62,8 +62,11 @@ public final class SessionDetailViewModel: ObservableObject {
         session?.gitBranch
     }
 
-    /// Git repo name for this session, if any — used by the header to tint
-    /// the worktree label with the repo's accent color.
+    /// Git repo name for this session, if any. No production caller after
+    /// the detail-header repo-accent change — kept as a passthrough so
+    /// `SessionDetailViewModelTests` can assert on it and so future header
+    /// surfaces (tooltips, analytics) can wire in without re-deriving it
+    /// from `session?.gitRepoName`.
     public var gitRepoName: String? {
         session?.gitRepoName
     }

@@ -12,6 +12,13 @@ final class FloatingPanel: NSPanel {
     static let cornerRadius: CGFloat = 20
     static let borderWidth: CGFloat = 1
     static let borderAlpha: CGFloat = 0.15
+    /// Black-tint alpha layered between the blur and the SwiftUI content
+    /// to push the panel closer to Spotlight's near-black-glass look (the
+    /// bare `.underWindowBackground` material on its own reads as too
+    /// gray). The panel forces `.darkAqua` appearance so this tint is
+    /// always evaluated against a dark material. Tune freely; 0.0
+    /// disables the tint.
+    static let darkTintAlpha: CGFloat = 0.35
 
     var onKeyDown: ((UInt16, String?, NSEvent.ModifierFlags) -> Void)?
     var onDismiss: (() -> Void)?
@@ -38,17 +45,27 @@ final class FloatingPanel: NSPanel {
         isReleasedWhenClosed = false
         animationBehavior = .utilityWindow
 
-        // Visual style — Spotlight-like translucent glass
+        // Visual style — Spotlight-like translucent glass. Pin the panel
+        // to `.darkAqua` regardless of system appearance so the dark-glass
+        // chrome stays consistent in light mode too (Spotlight does the
+        // same — it's always dark-glass).
+        appearance = NSAppearance(named: .darkAqua)
         backgroundColor = .clear
         isOpaque = false
         hasShadow = true
 
-        // Content: NSVisualEffectView behind, NSHostingView pinned on top.
+        // Content stack (back-to-front): NSVisualEffectView (blur) →
+        // black tint NSView (darkens the blur toward Spotlight's
+        // near-black look) → NSHostingView (SwiftUI content).
         // Layer-backed effect view gives us rounded corners + hairline stroke;
-        // masksToBounds clips the blur and the SwiftUI content to the rounded rect,
-        // and the window shadow follows the resulting alpha mask.
+        // masksToBounds clips everything to the rounded rect, and the window
+        // shadow follows the resulting alpha mask.
         let effect = NSVisualEffectView(frame: NSRect(origin: .zero, size: FloatingPanel.panelSize))
-        effect.material = .hudWindow
+        // `.underWindowBackground` is among the densest vibrancy
+        // materials; paired with the black tint below it lands at
+        // Spotlight-grade darkness. Off-label for in-window content but
+        // empirically the closest visual match.
+        effect.material = .underWindowBackground
         effect.blendingMode = .behindWindow
         effect.state = .active
         effect.autoresizingMask = [.width, .height]
@@ -59,6 +76,15 @@ final class FloatingPanel: NSPanel {
         // Note: CGColor is captured at init; won't re-resolve on light/dark switch while the panel is open (panel is transient, so drift is narrow).
         effect.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(FloatingPanel.borderAlpha).cgColor
         contentView = effect
+
+        // Black-tint overlay sits between the blur and the SwiftUI hosting
+        // view so the wallpaper still bleeds through (preserved by the
+        // vibrancy material) but is uniformly darkened by `darkTintAlpha`.
+        let tint = NSView(frame: effect.bounds)
+        tint.wantsLayer = true
+        tint.layer?.backgroundColor = NSColor.black.withAlphaComponent(FloatingPanel.darkTintAlpha).cgColor
+        tint.autoresizingMask = [.width, .height]
+        effect.addSubview(tint)
 
         // ignoresSafeArea so the view extends under the transparent titlebar
         let hostingView = NSHostingView(rootView: rootView.ignoresSafeArea())
