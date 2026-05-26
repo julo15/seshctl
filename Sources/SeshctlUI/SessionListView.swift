@@ -24,6 +24,8 @@ public struct SessionListView: View {
     var onCheckForUpdates: (() -> Void)?
     var onQuit: (() -> Void)?
 
+    private static let firstOpenAnimationGate: TimeInterval = 0.5
+
     public init(
         viewModel: SessionListViewModel,
         connectionStore: ClaudeCodeConnectionStore,
@@ -184,7 +186,7 @@ public struct SessionListView: View {
 
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(spacing: 4) {
+                        VStack(spacing: 4) {
                             ForEach(Array(ordered.enumerated()), id: \.element.id) { index, row in
                                 if index < activeCount {
                                     let bucket = activeBuckets[index]
@@ -312,6 +314,16 @@ public struct SessionListView: View {
                             }
                         }
                         .padding(.vertical, 4)
+                        // Suppress the reorder spring for the first ~half-second
+                        // after the panel opens — the immediate `refresh()` in
+                        // `panelDidShow()` would otherwise spring every row into
+                        // its new position on every reopen.
+                        .animation(
+                            Date().timeIntervalSince(viewModel.lastPanelShownAt) > Self.firstOpenAnimationGate
+                                ? .spring(response: 0.32, dampingFraction: 0.86)
+                                : nil,
+                            value: ordered.map(\.id)
+                        )
                     }
                     .followSelectionScroll(
                         ordered: ordered,

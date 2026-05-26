@@ -34,6 +34,16 @@ public final class SessionListViewModel: ObservableObject {
     /// providing mtime-based reuse so re-reads of unchanged transcripts are
     /// skipped on the 2-second refresh cadence.
     @Published public private(set) var awaySummariesById: [String: String] = [:]
+    /// Timestamp of the most-recent panel-show event. Read by the row list's
+    /// `.animation` modifier to suppress the reorder animation on the first
+    /// refresh after the panel opens — without this, snapping from the
+    /// last-known list (rendered before the panel was hidden) to the current
+    /// list (loaded by the immediate `refresh()` in `panelDidShow()`) would
+    /// run a full spring on every reopen.
+    /// Write-ordering matters: `panelDidShow()` must set this *before* calling
+    /// `refresh()` so the @Published mutations from refresh land in the same
+    /// body-recomputation pass with the fresh timestamp visible.
+    @Published public private(set) var lastPanelShownAt: Date = .distantPast
     /// Per-transcript cache: `path → (mtime, cseId)`. Lets `refresh()` skip
     /// re-reading a live Claude transcript when its file mtime hasn't
     /// advanced. Bounded by `sessions.count` on each refresh (entries for
@@ -139,6 +149,10 @@ public final class SessionListViewModel: ObservableObject {
 
     /// Call when the panel becomes visible. Refreshes immediately and starts polling.
     public func panelDidShow() {
+        // Set BEFORE refresh() so the body recomputation triggered by the
+        // refresh's @Published mutations sees the fresh `lastPanelShownAt`
+        // and suppresses the reorder spring.
+        lastPanelShownAt = Date()
         refresh()
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) {
@@ -194,6 +208,17 @@ public final class SessionListViewModel: ObservableObject {
 
     public func refresh() {
         do {
+            // Capture the id of the currently selected row before the refresh
+            // mutates state. `selectedIndex` is an integer position, so when
+            // rows reorder we'd otherwise leave the highlight pinned to the
+            // slot — pointing at a different row. After the mutations land
+            // we look this id up in the new `orderedRows` and re-pin
+            // `selectedIndex` to the row's new position.
+            let priorSelectedRowId: String? = {
+                let rows = orderedRows
+                guard selectedIndex >= 0, selectedIndex < rows.count else { return nil }
+                return rows[selectedIndex].id
+            }()
             if enableGC {
                 try database.reapStaleSessions()
             }
@@ -242,6 +267,22 @@ public final class SessionListViewModel: ObservableObject {
             let livePaths = sessions.compactMap(\.transcriptPath)
             pruneTranscriptAwaySummaryCache(keepingPaths: livePaths)
             pruneTranscriptBridgeCache(keepingPaths: livePaths)
+            // Re-pin `selectedIndex` to the previously-selected row's new
+            // position. If the row vanished (closed + filtered out of
+            // `orderedRows`), clamp `selectedIndex` to the new array bounds
+            // so the highlight lands on a real row instead of silently
+            // sliding onto whichever row now occupies the old slot —
+            // the exact bug the re-pin fixes for the reorder case.
+            // Empty list → `-1` (the nothing-selected sentinel).
+            if let id = priorSelectedRowId {
+                if let newIndex = orderedRows.firstIndex(where: { $0.id == id }) {
+                    if newIndex != selectedIndex {
+                        selectedIndex = newIndex
+                    }
+                } else {
+                    selectedIndex = min(selectedIndex, orderedRows.count - 1)
+                }
+            }
             error = nil
         } catch {
             self.error = error.localizedDescription

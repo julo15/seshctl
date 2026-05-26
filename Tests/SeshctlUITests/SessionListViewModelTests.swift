@@ -2434,4 +2434,103 @@ struct SessionListViewModelTests {
         vm.refresh()
         #expect(vm.awaySummariesById[session.id] == "Second recap.")
     }
+
+    // MARK: - Row-reorder behavior
+
+    @Test("Selection follows the row across a refresh-driven reorder")
+    @MainActor
+    func selectionFollowsRowAcrossReorder() throws {
+        let db = try SeshctlDatabase.temporary()
+        // Insert B first so its updated_at is older. Insert A second so A
+        // sorts to the top of the desc-by-updatedAt list.
+        try db.startSession(tool: .gemini, directory: "/tmp/b", pid: 2222)
+        Thread.sleep(forTimeInterval: 0.01)
+        try db.startSession(tool: .claude, directory: "/tmp/a", pid: 1111)
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+
+        // Sanity: A (pid 1111) is at index 0, B (pid 2222) at index 1.
+        #expect(vm.selectedIndex == 0)
+        let aId = vm.selectedSession?.id
+        #expect(vm.selectedSession?.pid == 1111)
+
+        // Bump B's updated_at so B sorts above A on the next refresh.
+        Thread.sleep(forTimeInterval: 0.01)
+        try db.updateSession(pid: 2222, tool: .gemini, ask: "hi", status: .idle)
+        vm.refresh()
+
+        // A has moved to index 1; selection should have followed.
+        #expect(vm.selectedIndex == 1)
+        #expect(vm.selectedSession?.id == aId)
+        #expect(vm.selectedSession?.pid == 1111)
+    }
+
+    @Test("panelDidShow stamps lastPanelShownAt to ~now")
+    @MainActor
+    func panelDidShowStampsTimestamp() throws {
+        let db = try SeshctlDatabase.temporary()
+        let vm = SessionListViewModel(database: db, enableGC: false)
+
+        // Default is .distantPast — far enough in the past that the
+        // first-open animation gate would unconditionally animate.
+        #expect(vm.lastPanelShownAt == .distantPast)
+
+        let before = Date()
+        vm.panelDidShow()
+        let after = Date()
+
+        #expect(vm.lastPanelShownAt >= before)
+        #expect(vm.lastPanelShownAt <= after)
+    }
+
+    @Test("Selection clamps to last row when prior row vanishes mid-array")
+    @MainActor
+    func selectionClampsWhenRowVanishesInRange() throws {
+        let db = try SeshctlDatabase.temporary()
+        try db.startSession(tool: .claude, directory: "/tmp/c", pid: 3333)
+        Thread.sleep(forTimeInterval: 0.01)
+        try db.startSession(tool: .claude, directory: "/tmp/b", pid: 2222)
+        Thread.sleep(forTimeInterval: 0.01)
+        try db.startSession(tool: .claude, directory: "/tmp/a", pid: 1111)
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+        #expect(vm.selectedIndex == 0)  // A at top
+        let aId = vm.selectedSession?.id
+
+        // End A. orderedRows shrinks from [A, B, C] to [B, C].
+        try db.endSession(pid: 1111, tool: .claude)
+        vm.refresh()
+
+        // A is gone; selectedIndex 0 is still in [0, 2), so the clamp is a
+        // no-op and the highlight slides to whatever is at index 0 (B).
+        // This pins down the documented behavior.
+        #expect(vm.selectedIndex == 0)
+        #expect(vm.selectedSession?.id != aId)
+        #expect(vm.selectedSession?.pid == 2222)
+    }
+
+    @Test("Selection clamps to the last available row when prior row vanishes out of range")
+    @MainActor
+    func selectionClampsWhenRowVanishesOutOfRange() throws {
+        let db = try SeshctlDatabase.temporary()
+        try db.startSession(tool: .claude, directory: "/tmp/b", pid: 2222)
+        Thread.sleep(forTimeInterval: 0.01)
+        try db.startSession(tool: .claude, directory: "/tmp/a", pid: 1111)
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+        vm.moveSelectionDown()
+        #expect(vm.selectedIndex == 1)  // B selected
+
+        // End B. orderedRows shrinks from [A, B] to [A]; selectedIndex 1 is
+        // now beyond the new bounds. The clamp brings it to 0 so the
+        // highlight lands on A, the last available row.
+        try db.endSession(pid: 2222, tool: .claude)
+        vm.refresh()
+
+        #expect(vm.selectedIndex == 0)
+        #expect(vm.selectedSession?.pid == 1111)
+    }
 }

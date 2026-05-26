@@ -29,6 +29,11 @@ struct SessionTreeView: View {
 
         ScrollViewReader { proxy in
             ScrollView {
+                // LazyVStack intentional — tree mode doesn't animate reorders
+                // (the row-rearrange animation is opt-in on the time-sorted
+                // list view in `SessionListView`). Row identity is stable
+                // across status changes for free since the `rowViewIdentity`
+                // refactor.
                 LazyVStack(spacing: 4) {
                     ForEach(viewModel.treeGroups) { group in
                         GroupHeaderView(name: group.name, count: group.rows.count, isRepo: group.isRepo)
