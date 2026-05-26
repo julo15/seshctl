@@ -12,18 +12,20 @@ struct TranscriptParserTests {
         #expect(TranscriptParser.encodePath("/") == "-")
     }
 
-    @Test("Returns nil URL when no conversationId")
-    func noConversationId() {
-        let session = makeSession(conversationId: nil)
-        #expect(TranscriptParser.transcriptURL(for: session) == nil)
-    }
-
-    @Test("Returns URL when conversationId present")
-    func withConversationId() {
-        let session = makeSession(conversationId: "abc-123", directory: "/Users/foo/bar")
-        let url = TranscriptParser.transcriptURL(for: session)
-        #expect(url != nil)
-        #expect(url?.path.hasSuffix("-Users-foo-bar/abc-123.jsonl") == true)
+    @Test("Encodes non-alphanumeric characters Claude treats as separators")
+    func encodesNonAlnumSeparators() {
+        // The bug this widened encoding catches: paths under `.claude/worktrees/<name+x>`
+        // — Claude collapses both `.` and `+` to `-` when naming the project dir,
+        // and the original `/`-only transform missed both.
+        #expect(
+            TranscriptParser.encodePath("/Users/foo/seshctl/.claude/worktrees/julo+row")
+                == "-Users-foo-seshctl--claude-worktrees-julo-row"
+        )
+        // Spaces, punctuation, anything not [A-Za-z0-9_-] also collapses to `-`.
+        #expect(TranscriptParser.encodePath("/Users/foo bar") == "-Users-foo-bar")
+        #expect(TranscriptParser.encodePath("/Users/foo@bar") == "-Users-foo-bar")
+        // Underscores and dashes are preserved.
+        #expect(TranscriptParser.encodePath("/Users/foo_bar-baz") == "-Users-foo_bar-baz")
     }
 
     @Test("Parses user text message (string content)")
@@ -380,6 +382,198 @@ struct TranscriptParserTests {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let expected = home.appendingPathComponent(".claude/projects/-Users-foo-project/abc-123.jsonl")
         #expect(url == expected)
+    }
+
+    // MARK: - resolveExistingTranscript
+
+    /// Build a Session with explicit `transcriptPath` so the existence-probe
+    /// chain in `resolveExistingTranscript` can be exercised.
+    private func makeSessionWithTranscriptPath(
+        conversationId: String?,
+        directory: String,
+        transcriptPath: String?
+    ) -> Session {
+        Session(
+            id: "test-id",
+            conversationId: conversationId,
+            tool: .claude,
+            directory: directory,
+            launchDirectory: nil,
+            hostWorkspaceFolder: nil,
+            lastAsk: nil,
+            lastReply: nil,
+            status: .idle,
+            pid: 1234,
+            hostAppBundleId: nil,
+            hostAppName: nil,
+            windowId: nil,
+            transcriptPath: transcriptPath,
+            startedAt: Date(),
+            updatedAt: Date()
+        )
+    }
+
+    @Test("findTranscript locates jsonl by conversation id across project dirs")
+    func findTranscriptLocatesByConversationId() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("transcript-find-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+
+        let projectDir = root.appendingPathComponent("-Users-foo-some-other-place")
+        try fm.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        let convId = UUID().uuidString
+        let file = projectDir.appendingPathComponent("\(convId).jsonl")
+        try Data("{}".utf8).write(to: file)
+
+        // `contentsOfDirectory(at:)` canonicalizes /var → /private/var on
+        // macOS, so compare standardized URLs rather than raw paths.
+        let found = TranscriptParser.findTranscript(conversationId: convId, in: root)
+        #expect(found?.standardizedFileURL == file.standardizedFileURL)
+    }
+
+    @Test("findTranscript returns nil when projects root is absent")
+    func findTranscriptMissingRoot() {
+        let nonexistent = FileManager.default.temporaryDirectory
+            .appendingPathComponent("does-not-exist-\(UUID().uuidString)")
+        #expect(TranscriptParser.findTranscript(conversationId: "anything", in: nonexistent) == nil)
+    }
+
+    @Test("findTranscript returns nil when no matching jsonl exists")
+    func findTranscriptNoMatch() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("transcript-find-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+
+        let projectDir = root.appendingPathComponent("-Users-foo-bar")
+        try fm.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        // A jsonl file for a *different* conversation id.
+        let otherFile = projectDir.appendingPathComponent("\(UUID().uuidString).jsonl")
+        try Data("{}".utf8).write(to: otherFile)
+
+        #expect(TranscriptParser.findTranscript(conversationId: UUID().uuidString, in: root) == nil)
+    }
+
+    @Test("resolveExistingTranscript prefers stored transcriptPath when it exists")
+    func resolveUsesStoredPath() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("transcript-resolve-\(UUID().uuidString)")
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+
+        let stored = dir.appendingPathComponent("stored.jsonl")
+        try Data("{}".utf8).write(to: stored)
+
+        let session = makeSessionWithTranscriptPath(
+            conversationId: "abc-123",
+            directory: "/Users/foo/bar",
+            transcriptPath: stored.path
+        )
+        #expect(TranscriptParser.resolveExistingTranscript(for: session)?.path == stored.path)
+    }
+
+    @Test("resolveExistingTranscript returns nil when session has no conversation id and stored path is missing")
+    func resolveReturnsNilWhenStoredMissingAndNoConvId() {
+        let session = makeSessionWithTranscriptPath(
+            conversationId: nil,
+            directory: "/Users/foo/bar",
+            transcriptPath: "/does/not/exist.jsonl"
+        )
+        #expect(TranscriptParser.resolveExistingTranscript(for: session) == nil)
+    }
+
+    @Test("resolveExistingTranscript falls back to computed path (leg B)")
+    func resolveLegBComputedPathHit() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("transcript-resolve-legb-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+
+        // Directory string the resolver will encode to find the computed file.
+        let sessionDir = "/Users/foo/myproject"
+        let encoded = TranscriptParser.encodePath(sessionDir)
+        let convId = UUID().uuidString
+        let projectDir = root.appendingPathComponent(encoded)
+        try fm.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        let computed = projectDir.appendingPathComponent("\(convId).jsonl")
+        try Data("{}".utf8).write(to: computed)
+
+        let session = makeSessionWithTranscriptPath(
+            conversationId: convId,
+            directory: sessionDir,
+            transcriptPath: "/does/not/exist.jsonl"  // forces leg A to fail
+        )
+
+        let resolved = TranscriptParser.resolveExistingTranscript(for: session, projectsRoot: root)
+        #expect(resolved?.standardizedFileURL == computed.standardizedFileURL)
+    }
+
+    @Test("resolveExistingTranscript falls back to glob (leg C)")
+    func resolveLegCGlobHit() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("transcript-resolve-legc-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+
+        // The encoded session dir doesn't have a file in it — but a different
+        // project dir DOES contain the convId.jsonl. This mirrors the
+        // mid-session-cd / worktree-entry scenario.
+        let sessionDir = "/Users/foo/seshctl/.claude/worktrees/julo+myname"
+        try fm.createDirectory(
+            at: root.appendingPathComponent(TranscriptParser.encodePath(sessionDir)),
+            withIntermediateDirectories: true
+        )
+        let convId = UUID().uuidString
+        let actualProjectDir = root.appendingPathComponent("-Users-foo-seshctl")
+        try fm.createDirectory(at: actualProjectDir, withIntermediateDirectories: true)
+        let actualFile = actualProjectDir.appendingPathComponent("\(convId).jsonl")
+        try Data("{}".utf8).write(to: actualFile)
+
+        let session = makeSessionWithTranscriptPath(
+            conversationId: convId,
+            directory: sessionDir,
+            transcriptPath: nil  // leg A skipped; leg B misses (no file in encoded dir); leg C hits
+        )
+
+        let resolved = TranscriptParser.resolveExistingTranscript(for: session, projectsRoot: root)
+        #expect(resolved?.standardizedFileURL == actualFile.standardizedFileURL)
+    }
+
+    @Test("resolveExistingTranscript by conversationId+directory walks legs B and C")
+    func resolveByConversationIdLegsBAndC() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("transcript-resolve-recall-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+
+        // Leg B hit: file at the computed encoded path.
+        let convB = UUID().uuidString
+        let dirB = "/Users/foo/legb"
+        let projectB = root.appendingPathComponent(TranscriptParser.encodePath(dirB))
+        try fm.createDirectory(at: projectB, withIntermediateDirectories: true)
+        let fileB = projectB.appendingPathComponent("\(convB).jsonl")
+        try Data("{}".utf8).write(to: fileB)
+
+        let resolvedB = TranscriptParser.resolveExistingTranscript(
+            conversationId: convB, directory: dirB, projectsRoot: root
+        )
+        #expect(resolvedB?.standardizedFileURL == fileB.standardizedFileURL)
+
+        // Leg C hit: file lives under a *different* project dir than what
+        // `encodePath(directory)` produces. Stand-in for the recall row
+        // whose `.project` points at a worktree subdir, while Claude wrote
+        // the file under the parent repo.
+        let convC = UUID().uuidString
+        let dirC = "/Users/foo/seshctl/.claude/worktrees/julo+somebranch"
+        try fm.createDirectory(
+            at: root.appendingPathComponent(TranscriptParser.encodePath(dirC)),
+            withIntermediateDirectories: true
+        )
+        let actualC = root.appendingPathComponent("-Users-foo-seshctl")
+        try fm.createDirectory(at: actualC, withIntermediateDirectories: true)
+        let fileC = actualC.appendingPathComponent("\(convC).jsonl")
+        try Data("{}".utf8).write(to: fileC)
+
+        let resolvedC = TranscriptParser.resolveExistingTranscript(
+            conversationId: convC, directory: dirC, projectsRoot: root
+        )
+        #expect(resolvedC?.standardizedFileURL == fileC.standardizedFileURL)
     }
 
     // MARK: - ConversationTurn.id

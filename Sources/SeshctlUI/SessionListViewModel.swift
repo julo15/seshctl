@@ -253,6 +253,19 @@ public final class SessionListViewModel: ObservableObject {
                 unread.insert(remote.id)
             }
             unreadSessionIds = unread
+            // Resolve every live Claude session's transcript path once for
+            // this refresh cycle and reuse the URL across all three cached
+            // scanners + the prune step. Without this the resolver (incl. a
+            // possible `~/.claude/projects/` glob walk) would run up to 4×
+            // per session every 2 seconds. Non-Claude tools are skipped —
+            // the scanners would early-out on them anyway.
+            var resolvedPathsBySessionId: [String: String] = [:]
+            for session in sessions where session.tool == .claude {
+                if let path = TranscriptParser.resolveExistingTranscript(for: session)?.path {
+                    resolvedPathsBySessionId[session.id] = path
+                }
+            }
+
             // Compute bridged pairs (local CLI session ↔ remote claude.ai
             // `environment_kind == "bridge"` session) by reading each live
             // Claude local's transcript for a `bridge_status` event, which
@@ -263,27 +276,35 @@ public final class SessionListViewModel: ObservableObject {
                 locals: sessions,
                 remotes: remoteSessions,
                 bridgedRemoteId: { [weak self] session in
-                    self?.cachedBridgedRemoteId(for: session)
+                    guard let path = resolvedPathsBySessionId[session.id] else { return nil }
+                    return self?.cachedBridgedRemoteId(for: session, transcriptPath: path)
                 }
             )
             bridgedLocalIds = Set(pairs.map(\.localId))
             bridgedRemoteIds = Set(pairs.map(\.remoteId))
             // Pull the latest Claude Code `away_summary` per local Claude session
             // into `awaySummariesById`. Reuses the per-transcript mtime cache to
-            // skip re-reading unchanged JSONLs. Non-Claude tools are guarded inside
-            // `cachedAwaySummary(for:)` and never hit the filesystem.
+            // skip re-reading unchanged JSONLs. Non-Claude tools are skipped at
+            // the resolved-path lookup above.
             var summaries: [String: String] = [:]
             for session in sessions {
-                if let summary = cachedAwaySummary(for: session) {
+                guard let path = resolvedPathsBySessionId[session.id] else { continue }
+                if let summary = cachedAwaySummary(for: session, transcriptPath: path) {
                     summaries[session.id] = summary
                 }
             }
             awaySummariesById = summaries
-            let livePaths = sessions.compactMap(\.transcriptPath)
+            // Prune by the same resolved paths the cache helpers above keyed
+            // entries under. Using `session.transcriptPath` directly would
+            // evict live entries on every refresh whenever a session has
+            // cd'd elsewhere (e.g. into a worktree) mid-session, because
+            // the cache key is the resolved path, not the stored one.
+            let livePaths = Array(resolvedPathsBySessionId.values)
             pruneTranscriptAwaySummaryCache(keepingPaths: livePaths)
             var latest: [String: String] = [:]
             for session in sessions {
-                if let text = cachedLatestAssistant(for: session) {
+                guard let path = resolvedPathsBySessionId[session.id] else { continue }
+                if let text = cachedLatestAssistant(for: session, transcriptPath: path) {
                     latest[session.id] = text
                 }
             }
@@ -758,14 +779,17 @@ public final class SessionListViewModel: ObservableObject {
         lastFocusedAt = Date()
     }
 
-    /// Scan `session.transcriptPath` for a `bridge_status` cse_id, re-using a
+    /// Scan the session's transcript for a `bridge_status` cse_id, re-using a
     /// previous result when the transcript's mtime hasn't advanced. Non-Claude
     /// tools return nil without a filesystem hit — Codex/Gemini transcripts
     /// can't contain a Claude bridge event, and skipping them avoids multi-MB
-    /// reads on every 2-second refresh.
-    fileprivate func cachedBridgedRemoteId(for session: Session) -> String? {
+    /// reads on every 2-second refresh. The caller resolves the transcript
+    /// once per `refresh()` (via `TranscriptParser.resolveExistingTranscript`)
+    /// and passes the path in, so sessions that `cd`'d mid-session
+    /// (the row-recap-broken-after-worktree-entry case) still find their
+    /// file.
+    fileprivate func cachedBridgedRemoteId(for session: Session, transcriptPath path: String) -> String? {
         guard session.tool == .claude else { return nil }
-        guard let path = session.transcriptPath else { return nil }
         let mtime = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
         if let mtime, let cached = transcriptBridgeCache[path], cached.mtime == mtime {
             return cached.cseId
@@ -784,14 +808,13 @@ public final class SessionListViewModel: ObservableObject {
         transcriptBridgeCache = transcriptBridgeCache.filter { live.contains($0.key) }
     }
 
-    /// Scan `session.transcriptPath` for the latest `away_summary` content,
+    /// Scan the session's transcript for the latest `away_summary` content,
     /// re-using a previous result when the transcript's mtime hasn't
-    /// advanced. Mirrors `cachedBridgedRemoteId(for:)`. Non-Claude tools
-    /// return nil without a filesystem hit — only Claude Code writes
-    /// `away_summary` records.
-    fileprivate func cachedAwaySummary(for session: Session) -> String? {
+    /// advanced. Mirrors `cachedBridgedRemoteId(for:transcriptPath:)`.
+    /// Non-Claude tools return nil — only Claude Code writes `away_summary`
+    /// records.
+    fileprivate func cachedAwaySummary(for session: Session, transcriptPath path: String) -> String? {
         guard session.tool == .claude else { return nil }
-        guard let path = session.transcriptPath else { return nil }
         let mtime = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
         if let mtime, let cached = transcriptAwaySummaryCache[path], cached.mtime == mtime {
             return cached.summary
@@ -803,14 +826,13 @@ public final class SessionListViewModel: ObservableObject {
         return summary
     }
 
-    /// Scan `session.transcriptPath` for the latest in-progress assistant
+    /// Scan the session's transcript for the latest in-progress assistant
     /// text, re-using a previous result when the transcript's mtime hasn't
-    /// advanced. Mirrors `cachedAwaySummary(for:)`. Non-Claude tools return
-    /// nil without a filesystem hit — only Claude Code transcripts are
+    /// advanced. Mirrors `cachedAwaySummary(for:transcriptPath:)`.
+    /// Non-Claude tools return nil — only Claude Code transcripts are
     /// shaped for `TranscriptLatestAssistantScanner`.
-    fileprivate func cachedLatestAssistant(for session: Session) -> String? {
+    fileprivate func cachedLatestAssistant(for session: Session, transcriptPath path: String) -> String? {
         guard session.tool == .claude else { return nil }
-        guard let path = session.transcriptPath else { return nil }
         let mtime = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
         if let mtime, let cached = transcriptLatestAssistantCache[path], cached.mtime == mtime {
             return cached.text
