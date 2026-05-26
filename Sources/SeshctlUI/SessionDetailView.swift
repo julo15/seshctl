@@ -3,6 +3,7 @@ import SeshctlCore
 
 public struct SessionDetailView: View {
     @ObservedObject var viewModel: SessionDetailViewModel
+    @State private var cachedScrollView: NSScrollView?
 
     public init(viewModel: SessionDetailViewModel) {
         self.viewModel = viewModel
@@ -169,9 +170,20 @@ public struct SessionDetailView: View {
         }
     }
 
-    /// Access the underlying NSScrollView and scroll by pixel offset.
     private func scrollByPixels(command: SessionDetailViewModel.ScrollCommand) {
-        guard let scrollView = findScrollView() else { return }
+        // Lazy-init: walk the NSView hierarchy at most once per view lifecycle
+        // to locate the backing NSScrollView, then cache the reference. The
+        // recursive walk used to run on every keystroke and was the primary
+        // cause of the Ctrl+B hang in large transcripts.
+        let scrollView: NSScrollView
+        if let cached = cachedScrollView {
+            scrollView = cached
+        } else if let found = findScrollView() {
+            cachedScrollView = found
+            scrollView = found
+        } else {
+            return
+        }
         let clipView = scrollView.contentView
         let visibleHeight = clipView.bounds.height
         let currentY = clipView.bounds.origin.y
@@ -189,13 +201,10 @@ public struct SessionDetailView: View {
         }
 
         let newY = min(max(currentY + delta, 0), max(maxY, 0))
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.08
-            clipView.animator().setBoundsOrigin(NSPoint(x: 0, y: newY))
-        }
+        clipView.setBoundsOrigin(NSPoint(x: 0, y: newY))
+        scrollView.reflectScrolledClipView(clipView)
     }
 
-    /// Walk the NSView hierarchy to find the NSScrollView backing SwiftUI's ScrollView.
     private func findScrollView() -> NSScrollView? {
         guard let window = NSApp.keyWindow else { return nil }
         return findScrollViewIn(window.contentView)
