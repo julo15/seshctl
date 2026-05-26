@@ -3,9 +3,10 @@ import SeshctlCore
 
 /// Returns a stable accent color for a repository, derived by hashing the
 /// repo name into a curated palette. Used to tint the per-row accent bar,
-/// the worktree/dir label, the git branch token (when no dir label is
-/// present), and the tree-view group-header dot, so sessions from the
-/// same repo visually cluster across local and remote rows.
+/// the row's repo-name (sender) field, and the tree-view group-header
+/// dot, so sessions from the same repo visually cluster across local and
+/// remote rows. Worktree/dir labels and branch names stay monotone so
+/// only one token on the row carries the accent.
 ///
 /// Returns `nil` for `nil`/empty input so callers can fall back to their
 /// default foreground style — rows without a repo identity (e.g., non-git

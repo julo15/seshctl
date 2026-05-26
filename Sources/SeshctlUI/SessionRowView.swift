@@ -184,7 +184,7 @@ public struct SessionRowView: View {
             if let branch = session.gitBranch, !branch.isEmpty {
                 Text(branch)
                     .font(.system(size: SenderColumnLayout.subtitleSize(isUnread: isUnread, stacked: stacked), design: .monospaced))
-                    .foregroundStyle(branchColor())
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
             } else {
@@ -267,21 +267,12 @@ public struct SessionRowView: View {
         stackedRowLayoutEnabled ? .semibold : .bold
     }
 
-    /// Branch label color. When per-repo color coding is on, tints with the
-    /// repo accent so worktree rows cluster visually with their repo;
-    /// otherwise demotes to `.secondary` per R6.
-    private func branchColor() -> Color {
-        if repoAccentBarEnabled, let color = repoAccentColor(for: session.gitRepoName) {
-            return color
-        }
-        return .secondary
-    }
-
-    /// Sender (repo name) color. Mirrors `branchColor()` — when per-repo
-    /// color coding is on, the sender picks up the repo accent so the
-    /// whole row reads as that repo's color group; otherwise falls back to
-    /// `.primary` so the sender keeps its full-strength row-heading
-    /// treatment.
+    /// Sender (repo name) color. When per-repo color coding is on, the
+    /// sender picks up the repo accent so rows from the same repo cluster
+    /// visually; otherwise falls back to `.primary` so the sender keeps
+    /// its full-strength row-heading treatment. The branch slot stays
+    /// `.secondary` either way — only the repo-name field carries the
+    /// accent so the row reads as one tinted token, not two.
     private func senderColor() -> Color {
         if repoAccentBarEnabled, let color = repoAccentColor(for: session.gitRepoName) {
             return color

@@ -81,7 +81,7 @@ public struct SettingsPopover: View {
                 Toggle("Repo color coding", isOn: $repoAccentBarEnabled)
                     .toggleStyle(.switch)
                     .controlSize(.small)
-                Text("Tints a vertical bar, the worktree label, and the branch name so sessions from the same repo cluster visually across the list.")
+                Text("Tints a vertical bar and the repo name so sessions from the same repo cluster visually across the list.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
