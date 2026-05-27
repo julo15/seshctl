@@ -40,15 +40,25 @@ public struct RecallService: Sendable {
 
     // MARK: - Lifecycle.
 
-    /// Wire `RecallService` to the seshctl database. Must be called before
-    /// the first `search()` call. `AppDelegate` calls this immediately after
-    /// constructing `SeshctlDatabase`. Idempotent if called more than once
-    /// with the same DB; subsequent calls just overwrite the slot (the
-    /// already-constructed stack still holds its own reference).
+    /// Wire RecallService to the seshctl database. MUST be called exactly
+    /// once at startup, before any `search()` invocation. AppDelegate calls
+    /// this immediately after constructing `SeshctlDatabase`.
+    ///
+    /// Calling `configure` more than once is a no-op for the database slot
+    /// (only the first call's database is used). The shared stack is built
+    /// lazily on the first `search()` call and holds the database by
+    /// reference for the lifetime of the process.
+    ///
+    /// Tests use `configureForTesting(database:adapters:)` paired with
+    /// `_resetForTests()` instead.
     public static func configure(database: SeshctlDatabase) {
         sharedLock.lock()
         defer { sharedLock.unlock() }
-        sharedDatabase = database
+        // First-call-wins: subsequent invocations are ignored so the
+        // already-constructed stack's database reference stays coherent.
+        if sharedDatabase == nil {
+            sharedDatabase = database
+        }
     }
 
     /// The native implementation has no external binary to probe — the
@@ -90,6 +100,7 @@ public struct RecallService: Sendable {
     private static let sharedLock = NSLock()
     nonisolated(unsafe) private static var sharedDatabase: SeshctlDatabase?
     nonisolated(unsafe) private static var sharedStackTask: Task<RecallStack, Error>?
+    nonisolated(unsafe) private static var sharedAdaptersOverride: [any Adapter]?
 
     /// Internal accessor for `RecallStack.build()` to read the configured
     /// database under the lock. Not part of the public API.
@@ -97,6 +108,15 @@ public struct RecallService: Sendable {
         sharedLock.lock()
         defer { sharedLock.unlock() }
         return sharedDatabase
+    }
+
+    /// Internal accessor for `RecallStack.build()` to read the
+    /// test-injected adapters override, if any. Production code paths see
+    /// `nil` and fall through to `AdapterRegistry.defaultAdapters()`.
+    static func sharedAdaptersOverrideAccessor() -> [any Adapter]? {
+        sharedLock.lock()
+        defer { sharedLock.unlock() }
+        return sharedAdaptersOverride
     }
 
     /// Return the shared stack, constructing it on first call. Concurrent
@@ -151,6 +171,27 @@ public struct RecallService: Sendable {
         defer { sharedLock.unlock() }
         sharedDatabase = nil
         sharedStackTask = nil
+        sharedAdaptersOverride = nil
+    }
+
+    /// Test-only entry point: configure with both the database AND an
+    /// explicit adapter list. Bypasses `AdapterRegistry.defaultAdapters()`
+    /// so tests can inject mock adapters that DON'T walk the developer's
+    /// real `~/.claude/projects`, `~/.codex`, `~/.gemini` directories.
+    ///
+    /// Always pair with `_resetForTests()` between test cases.
+    @_spi(Testing)
+    public static func configureForTesting(
+        database: SeshctlDatabase,
+        adapters: [any Adapter]
+    ) {
+        sharedLock.lock()
+        defer { sharedLock.unlock() }
+        sharedDatabase = database
+        sharedAdaptersOverride = adapters
+        // Clear any prior stack so the next search rebuilds against the
+        // injected adapters.
+        sharedStackTask = nil
     }
 }
 
@@ -182,6 +223,11 @@ final actor RecallStack {
     /// `RecallError.searchFailed(...)` if `configure()` was never called.
     /// The `EmbeddingService()` init also throws (model resource not found)
     /// until Phase 7 ships the bundled `.mlpackage`.
+    ///
+    /// In test contexts that called
+    /// `RecallService.configureForTesting(database:adapters:)`, the
+    /// injected adapter list replaces `AdapterRegistry.defaultAdapters()`
+    /// so tests don't walk the developer's real transcript directories.
     static func build() async throws -> RecallStack {
         guard let database = RecallService.sharedDatabaseAccessor() else {
             throw RecallError.searchFailed(
@@ -191,10 +237,12 @@ final actor RecallStack {
         }
         let vectorStore = VectorStore(database: database)
         let embedder = try await EmbeddingService()
+        let adapters = RecallService.sharedAdaptersOverrideAccessor()
+            ?? AdapterRegistry.defaultAdapters()
         let indexer = Indexer(
             store: vectorStore,
             embedder: embedder,
-            adapters: AdapterRegistry.defaultAdapters()
+            adapters: adapters
         )
         return RecallStack(
             database: database,
@@ -275,18 +323,32 @@ final actor RecallStack {
         return RecallSearchResponse(results: results, indexingCount: totalIndexed)
     }
 
-    /// Mirror the Python pipeline's per-agent resume command. Unknown
-    /// agents return an empty string — callers (the UI) treat empty
-    /// `resumeCmd` as "no resume affordance".
+    /// Mirror the Python pipeline's per-agent resume command. Exhaustive
+    /// over `SessionTool` so the compiler flags any new tool we add to
+    /// `SessionTool` without also wiring it here (see AGENTS.md "Adding
+    /// an LLM Tool"). Unknown agents — strings persisted in the index
+    /// that don't map to a `SessionTool` — return an empty string;
+    /// callers (the UI) treat empty `resumeCmd` as "no resume affordance".
     private static func resumeCommand(for entry: HistoryEntry) -> String {
-        switch entry.agent {
-        case "claude":
+        guard let tool = SessionTool(rawValue: entry.agent) else {
+            // Unknown agent persisted in the index — should never happen
+            // for entries written by our own adapters. Empty string
+            // matches the pre-refactor fallback.
+            return ""
+        }
+        switch tool {
+        case .claude:
             return "claude --resume \(entry.sessionID)"
-        case "codex":
+        case .codex:
             return "codex --resume \(entry.sessionID)"
-        case "gemini":
+        case .gemini:
             return "gemini"
-        default:
+        case .cursor:
+            // Cursor sessions can be resumed via the cursor:// URI
+            // handler (see
+            // Sources/SeshctlUI/TerminalController.focusViaURIHandler),
+            // not via a CLI. Return empty so the recall result row
+            // doesn't show a misleading resume command.
             return ""
         }
     }

@@ -368,6 +368,7 @@ Each adapter implements the Swift `Adapter` protocol. Reference recall/`adapters
 
 - [ ] Bump `CFBundleShortVersionString` to `0.5.0`, `CFBundleVersion` to `6` in `Resources/Info.plist`.
 - [ ] Write `docs/release-notes/0.5.0.md`. Headline: native semantic search, no Python required. Migration footnote for legacy recall users.
+    - Include a one-line privacy note: "Semantic search stores indexed transcript text in the local seshctl SQLite at ~/Library/Application Support/Seshctl/seshctl.sqlite — same locality as the prior recall implementation at ~/.recall/metadata.jsonl, no network exposure."
 - [ ] Update `README.md`: remove the "install recall" prerequisite from the compatibility section; update screenshot if the search section visibly changed.
 - [ ] Update `AGENTS.md` if any of its "Adding a new LLM tool" or "Test Coverage" sections need pointers to the new `SeshctlRecall` module.
 - [ ] Write a short `docs/recall-rewrite.md` for future maintainers (architecture diagram, where the model lives, how to bump the model).

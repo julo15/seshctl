@@ -84,16 +84,10 @@ public struct CodexAdapter: Adapter {
             }
 
             let sessionID = (dict["session_id"] as? String) ?? ""
-            let timestamp: Double
-            if let n = dict["ts"] as? NSNumber {
-                timestamp = n.doubleValue
-            } else if let d = dict["ts"] as? Double {
-                timestamp = d
-            } else if let i = dict["ts"] as? Int {
-                timestamp = Double(i)
-            } else {
-                timestamp = 0.0
-            }
+            // JSONSerialization always boxes JSON numbers as NSNumber, so a
+            // single NSNumber probe covers every numeric shape (Int, Double,
+            // even bare numerics). Missing or non-numeric → 0.0.
+            let timestamp = (dict["ts"] as? NSNumber)?.doubleValue ?? 0.0
 
             entries.append(
                 HistoryEntry(

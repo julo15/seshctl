@@ -32,9 +32,11 @@ public actor VectorStore {
     // MARK: - Inserts.
 
     /// Insert a batch of (entry, embedding) pairs in a single write
-    /// transaction. Entries whose `textHash` already exists in
-    /// `recall_entries` are silently skipped (the UNIQUE constraint is the
-    /// dedup key — adapters re-walk transcripts on every refresh).
+    /// transaction. Entries whose `(text_hash, agent, session_id)` triple
+    /// already exists in `recall_entries` are silently skipped (the
+    /// composite UNIQUE constraint is the dedup key — adapters re-walk
+    /// transcripts on every refresh; identical content from different
+    /// sessions is preserved).
     ///
     /// - Returns: the row ids of the entries that were actually inserted,
     ///   in the same order as the input. Skipped duplicates produce no id
@@ -56,7 +58,7 @@ public actor VectorStore {
             var inserted: [Int64] = []
             inserted.reserveCapacity(entries.count)
             for (entry, vector) in zip(entries, embeddings) {
-                // INSERT OR IGNORE — UNIQUE(text_hash) drops duplicates.
+                // INSERT OR IGNORE — UNIQUE(text_hash, agent, session_id) drops duplicates.
                 try db.execute(sql: """
                     INSERT OR IGNORE INTO recall_entries
                         (agent, role, session_id, project, timestamp, text, text_hash)

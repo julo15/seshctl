@@ -4,16 +4,50 @@
 // between tests + bleed from other test files that may have configured the
 // service.
 //
-// These tests do NOT load the bundled CoreML model — that ships in Phase 7
-// and is gated by `EmbeddingServiceTests`. The negative-path test
-// `searchWithoutBundledModelThrows` is the proof that the stack is wired all
-// the way through; Phase 7 will flip it to a positive assertion.
+// End-to-end coverage against the bundled CoreML model lives in
+// `endToEndSearchAgainstMockAdapters` — it injects a `MockAdapter` via
+// `configureForTesting` so the indexer doesn't walk the developer's real
+// transcript directories.
 
 import Foundation
 import Testing
 
 @testable import SeshctlCore
 @_spi(Testing) @testable import SeshctlRecall
+
+// MARK: - MockAdapter (mirrors the pattern in IndexerTests.swift).
+
+private actor MockAdapter: Adapter {
+    nonisolated let name: String
+    nonisolated let entries: [HistoryEntry]
+    nonisolated let cursor: Data
+
+    init(name: String, entries: [HistoryEntry], cursor: Data) {
+        self.name = name
+        self.entries = entries
+        self.cursor = cursor
+    }
+
+    func load(cursor: Data?) async throws -> (entries: [HistoryEntry], newCursor: Data) {
+        if cursor == self.cursor {
+            return ([], self.cursor)
+        }
+        return (entries, self.cursor)
+    }
+}
+
+private func makeEntry(text: String, sessionID: String) -> HistoryEntry {
+    HistoryEntry(
+        id: nil,
+        agent: "claude",
+        role: "user",
+        sessionID: sessionID,
+        project: "/p",
+        timestamp: 1.0,
+        text: text,
+        textHash: HistoryEntry.textHash(for: text)
+    )
+}
 
 @Suite("RecallService", .serialized)
 struct RecallServiceTests {
@@ -52,12 +86,47 @@ struct RecallServiceTests {
         }
     }
 
-    // Note: there is no full end-to-end search test in this suite. The
-    // RecallStack's Indexer would walk the developer's real ~/.claude/projects,
-    // ~/.codex, ~/.gemini directories and index thousands of entries — slow,
-    // non-deterministic, and not appropriate for a unit-test pass. The Phase 7
-    // bundled-model wiring is covered by EmbeddingServiceTests.productionInit
-    // LoadsBundledModel; an injectable-adapters test-only API is a possible
-    // future addition if we want to assert search() returns empty against a
-    // pristine DB.
+    @Test("search() returns top-K dedup'd RecallResults end-to-end against injected mock adapters")
+    func endToEndSearchAgainstMockAdapters() async throws {
+        RecallService._resetForTests()
+        let db = try SeshctlDatabase.temporary()
+        // 5 fixture entries: 2 sessions, varied semantic content.
+        let entries: [HistoryEntry] = [
+            makeEntry(text: "how do I add a column to a SQLite table", sessionID: "S1"),
+            makeEntry(text: "fix the off-by-one in the loop counter", sessionID: "S1"),
+            makeEntry(text: "altering an existing database schema", sessionID: "S2"),
+            makeEntry(text: "debugging a memory leak in Rust", sessionID: "S2"),
+            makeEntry(text: "what's the time complexity of quicksort", sessionID: "S2"),
+        ]
+        let mock = MockAdapter(name: "claude", entries: entries, cursor: Data("v1".utf8))
+        RecallService.configureForTesting(database: db, adapters: [mock])
+
+        let resp = try await RecallService.search(query: "modify a SQL database column")
+        #expect(resp.results.isEmpty == false)
+        #expect(resp.results.count <= 10)
+        // Session-level dedup: each result has a unique sessionId.
+        let sessionIds = resp.results.map(\.sessionId)
+        #expect(Set(sessionIds).count == sessionIds.count, "results should be deduped by session")
+        // Scores are sorted descending.
+        let scores = resp.results.map(\.score)
+        #expect(scores == scores.sorted(by: >))
+        // Top result is one of the two schema-altering sessions. Both
+        // ("add a column to a SQLite table" in S1 and "altering an
+        // existing database schema" in S2) score higher than the
+        // unrelated loop/memory-leak/quicksort entries; which of the two
+        // wins depends on the model's exact embedding geometry and is
+        // not stable enough to pin here.
+        let topSessionId = resp.results.first?.sessionId
+        #expect(topSessionId == "S1" || topSessionId == "S2")
+        // The unrelated session-S2 entries (memory leak, quicksort)
+        // should never beat both schema-relevant entries — assert that
+        // at least one of the top-2 results is schema-relevant.
+        let top2Texts = resp.results.prefix(2).map(\.text)
+        let schemaText = top2Texts.contains { text in
+            text.contains("column") || text.contains("schema")
+        }
+        #expect(schemaText, "expected a schema-relevant entry in the top 2, got \(top2Texts)")
+        // The indexingCount reflects what landed in the store (all 5).
+        #expect(resp.indexingCount == 5)
+    }
 }

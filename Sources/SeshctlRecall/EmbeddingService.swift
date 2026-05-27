@@ -94,17 +94,14 @@ public actor EmbeddingService {
         let modelURL: URL
         let tokenizerFolderURL: URL
 
-        if let resolved = Self.resolveBundledResources() {
-            modelURL = resolved.modelURL
-            tokenizerFolderURL = resolved.tokenizerFolderURL
-        } else {
-            throw EmbeddingServiceError.modelResourceNotFound(
-                "expected Models/\(Self.bundledModelResourceName)"
-                + ".\(Self.bundledModelResourceExtension) "
-                + "in .app/Contents/Resources/ or SwiftPM Bundle.module — "
-                + "check that scripts/build-app-bundle.sh copies Models/ "
-                + "and that .copy(\"Models\") is intact in Package.swift"
-            )
+        switch Self.resolveBundledResources() {
+        case .success(let r):
+            modelURL = r.modelURL
+            tokenizerFolderURL = r.tokenizerFolderURL
+        case .failure(.modelMissing(let detail)):
+            throw EmbeddingServiceError.modelResourceNotFound(detail)
+        case .failure(.tokenizerMissing(let detail)):
+            throw EmbeddingServiceError.tokenizerResourceNotFound(detail)
         }
 
         let (loadedModel, loadedTokenizer) = try await Self.loadModelAndTokenizer(
@@ -115,9 +112,22 @@ public actor EmbeddingService {
         self.tokenizer = loadedTokenizer
     }
 
-    /// Locate the bundled `.mlpackage` and tokenizer folder. Returns `nil`
-    /// if neither the .app resources path nor `Bundle.module` has them.
-    private static func resolveBundledResources() -> (modelURL: URL, tokenizerFolderURL: URL)? {
+    /// Distinguishes "model missing" from "model found but tokenizer
+    /// missing" so the caller can throw the correct
+    /// `EmbeddingServiceError` variant. Conforms to `Error` only because
+    /// `Swift.Result.Failure` requires it; we never `throw` this type.
+    private enum BundledResourcesError: Error {
+        case modelMissing(String)
+        case tokenizerMissing(String)
+    }
+
+    /// Locate the bundled `.mlpackage` and tokenizer folder. Returns a
+    /// `.failure(.modelMissing)` when neither candidate path has the
+    /// model, and `.failure(.tokenizerMissing)` when the model exists but
+    /// `tokenizer.json` is not next to it (i.e. the bundle is malformed).
+    private static func resolveBundledResources()
+        -> Result<(modelURL: URL, tokenizerFolderURL: URL), BundledResourcesError>
+    {
         let fm = FileManager.default
         let modelFilename = "\(bundledModelResourceName).\(bundledModelResourceExtension)"
 
@@ -126,7 +136,16 @@ public actor EmbeddingService {
             let modelsDir = resourceURL.appendingPathComponent(bundledModelsSubdirectory)
             let modelURL = modelsDir.appendingPathComponent(modelFilename)
             if fm.fileExists(atPath: modelURL.path) {
-                return (modelURL, modelsDir)
+                let tokenizerJSON = modelsDir.appendingPathComponent("tokenizer.json")
+                if fm.fileExists(atPath: tokenizerJSON.path) {
+                    return .success((modelURL, modelsDir))
+                }
+                let detail =
+                    "model found at \(modelURL.path) but tokenizer.json is "
+                    + "missing — expected at \(tokenizerJSON.path). Check "
+                    + "that scripts/build-app-bundle.sh copies the whole "
+                    + "Models/ folder, not just the .mlpackage."
+                return .failure(.tokenizerMissing(detail))
             }
         }
 
@@ -137,12 +156,25 @@ public actor EmbeddingService {
             subdirectory: bundledModelsSubdirectory
         ) {
             let tokenizerFolderURL = modelURL.deletingLastPathComponent()
-            if fm.fileExists(atPath: tokenizerFolderURL.path) {
-                return (modelURL, tokenizerFolderURL)
+            let tokenizerJSON = tokenizerFolderURL.appendingPathComponent("tokenizer.json")
+            if fm.fileExists(atPath: tokenizerJSON.path) {
+                return .success((modelURL, tokenizerFolderURL))
             }
+            let detail =
+                "model found at \(modelURL.path) but tokenizer.json is "
+                + "missing — expected at \(tokenizerJSON.path). Check that "
+                + ".copy(\"Models\") in Package.swift includes tokenizer.json "
+                + "alongside the .mlpackage."
+            return .failure(.tokenizerMissing(detail))
         }
 
-        return nil
+        let detail =
+            "expected Models/\(bundledModelResourceName)"
+            + ".\(bundledModelResourceExtension) "
+            + "in .app/Contents/Resources/ or SwiftPM Bundle.module — "
+            + "check that scripts/build-app-bundle.sh copies Models/ "
+            + "and that .copy(\"Models\") is intact in Package.swift"
+        return .failure(.modelMissing(detail))
     }
 
     /// Test/dev initializer: explicit URLs for the .mlpackage and the

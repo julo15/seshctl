@@ -36,6 +36,9 @@ public enum Search {
     ///
     /// - Returns: `(id, score)` pairs sorted descending by score, capped at
     ///   `k` items.
+    // Returns Float (not Double) because vDSP_dotpr operates on Float and we
+    // avoid a copy. Callers that need Double convert at the boundary
+    // (RecallStack.search does Double(hit.score) when mapping to RecallResult).
     public static func topK(
         queryVector: [Float],
         storedIDs: [Int64],
@@ -67,7 +70,13 @@ public enum Search {
                 // query. Mismatched-dim vectors shouldn't appear in practice
                 // (the model always emits the same shape), but a stale row
                 // from a previous schema version would otherwise crash vDSP.
-                guard vector.count == dim else { continue }
+                guard vector.count == dim else {
+                    AdapterHelpers.warn(
+                        "Search: skipped vector with mismatched dim "
+                        + "(got \(vector.count), expected \(dim))"
+                    )
+                    continue
+                }
                 var dot: Float = 0
                 vector.withUnsafeBufferPointer { vBuf in
                     vDSP_dotpr(

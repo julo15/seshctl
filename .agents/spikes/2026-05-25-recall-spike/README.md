@@ -161,7 +161,10 @@ path in `convert-model.py`). Rationale:
 - Top-5 strict-list agreement is 12/20 — but the 8 disagreements are all
   position swaps WITHIN the same set of documents, almost always at
   positions 4-5 where similarity scores are effectively tied. The user
-  sees the same results in a slightly different tail order.
+  sees the same results in a slightly different tail order. Top-5
+  strict-list disagreements are all position-swaps at positions 4-5 where
+  similarity scores are tied within INT8 quantization noise — invisible
+  to the user; locked as the production baseline.
 - FP32 compute precision does NOT change embedding-level parity meaningfully
   (INT8+FP16 and INT8+FP32 give the same L_inf ~0.007), but the marginal
   numerical stability benefit at no DMG-size cost is worth claiming.

@@ -74,8 +74,8 @@ struct VectorStoreTests {
         }
     }
 
-    @Test("Inserting the same textHash twice yields exactly one row")
-    func dedupOnTextHash() async throws {
+    @Test("Inserting the same textHash twice in one session yields exactly one row")
+    func dedupOnSameSessionTextHash() async throws {
         let store = try makeStore()
         let entry = makeEntry(seed: 42)
         let vector = makeVector(seed: 42)
@@ -91,6 +91,30 @@ struct VectorStoreTests {
 
         let (loadedIDs, _) = try await store.loadAllEmbeddings()
         #expect(loadedIDs.count == 1, "duplicate insert should not create a stranded embedding")
+    }
+
+    @Test("Identical text in different sessions both get indexed (composite dedup key)")
+    func crossSessionTextHashSurvives() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let store = VectorStore(database: db)
+        let sharedText = "ok"
+        let sharedHash = HistoryEntry.textHash(for: sharedText)
+        let e1 = HistoryEntry(
+            id: nil, agent: "claude", role: "user",
+            sessionID: "session-A", project: "/a",
+            timestamp: 1.0, text: sharedText, textHash: sharedHash
+        )
+        let e2 = HistoryEntry(
+            id: nil, agent: "claude", role: "user",
+            sessionID: "session-B", project: "/b",
+            timestamp: 2.0, text: sharedText, textHash: sharedHash
+        )
+        let v = [Float](repeating: 0.1, count: 384)
+        let ids1 = try await store.insert(entries: [e1], embeddings: [v])
+        let ids2 = try await store.insert(entries: [e2], embeddings: [v])
+        #expect(ids1.count == 1)
+        #expect(ids2.count == 1)
+        #expect(try await store.entryCount() == 2, "both sessions' identical text should survive")
     }
 
     @Test("Deleting recall_entries cascades to recall_embeddings via FK")

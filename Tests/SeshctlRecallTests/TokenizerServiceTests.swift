@@ -1,7 +1,7 @@
 // TokenizerServiceTests — cover the WordPiece tokenizer wrapper that feeds
-// EmbeddingService. All tests depend on the Phase 1 spike's local
-// `tokenizer.json` + `tokenizer_config.json` artifacts; tests skip
-// gracefully when they're absent.
+// EmbeddingService. Resolves the tokenizer folder via `Bundle.module` so
+// these tests run unconditionally against the bundled
+// `Sources/SeshctlRecall/Models/` resources.
 
 import Foundation
 import Testing
@@ -10,41 +10,37 @@ import Testing
 
 // MARK: - Test helpers.
 
-private func repoRoot() -> URL {
-    var url = URL(fileURLWithPath: #file)
-    while url.path != "/" {
-        url = url.deletingLastPathComponent()
-        let candidate = url.appendingPathComponent("Package.swift")
-        if FileManager.default.fileExists(atPath: candidate.path) {
-            return url
-        }
-    }
-    fatalError("could not find Package.swift walking up from \(#file)")
-}
-
-/// Returns the spike's tokenizer folder URL iff both required files exist.
-private func spikeTokenizerFolderIfAvailable() -> URL? {
-    let folder = repoRoot().appendingPathComponent(".agents/spikes/2026-05-25-recall-spike")
-    let fm = FileManager.default
-    guard fm.fileExists(atPath: folder.appendingPathComponent("tokenizer.json").path),
-          fm.fileExists(atPath: folder.appendingPathComponent("tokenizer_config.json").path)
-    else { return nil }
-    return folder
+/// Locate the tokenizer folder bundled with the SeshctlRecall target. Returns
+/// `nil` if `Bundle.module` can't find `tokenizer.json` under `Models/` — that
+/// would be a Phase 7 resource-pipeline regression; tests that depend on this
+/// should `Issue.record` and return rather than silently no-op.
+private func bundledTokenizerFolder() -> URL? {
+    return Bundle.module.url(
+        forResource: "tokenizer",
+        withExtension: "json",
+        subdirectory: "Models"
+    )?.deletingLastPathComponent()
 }
 
 // MARK: - Tests.
 
 @Suite("TokenizerService")
 struct TokenizerServiceTests {
-    @Test("Init with spike tokenizer succeeds")
-    func initWithSpikeTokenizerSucceeds() async throws {
-        guard let folder = spikeTokenizerFolderIfAvailable() else { return }
+    @Test("Init with bundled tokenizer succeeds")
+    func initWithBundledTokenizerSucceeds() async throws {
+        guard let folder = bundledTokenizerFolder() else {
+            Issue.record("Bundle.module could not resolve Models/tokenizer.json — Phase 7 regression")
+            return
+        }
         _ = try await TokenizerService(tokenizerFolderURL: folder)
     }
 
     @Test("Encode produces correct fixed shapes (batch × 256)")
     func encodeShapesAreCorrect() async throws {
-        guard let folder = spikeTokenizerFolderIfAvailable() else { return }
+        guard let folder = bundledTokenizerFolder() else {
+            Issue.record("Bundle.module could not resolve Models/tokenizer.json — Phase 7 regression")
+            return
+        }
         let service = try await TokenizerService(tokenizerFolderURL: folder)
         let batch = await service.encode(["hello", "world"])
         #expect(batch.inputIDs.count == 2)
@@ -56,7 +52,10 @@ struct TokenizerServiceTests {
 
     @Test("Padding zeroes out attention mask + input IDs past real length")
     func paddingZeroesOutAttentionMask() async throws {
-        guard let folder = spikeTokenizerFolderIfAvailable() else { return }
+        guard let folder = bundledTokenizerFolder() else {
+            Issue.record("Bundle.module could not resolve Models/tokenizer.json — Phase 7 regression")
+            return
+        }
         let service = try await TokenizerService(tokenizerFolderURL: folder)
         let batch = await service.encode(["hi"])
         #expect(batch.realLengths.count == 1)
@@ -74,7 +73,10 @@ struct TokenizerServiceTests {
 
     @Test("Truncation: a 5000-char input is truncated to exactly 256 tokens")
     func truncationDoesNotPanic() async throws {
-        guard let folder = spikeTokenizerFolderIfAvailable() else { return }
+        guard let folder = bundledTokenizerFolder() else {
+            Issue.record("Bundle.module could not resolve Models/tokenizer.json — Phase 7 regression")
+            return
+        }
         let service = try await TokenizerService(tokenizerFolderURL: folder)
         let longString = String(repeating: "a ", count: 2500) // 5000 chars
         let batch = await service.encode([longString])
@@ -88,11 +90,32 @@ struct TokenizerServiceTests {
 
     @Test("Empty text array returns empty TokenizedBatch")
     func emptyTextArray() async throws {
-        guard let folder = spikeTokenizerFolderIfAvailable() else { return }
+        guard let folder = bundledTokenizerFolder() else {
+            Issue.record("Bundle.module could not resolve Models/tokenizer.json — Phase 7 regression")
+            return
+        }
         let service = try await TokenizerService(tokenizerFolderURL: folder)
         let batch = await service.encode([])
         #expect(batch.inputIDs.isEmpty)
         #expect(batch.attentionMask.isEmpty)
         #expect(batch.realLengths.isEmpty)
+    }
+
+    @Test("Empty string encodes to just the [CLS][SEP] special tokens")
+    func encodeEmptyStringProducesSpecialTokensOnly() async throws {
+        guard let folder = bundledTokenizerFolder() else {
+            Issue.record("Bundle.module could not resolve Models/tokenizer.json — Phase 7 regression")
+            return
+        }
+        let tokenizer = try await TokenizerService(tokenizerFolderURL: folder)
+        let batch = await tokenizer.encode([""])
+        #expect(batch.realLengths == [2], "[CLS][SEP] = 2 tokens")
+        // First two positions should be CLS (101) and SEP (102) for BERT WordPiece
+        #expect(batch.inputIDs[0][0] == 101)
+        #expect(batch.inputIDs[0][1] == 102)
+        // attentionMask reflects only the 2 real tokens
+        #expect(batch.attentionMask[0][0] == 1)
+        #expect(batch.attentionMask[0][1] == 1)
+        #expect(batch.attentionMask[0][2] == 0)
     }
 }

@@ -3,9 +3,11 @@
 // Adapters produce `HistoryEntry` values from per-tool transcripts; the
 // `Indexer` embeds each entry's `text` and writes both to the SQLite store
 // in a single transaction per batch. `textHash` is the SHA-256 hex of the
-// UTF-8 text bytes and is the dedup key — adapters re-walk transcripts on
-// every refresh, and the `UNIQUE` constraint on `recall_entries.text_hash`
-// prevents duplicate rows when the same content is encountered again.
+// UTF-8 text bytes and is part of the dedup key — the DB enforces
+// `UNIQUE (text_hash, agent, session_id)`, so same content from the same
+// session re-walked is collapsed, but identical content from different
+// sessions is preserved (e.g. multiple `ok`s across multiple chats all get
+// indexed).
 
 import CryptoKit
 import Foundation
@@ -31,9 +33,13 @@ public struct HistoryEntry: Sendable, Equatable {
     public let timestamp: Double
     /// Raw message text (post-cleanup). Embedded as-is.
     public let text: String
-    /// SHA-256 hex digest of `text` (UTF-8 bytes), lowercase. Adapters set
-    /// this via `HistoryEntry.textHash(for:)` before handing the entry to
-    /// the store.
+    /// SHA-256 hex digest of `text` (UTF-8 bytes), lowercase. Part of the
+    /// composite dedup key — the DB enforces
+    /// `UNIQUE (text_hash, agent, session_id)`, so same content from the
+    /// same session re-walked is collapsed, but identical content from
+    /// different sessions is preserved (multiple `ok`s across multiple
+    /// chats all get indexed). Adapters set this via
+    /// `HistoryEntry.textHash(for:)` before handing the entry to the store.
     public let textHash: String
 
     public init(

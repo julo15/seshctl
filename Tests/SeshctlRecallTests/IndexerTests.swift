@@ -1,44 +1,13 @@
 // IndexerTests — end-to-end: mock adapter → real EmbeddingService → real
-// VectorStore. Skips when the Phase 1 spike's .mlpackage isn't on disk
-// (same gate as `EmbeddingServiceTests`) — CI will hit the skip path until
-// Phase 7 bundles the model.
+// VectorStore. Uses the bundled `EmbeddingService()` (no-arg) so tests run
+// unconditionally against the model + tokenizer in
+// `Sources/SeshctlRecall/Models/`.
 
 import Foundation
 import Testing
 
 @testable import SeshctlCore
 @testable import SeshctlRecall
-
-// MARK: - Spike-artifact resolver (same shape as EmbeddingServiceTests).
-
-private func repoRoot() -> URL {
-    var url = URL(fileURLWithPath: #file)
-    while url.path != "/" {
-        url = url.deletingLastPathComponent()
-        let candidate = url.appendingPathComponent("Package.swift")
-        if FileManager.default.fileExists(atPath: candidate.path) {
-            return url
-        }
-    }
-    fatalError("could not find Package.swift walking up from \(#file)")
-}
-
-private struct SpikeArtifacts {
-    let modelURL: URL
-    let tokenizerFolderURL: URL
-
-    static func resolveIfAvailable() -> SpikeArtifacts? {
-        let root = repoRoot()
-        let spikeDir = root.appendingPathComponent(".agents/spikes/2026-05-25-recall-spike")
-        let modelURL = spikeDir.appendingPathComponent("all-MiniLM-L6-v2-int8.mlpackage")
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: modelURL.path) else { return nil }
-        guard fm.fileExists(atPath: spikeDir.appendingPathComponent("tokenizer.json").path),
-              fm.fileExists(atPath: spikeDir.appendingPathComponent("tokenizer_config.json").path)
-        else { return nil }
-        return SpikeArtifacts(modelURL: modelURL, tokenizerFolderURL: spikeDir)
-    }
-}
 
 // MARK: - MockAdapter.
 
@@ -86,21 +55,13 @@ private func makeEntry(seed: Int, agent: String = "claude") -> HistoryEntry {
     )
 }
 
-private func makeService() async throws -> EmbeddingService? {
-    guard let artifacts = SpikeArtifacts.resolveIfAvailable() else { return nil }
-    return try await EmbeddingService(
-        modelURL: artifacts.modelURL,
-        tokenizerFolderURL: artifacts.tokenizerFolderURL
-    )
-}
-
 // MARK: - Tests.
 
 @Suite("Indexer")
 struct IndexerTests {
     @Test("refresh embeds + persists every adapter entry, advances cursor")
     func refreshEmbedsAndPersists() async throws {
-        guard let service = try await makeService() else { return }
+        let service = try await EmbeddingService()
         let db = try SeshctlDatabase.temporary()
         let store = VectorStore(database: db)
         let entries = (0..<10).map { makeEntry(seed: $0) }
@@ -124,7 +85,7 @@ struct IndexerTests {
 
     @Test("refresh twice is idempotent — no duplicate inserts on second pass")
     func refreshSkipsAlreadyIndexed() async throws {
-        guard let service = try await makeService() else { return }
+        let service = try await EmbeddingService()
         let db = try SeshctlDatabase.temporary()
         let store = VectorStore(database: db)
         let entries = (0..<5).map { makeEntry(seed: $0) }
@@ -148,7 +109,7 @@ struct IndexerTests {
 
     @Test("progress callback fires with monotonically-growing done/total")
     func refreshProgressCallback() async throws {
-        guard let service = try await makeService() else { return }
+        let service = try await EmbeddingService()
         let db = try SeshctlDatabase.temporary()
         let store = VectorStore(database: db)
 
@@ -209,7 +170,7 @@ struct IndexerTests {
 
     @Test("refresh rebuilds on drift before walking adapters")
     func refreshOnDriftRebuilds() async throws {
-        guard let service = try await makeService() else { return }
+        let service = try await EmbeddingService()
         let db = try SeshctlDatabase.temporary()
         let store = VectorStore(database: db)
 
