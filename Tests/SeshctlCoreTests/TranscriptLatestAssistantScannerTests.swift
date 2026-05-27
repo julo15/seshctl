@@ -25,24 +25,43 @@ struct TranscriptLatestAssistantScannerTests {
         #expect(result == "Here's the answer.")
     }
 
-    @Test("newest assistant turn is tool_use-only — returns nil (does NOT walk back)")
-    func returnsNilWhenNewestAssistantIsToolUseOnly() {
+    @Test("trailing tool_use sub-event in same turn — preserves text (split-event JSONL)")
+    func preservesTextWhenToolUseFollowsInSameTurn() {
+        // Real Claude Code JSONL fans a single logical turn out into one
+        // event per content block. The trailing tool_use event must NOT
+        // clobber the narration that preceded it — that's the
+        // AskUserQuestion / juplan-row bug.
+        let transcript = """
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"..."}]}}
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I've got enough to form a diagnosis."}]}}
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"AskUserQuestion","input":{}}]}}
+        """
+        let result = TranscriptLatestAssistantScanner.extractLatestAssistantText(transcript: transcript)
+        #expect(result == "I've got enough to form a diagnosis.")
+    }
+
+    @Test("new turn (after user event) with only thinking / tool_use sub-events — returns nil")
+    func returnsNilWhenNewTurnAfterUserHasNoText() {
         let transcript = """
         {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Earlier reply."}]}}
-        {"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"..."},{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}
+        {"type":"user","message":{"role":"user","content":"continue"}}
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"..."}]}}
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}
         """
         let result = TranscriptLatestAssistantScanner.extractLatestAssistantText(transcript: transcript)
         #expect(result == nil)
     }
 
-    @Test("newer assistant event missing message.content clears prior valid text — returns nil")
-    func clearsPendingTextOnMalformedAssistantEvent() {
+    @Test("malformed assistant event (missing content) preserves prior text — does NOT clear")
+    func malformedAssistantEventPreservesPriorText() {
+        // Consistent with `skipsMalformedLinesAndKeepsScanning`: isolated
+        // parse glitches shouldn't lose valid prior data.
         let transcript = """
         {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Earlier text"}]}}
         {"type":"assistant","message":{"role":"assistant"}}
         """
         let result = TranscriptLatestAssistantScanner.extractLatestAssistantText(transcript: transcript)
-        #expect(result == nil)
+        #expect(result == "Earlier text")
     }
 
     @Test("newest assistant turn is thinking-only — returns nil")
@@ -72,6 +91,21 @@ struct TranscriptLatestAssistantScannerTests {
         """
         let result = TranscriptLatestAssistantScanner.extractLatestAssistantText(transcript: transcript)
         #expect(result == nil)
+    }
+
+    @Test("tool_result user event then next assistant text — returns the new text")
+    func surfacesNextAssistantTextAfterToolResult() {
+        // Pins the documented user-boundary policy on the common Bash flow:
+        // the tool_result user event clears pendingText, and the subsequent
+        // assistant text event repopulates it.
+        let transcript = """
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Reading the file..."}]}}
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"cat foo"}}]}}
+        {"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"x","content":"file contents"}]}}
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Found the answer."}]}}
+        """
+        let result = TranscriptLatestAssistantScanner.extractLatestAssistantText(transcript: transcript)
+        #expect(result == "Found the answer.")
     }
 
     @Test("system/away_summary after assistant text does NOT clear — still returns assistant text")
