@@ -182,15 +182,14 @@ The one thing to verify by hand: that `clipView.setBoundsOrigin` without animati
 
 ## Implementation Steps
 
-### Step 1: Add NSScrollView introspector and cache it on the view
-- [x] In `Sources/SeshctlUI/SessionDetailView.swift`, add a private `struct ScrollViewIntrospector: NSViewRepresentable` with a `@Binding var scrollView: NSScrollView?`. In `updateNSView`, dispatch async on the main queue and assign `nsView.enclosingScrollView` to the binding (async to avoid mutating SwiftUI state inside a view update pass).
+### Step 1: Cache the NSScrollView reference on the view
 - [x] Add `@State private var cachedScrollView: NSScrollView?` to `SessionDetailView`.
-- [x] Attach `.background { ScrollViewIntrospector(scrollView: $cachedScrollView).frame(width: 0, height: 0) }` to the inner `ScrollView` (line 78 area).
 
-### Step 2: Use the cached scroll view in scrollByPixels
-- [x] In `scrollByPixels`, replace `guard let scrollView = findScrollView() else { return }` with `guard let scrollView = cachedScrollView else { return }`.
-- [x] Delete `findScrollView()` (lines 199–202).
-- [x] Delete `findScrollViewIn(_:)` (lines 204–211).
+**Shipped deviation from the plan**: the original plan proposed an `NSViewRepresentable` introspector that captured the scroll view via `nsView.enclosingScrollView`. First implementation tried that, but `.background { introspector }` on a SwiftUI `ScrollView` placed the introspector's NSView as a SIBLING of the backing `NSScrollView` (not a child), so `enclosingScrollView` returned `nil` and keyboard scroll silently broke. Reverted to the recursive walk from `NSApp.keyWindow.contentView` but reused only on cache miss — the perf win is the same (one walk per view lifetime instead of per keystroke). See Suggestions section in `.agents/reviews/2026-05-26-1740-local-transcript-scroll-hang-r1.md` for the structural trade-offs.
+
+### Step 2: Use the cached scroll view in scrollByPixels via lazy-init
+- [x] In `scrollByPixels`, replace `guard let scrollView = findScrollView() else { return }` with a lazy-init: return cached if present; otherwise call `findScrollView()`, store the result, and use it; else return.
+- [x] Keep `findScrollView()` and `findScrollViewIn(_:)` — they're called on cache miss (first keystroke per view lifetime), not deleted as the original plan suggested.
 
 ### Step 3: Drop animation for line/page scroll
 - [x] In `scrollByPixels`, replace the `NSAnimationContext.runAnimationGroup { … }` block with `clipView.setBoundsOrigin(NSPoint(x: 0, y: newY))` followed by `scrollView.reflectScrolledClipView(clipView)` (correction: on the `NSScrollView`, not on `documentView` — that was a plan typo).

@@ -205,6 +205,9 @@ public struct SessionDetailView: View {
         scrollView.reflectScrolledClipView(clipView)
     }
 
+    // Used once per view lifetime by `scrollByPixels` to populate
+    // `cachedScrollView` on the first keyboard scroll. Kept here rather than
+    // moved into the cache logic so the recursion stays out of the hot path.
     private func findScrollView() -> NSScrollView? {
         guard let window = NSApp.keyWindow else { return nil }
         return findScrollViewIn(window.contentView)
