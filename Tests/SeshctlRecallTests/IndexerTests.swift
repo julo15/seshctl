@@ -184,15 +184,27 @@ struct IndexerTests {
         for _ in 0..<10 { await Task.yield() }
 
         let calls = await sink.snapshot()
-        // One callback per adapter (with non-empty entries) = 2 calls.
-        #expect(calls.count == 2, "expected one progress call per adapter, got \(calls)")
-        // Both callbacks must satisfy done == total at the moment they
-        // fire — Indexer increments both by the same amount.
+        // Per-batch progress is now lifted from embedder.encode into the
+        // global progress space, so each adapter fires one callback per
+        // embedding batch (here batchSize=32 → 1 batch for 3 claude entries
+        // and 1 batch for 2 codex entries = 2 per-batch callbacks) PLUS
+        // one final adapter-complete callback per adapter (2 more) = 4
+        // total. Don't pin an exact count beyond "more than one per
+        // adapter" — embedder batching is an implementation detail.
+        #expect(calls.count >= 2, "expected at least one progress call per adapter, got \(calls)")
+        // Every call must satisfy done <= total (cumulative bookkeeping is
+        // monotonic — the per-batch lift never overshoots the snapshot).
         for (done, total) in calls {
-            #expect(done == total, "expected done == total in cumulative progress, got \(done)/\(total)")
+            #expect(done <= total, "expected done <= total in cumulative progress, got \(done)/\(total)")
         }
+        // done values across all calls are non-decreasing (monotonic growth).
+        let doneValues = calls.map { $0.0 }
+        let sortedDone = doneValues.sorted()
+        #expect(doneValues == sortedDone, "expected done values to be non-decreasing, got \(doneValues)")
         // Final total is the cumulative count across both adapters.
         #expect(calls.last?.1 == 5)
+        // Final done equals total — we finished embedding everything.
+        #expect(calls.last?.0 == 5)
     }
 
     @Test("refresh rebuilds on drift before walking adapters")
