@@ -286,18 +286,6 @@ public struct SessionListView: View {
                                     }
                                 }
 
-                                if viewModel.recallUnavailable {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "magnifyingglass")
-                                            .foregroundStyle(.tertiary)
-                                        Text("Install recall for semantic search")
-                                            .font(.system(.footnote, design: .monospaced))
-                                            .foregroundStyle(.tertiary)
-                                    }
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 8)
-                                }
-
                                 if let errorMessage = viewModel.recallErrorMessage {
                                     HStack(spacing: 6) {
                                         Image(systemName: "exclamationmark.triangle")

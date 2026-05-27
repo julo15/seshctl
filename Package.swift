@@ -9,6 +9,7 @@ let package = Package(
         .executable(name: "seshctl-cli", targets: ["seshctl-cli"]),
         .executable(name: "SeshctlApp", targets: ["SeshctlApp"]),
         .library(name: "SeshctlCore", targets: ["SeshctlCore"]),
+        .library(name: "SeshctlRecall", targets: ["SeshctlRecall"]),
         .library(name: "SeshctlUI", targets: ["SeshctlUI"]),
     ],
     dependencies: [
@@ -20,6 +21,10 @@ let package = Package(
         // target only; SeshctlCore stays Foundation-only and the CLI doesn't
         // need it.
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.0"),
+        // swift-transformers — provides the `Tokenizers` product used by
+        // SeshctlRecall for native semantic search. Pinned to 1.3.3 (the
+        // version verified in the Phase 1 parity spike).
+        .package(url: "https://github.com/huggingface/swift-transformers", exact: "1.3.3"),
     ],
     targets: [
         .target(
@@ -29,9 +34,20 @@ let package = Package(
             ]
         ),
         .target(
+            name: "SeshctlRecall",
+            dependencies: [
+                "SeshctlCore",
+                .product(name: "Tokenizers", package: "swift-transformers"),
+            ],
+            resources: [
+                .copy("Models"),
+            ]
+        ),
+        .target(
             name: "SeshctlUI",
             dependencies: [
                 "SeshctlCore",
+                "SeshctlRecall",
                 .product(name: "MarkdownUI", package: "swift-markdown-ui"),
             ]
         ),
@@ -39,6 +55,7 @@ let package = Package(
             name: "SeshctlApp",
             dependencies: [
                 "SeshctlCore",
+                "SeshctlRecall",
                 "SeshctlUI",
                 .product(name: "KeyboardShortcuts", package: "KeyboardShortcuts"),
                 .product(name: "Sparkle", package: "Sparkle"),
@@ -56,8 +73,12 @@ let package = Package(
             dependencies: ["SeshctlCore"]
         ),
         .testTarget(
+            name: "SeshctlRecallTests",
+            dependencies: ["SeshctlRecall", "SeshctlCore"]
+        ),
+        .testTarget(
             name: "SeshctlUITests",
-            dependencies: ["SeshctlUI", "SeshctlCore"]
+            dependencies: ["SeshctlUI", "SeshctlCore", "SeshctlRecall"]
         ),
         .testTarget(
             name: "SeshctlAppTests",

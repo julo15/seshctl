@@ -2,7 +2,11 @@ import Foundation
 import GRDB
 
 public struct SeshctlDatabase: Sendable {
-    let dbPool: DatabasePool
+    /// Exposed publicly so sibling modules (notably `SeshctlRecall`) can run
+    /// transactions against the same on-disk store without going through
+    /// `SeshctlDatabase`'s session-centric helpers. Keeping a single
+    /// `DatabasePool` per process is load-bearing for WAL concurrency.
+    public let dbPool: DatabasePool
 
     /// Opens (or creates) the database at the given path with WAL mode.
     public init(path: String) throws {
@@ -148,6 +152,91 @@ public struct SeshctlDatabase: Sendable {
             try db.alter(table: "remote_claude_code_sessions") { t in
                 t.add(column: "environment_kind", .text).notNull().defaults(to: "")
             }
+        }
+
+        // v13: native-recall tables. Backs `SeshctlRecall.VectorStore` +
+        // `Indexer`. Dedup is keyed on the COMPOSITE
+        // `(text_hash, agent, session_id)` so that identical content from
+        // different sessions both get indexed (e.g. a one-word reply like
+        // "ok" appearing in many different chats) while same-session
+        // re-walks collapse to a single row. `recall_embeddings.vector` is
+        // a raw FP32 little-endian byte buffer (384 floats = 1536 bytes)
+        // keyed by `entry_id` with FK cascade so wiping `recall_entries`
+        // clears the embeddings too.
+        migrator.registerMigration("v13_create_recall_tables") { db in
+            try db.create(table: "recall_entries") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("agent", .text).notNull()
+                t.column("role", .text).notNull()
+                t.column("session_id", .text).notNull()
+                t.column("project", .text).notNull()
+                t.column("timestamp", .double).notNull()
+                t.column("text", .text).notNull()
+                t.column("text_hash", .text).notNull()
+                t.uniqueKey(["text_hash", "agent", "session_id"])
+            }
+            try db.create(table: "recall_embeddings") { t in
+                t.column("entry_id", .integer)
+                    .primaryKey()
+                    .references("recall_entries", onDelete: .cascade)
+                t.column("vector", .blob).notNull()
+            }
+            try db.create(table: "recall_cursors") { t in
+                t.column("adapter_name", .text).primaryKey()
+                t.column("cursor_json", .text).notNull()
+                t.column("updated_at", .double).notNull()
+            }
+            try db.create(
+                index: "recall_entries_timestamp", on: "recall_entries",
+                columns: ["timestamp"])
+            try db.create(
+                index: "recall_entries_agent", on: "recall_entries",
+                columns: ["agent"])
+        }
+
+        // v14: rebuild the recall_* tables so dev machines that already
+        // ran the old v13 (with `text_hash UNIQUE`) get promoted to the
+        // composite-UNIQUE schema. On fresh installs v14 is wasteful but
+        // safe — it drops a table just created and recreates an identical
+        // one. No data preservation is needed because the recall_* tables
+        // are brand new in this PR and the index is rebuilt from
+        // transcripts on first search after migration.
+        migrator.registerMigration("v14_rebuild_recall_tables_for_composite_unique") { db in
+            // FK cascade on `recall_embeddings.entry_id` clears embeddings
+            // when entries drop. The defensive DROP on recall_embeddings
+            // covers dev machines where cascade may not have fired.
+            try db.execute(sql: "DROP TABLE IF EXISTS recall_entries")
+            try db.execute(sql: "DROP TABLE IF EXISTS recall_embeddings")
+            try db.execute(sql: "DROP TABLE IF EXISTS recall_cursors")
+
+            try db.create(table: "recall_entries") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("agent", .text).notNull()
+                t.column("role", .text).notNull()
+                t.column("session_id", .text).notNull()
+                t.column("project", .text).notNull()
+                t.column("timestamp", .double).notNull()
+                t.column("text", .text).notNull()
+                t.column("text_hash", .text).notNull()
+                t.uniqueKey(["text_hash", "agent", "session_id"])
+            }
+            try db.create(table: "recall_embeddings") { t in
+                t.column("entry_id", .integer)
+                    .primaryKey()
+                    .references("recall_entries", onDelete: .cascade)
+                t.column("vector", .blob).notNull()
+            }
+            try db.create(table: "recall_cursors") { t in
+                t.column("adapter_name", .text).primaryKey()
+                t.column("cursor_json", .text).notNull()
+                t.column("updated_at", .double).notNull()
+            }
+            try db.create(
+                index: "recall_entries_timestamp", on: "recall_entries",
+                columns: ["timestamp"])
+            try db.create(
+                index: "recall_entries_agent", on: "recall_entries",
+                columns: ["agent"])
         }
 
         try migrator.migrate(dbPool)

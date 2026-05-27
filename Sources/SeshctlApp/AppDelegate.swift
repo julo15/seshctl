@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import KeyboardShortcuts
 import SeshctlCore
+import SeshctlRecall
 import SeshctlUI
 import Sparkle
 import SwiftUI
@@ -102,6 +103,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 string: "~/.local/share/seshctl/seshctl.db"
             ).expandingTildeInPath
             let db = try SeshctlDatabase(path: path)
+
+            // Wire RecallService to the shared database. Must happen before
+            // the first SessionListViewModel.executeRecallSearch call —
+            // RecallService.search() throws if configure() was never called.
+            RecallService.configure(database: db)
+
             let vm = SessionListViewModel(database: db, defaults: .standard)
             viewModel = vm
 

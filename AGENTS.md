@@ -168,6 +168,9 @@ Surfaces to touch when adding a new tool:
 - **`scripts/build-app-bundle.sh`** — copy `hooks/<tool>/` into `Contents/Resources/hooks/<tool>/` so the bundled `.app` ships with the scripts.
 - **`README.md`** — add a row to the "LLM tools" compatibility table.
 - **Tests** — `Tests/SeshctlCoreTests/FirstLaunchInstallerTests.swift` mirrors per-tool install/uninstall idempotency; add equivalent coverage for the new tool. Any `CaseIterable`-driven tests (display name, badge spec) get the new case automatically.
+- **`Sources/SeshctlRecall/Adapters/<Tool>Adapter.swift`** — new transcript adapter conforming to `Adapter`. Cursor shape is per-tool (Claude uses per-file `{offset, cwd}`; Codex uses single `{offset}`; Gemini uses `{seen: [[s, m]]}` dedup set).
+- **`Sources/SeshctlRecall/AdapterRegistry.swift`** — add the new adapter to `defaultAdapters()`.
+- **`Sources/SeshctlRecall/RecallService.swift`** — extend the `resumeCommand(for:)` switch in `RecallStack` with the new agent's resume CLI shape.
 
 **Rules:**
 - All hook event names, JSON shapes, and script paths live in `FirstLaunchInstaller` and `hooks/<tool>/` — never hardcode them in the CLI or app code.

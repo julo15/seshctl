@@ -111,6 +111,25 @@ cp -R "${REPO_DIR}/hooks/claude" "${BUNDLE_DIR}/Contents/Resources/hooks/claude"
 cp -R "${REPO_DIR}/hooks/codex" "${BUNDLE_DIR}/Contents/Resources/hooks/codex"
 cp -R "${REPO_DIR}/hooks/cursor" "${BUNDLE_DIR}/Contents/Resources/hooks/cursor"
 
+echo "==> Copying SeshctlRecall model resources ..."
+# EmbeddingService reads the CoreML model + tokenizer files from
+# Contents/Resources/Models/ at runtime. SwiftPM's `.copy("Models")` puts
+# them inside seshctl_SeshctlRecall.bundle at build time, but that bundle's
+# layout (.app/seshctl_SeshctlRecall.bundle/...) isn't where macOS apps
+# expect to find resources — so we flatten Models/ into the conventional
+# Contents/Resources/Models/ location instead. EmbeddingService's
+# `resolveBundledResources` looks here first.
+MODELS_SRC="${REPO_DIR}/Sources/SeshctlRecall/Models"
+if [[ ! -d "${MODELS_SRC}/all-MiniLM-L6-v2-int8.mlpackage" ]]; then
+	echo "ERROR: expected ${MODELS_SRC}/all-MiniLM-L6-v2-int8.mlpackage to exist" >&2
+	echo "       Run the Phase 7 / Phase 1 spike conversion to regenerate it." >&2
+	exit 1
+fi
+mkdir -p "${BUNDLE_DIR}/Contents/Resources/Models"
+cp -R "${MODELS_SRC}/all-MiniLM-L6-v2-int8.mlpackage" "${BUNDLE_DIR}/Contents/Resources/Models/"
+cp "${MODELS_SRC}/tokenizer.json" "${BUNDLE_DIR}/Contents/Resources/Models/"
+cp "${MODELS_SRC}/tokenizer_config.json" "${BUNDLE_DIR}/Contents/Resources/Models/"
+
 echo ""
 echo "==> Bundle assembled."
 echo "    Bundle:  ${BUNDLE_DIR}"

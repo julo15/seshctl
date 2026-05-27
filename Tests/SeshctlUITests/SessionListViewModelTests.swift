@@ -4,6 +4,7 @@ import Testing
 import GRDB
 
 @testable import SeshctlCore
+@testable import SeshctlRecall
 @testable import SeshctlUI
 
 
@@ -1123,7 +1124,6 @@ struct SessionListViewModelTests {
 
         #expect(vm.recallResults.isEmpty)
         #expect(vm.isRecallSearching == false)
-        #expect(vm.recallUnavailable == false)
         #expect(vm.recallIndexingDone == nil)
     }
 
@@ -1180,7 +1180,6 @@ struct SessionListViewModelTests {
         #expect(vm.recallErrorMessage?.contains("boom") == true)
         #expect(vm.recallErrorMessage?.contains("traceback line 2") == false)
         #expect(vm.isRecallSearching == false)
-        #expect(vm.recallUnavailable == false)
     }
 
     @Test("recallErrorMessage is populated on timeout")
@@ -1198,12 +1197,11 @@ struct SessionListViewModelTests {
 
         #expect(vm.recallErrorMessage == "Semantic search timed out")
         #expect(vm.isRecallSearching == false)
-        #expect(vm.recallUnavailable == false)
     }
 
-    @Test("recallErrorMessage stays nil for notInstalled (uses recallUnavailable instead)")
+    @Test("recallErrorMessage is populated defensively on notInstalled (unreachable in v0.5.0+ but routed safely)")
     @MainActor
-    func recallErrorMessageNilOnNotInstalled() async throws {
+    func recallErrorMessageOnNotInstalled() async throws {
         let db = try SeshctlDatabase.temporary()
         let vm = SessionListViewModel(database: db, enableGC: false)
         vm.recallSearchProvider = { _, _ in
@@ -1212,10 +1210,9 @@ struct SessionListViewModelTests {
         vm.enterSearch()
         vm.appendSearchCharacter("t")
 
-        await waitForRecall { vm.recallUnavailable }
+        await waitForRecall { vm.recallErrorMessage != nil }
 
-        #expect(vm.recallErrorMessage == nil)
-        #expect(vm.recallUnavailable == true)
+        #expect(vm.recallErrorMessage == "Semantic search unavailable")
     }
 
     @Test("exitSearch clears recallErrorMessage")
