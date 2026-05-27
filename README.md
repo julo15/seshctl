@@ -11,9 +11,14 @@ A macOS session manager for terminal-based workflows. Tracks coding sessions acr
 
 ## Install
 
-Grab the latest `Seshctl-X.Y.Z.dmg` from the [releases page](https://github.com/julo15/seshctl/releases/latest), open it, and drag `Seshctl.app` to `/Applications`.
+1. Grab the latest `Seshctl-X.Y.Z.dmg` from the [releases page](https://github.com/julo15/seshctl/releases/latest).
+2. Open the DMG and drag `Seshctl.app` to `/Applications`.
+3. **First launch only** — Seshctl is self-signed (not yet notarized with an Apple Developer ID), so the first time you double-click it macOS will block it with *"Apple could not verify 'Seshctl' is free of malware"*. Unblock with one of:
+   - **System Settings → Privacy & Security**, scroll to the bottom, click **Open Anyway** next to the "Seshctl was blocked" row, then re-launch Seshctl and confirm the second prompt.
+   - Or run `xattr -d com.apple.quarantine /Applications/Seshctl.app` in Terminal, then double-click.
 
-> **Heads up:** grant Accessibility when prompted on first launch — the system permission window can open behind the active app, so Cmd+Tab if you don't see it.
+   After this once, future launches and Sparkle auto-updates are silent — macOS remembers the bypass per signing identity.
+4. Grant Accessibility when prompted on first launch — the system permission window can open behind the active app, so Cmd+Tab if you don't see it.
 
 The app auto-updates over Sparkle. You can also trigger a check from the menu-bar gear → **About** → **Check for Updates…**.
 
@@ -24,7 +29,7 @@ The app auto-updates over Sparkle. You can also trigger a check from the menu-ba
 1. Quit Seshctl (menu-bar icon → Quit, or `pkill -f SeshctlApp`).
 2. Download the latest DMG from the [releases page](https://github.com/julo15/seshctl/releases/latest).
 3. Open the DMG and drag `Seshctl.app` over `/Applications` (replace the existing one).
-4. Right-click `Seshctl.app` → **Open** (still self-signed; this is the last manual right-click step until Developer ID + notarization lands).
+4. Unblock the first launch — see step 3 of [Install](#install) above (System Settings → Privacy & Security → Open Anyway, or `xattr -d com.apple.quarantine /Applications/Seshctl.app`).
 5. Press **Cmd+Shift+S** to confirm the panel comes up.
 
 Existing Automation, Accessibility, and claude.ai grants persist — same signing identity, so TCC carries them across. The welcome panel won't reappear; the launch-time reconciler silently refreshes the CLI symlink, hooks, and editor extensions.
