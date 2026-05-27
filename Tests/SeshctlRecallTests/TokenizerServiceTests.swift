@@ -1,7 +1,8 @@
 // TokenizerServiceTests — cover the WordPiece tokenizer wrapper that feeds
-// EmbeddingService. Resolves the tokenizer folder via `Bundle.module` so
-// these tests run unconditionally against the bundled
-// `Sources/SeshctlRecall/Models/` resources.
+// EmbeddingService. Resolves the tokenizer folder via the production
+// resolver (`EmbeddingService.bundledTokenizerFolderURL()`) so these tests
+// find the bundled `Sources/SeshctlRecall/Models/` resources regardless of
+// whether the test bundle has its own `Models/` directory.
 
 import Foundation
 import Testing
@@ -10,16 +11,11 @@ import Testing
 
 // MARK: - Test helpers.
 
-/// Locate the tokenizer folder bundled with the SeshctlRecall target. Returns
-/// `nil` if `Bundle.module` can't find `tokenizer.json` under `Models/` — that
-/// would be a Phase 7 resource-pipeline regression; tests that depend on this
-/// should `Issue.record` and return rather than silently no-op.
+/// Locate the tokenizer folder bundled with the SeshctlRecall target.
+/// Returns `nil` only if neither the .app resources nor the SwiftPM
+/// `Bundle.module/Models/` location resolves — a Phase 7 regression.
 private func bundledTokenizerFolder() -> URL? {
-    return Bundle.module.url(
-        forResource: "tokenizer",
-        withExtension: "json",
-        subdirectory: "Models"
-    )?.deletingLastPathComponent()
+    EmbeddingService.bundledTokenizerFolderURL()
 }
 
 // MARK: - Tests.

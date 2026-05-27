@@ -74,7 +74,10 @@ let package = Package(
         ),
         .testTarget(
             name: "SeshctlRecallTests",
-            dependencies: ["SeshctlRecall", "SeshctlCore"]
+            dependencies: ["SeshctlRecall", "SeshctlCore"],
+            resources: [
+                .copy("Fixtures"),
+            ]
         ),
         .testTarget(
             name: "SeshctlUITests",
