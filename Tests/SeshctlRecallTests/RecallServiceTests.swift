@@ -21,6 +21,7 @@ private actor MockAdapter: Adapter {
     nonisolated let name: String
     nonisolated let entries: [HistoryEntry]
     nonisolated let cursor: Data
+    private var _loadCount: Int = 0
 
     init(name: String, entries: [HistoryEntry], cursor: Data) {
         self.name = name
@@ -28,7 +29,10 @@ private actor MockAdapter: Adapter {
         self.cursor = cursor
     }
 
+    var loadCount: Int { _loadCount }
+
     func load(cursor: Data?) async throws -> (entries: [HistoryEntry], newCursor: Data) {
+        _loadCount += 1
         if cursor == self.cursor {
             return ([], self.cursor)
         }
@@ -128,5 +132,36 @@ struct RecallServiceTests {
         #expect(schemaText, "expected a schema-relevant entry in the top 2, got \(top2Texts)")
         // The indexingCount reflects what landed in the store (all 5).
         #expect(resp.indexingCount == 5)
+    }
+
+    @Test("concurrent searches share a single in-flight indexing pass")
+    func concurrentSearchesShareIndexing() async throws {
+        // Three simultaneous search calls should all join the same detached
+        // indexing task instead of each starting their own refresh. The
+        // adapter's loadCount is the witness — exactly one walk regardless
+        // of how many searches arrive while it's in flight.
+        //
+        // This is the load-bearing invariant behind "cancellation doesn't
+        // restart indexing": a canceled search just stops AWAITING the
+        // detached task; the task itself runs on, and any later search
+        // joins it via the same slot.
+        RecallService._resetForTests()
+        let db = try SeshctlDatabase.temporary()
+        let entries = (0..<10).map { i in
+            makeEntry(text: "concurrent-test-entry-\(i)", sessionID: "S\(i)")
+        }
+        let mock = MockAdapter(name: "claude", entries: entries, cursor: Data("v1".utf8))
+        RecallService.configureForTesting(database: db, adapters: [mock])
+
+        async let r1 = RecallService.search(query: "anything")
+        async let r2 = RecallService.search(query: "anything else")
+        async let r3 = RecallService.search(query: "something different")
+        _ = try await (r1, r2, r3)
+
+        let loadCount = await mock.loadCount
+        #expect(
+            loadCount == 1,
+            "three concurrent searches must share one indexing pass (got \(loadCount))"
+        )
     }
 }

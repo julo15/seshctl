@@ -206,6 +206,33 @@ final actor RecallStack {
     private let embedder: EmbeddingService
     private let indexer: Indexer
 
+    // MARK: - Background indexing state.
+    //
+    // Indexing is a detached, long-lived task that survives across the
+    // lifecycle of individual `search()` calls. Multiple concurrent searches
+    // (typical UX: each keystroke kicks off a new search and cancels the
+    // prior one) share a single in-flight indexing pass — the await on
+    // `indexingTask.value` is cancellable from each caller's perspective,
+    // but the detached task itself is NOT canceled, so canceling a search
+    // doesn't roll back indexing progress.
+
+    /// The currently-running indexing task, or nil if no refresh is in
+    /// flight. Set when the first concurrent caller of `ensureIndexingComplete`
+    /// kicks off a refresh; cleared by the detached task itself on
+    /// completion or error so the next caller starts fresh.
+    private var indexingTask: Task<Void, Error>?
+
+    /// Active progress subscribers — one per in-flight `search()` call that
+    /// supplied an `onIndexing` callback. The detached indexing task
+    /// broadcasts to all of them. Searches subscribe on entry and remove
+    /// themselves on exit (via the `defer` in `search()`).
+    private var indexingSubscribers: [UUID: @Sendable (Int, Int) -> Void] = [:]
+
+    /// The last (done, total) pair broadcast by the indexing task. Cached so
+    /// a newly-arrived search that subscribes mid-flight can immediately
+    /// receive the current progress instead of waiting for the next batch.
+    private var lastIndexingProgress: (done: Int, total: Int)?
+
     private init(
         database: SeshctlDatabase,
         vectorStore: VectorStore,
@@ -254,22 +281,42 @@ final actor RecallStack {
 
     /// End-to-end search: incremental index refresh → query encode → load
     /// stored vectors → top-K with session-level dedup → hydrate `RecallResult`.
+    ///
+    /// Indexing runs as a detached background task — if you cancel a search
+    /// (UI typically does this on each keystroke), the indexing keeps
+    /// running. The next search joins the same task instead of restarting.
     func search(
         query: String,
         limit: Int,
         onIndexing: (@Sendable (Int, Int) -> Void)?
     ) async throws -> RecallSearchResponse {
-        // 1. Bring the index up to date. Progress flows straight through.
-        try await indexer.refresh(batchSize: 64, onProgress: onIndexing)
+        // 1. Subscribe for progress and seed the caller with the latest
+        //    known value so they don't see 0/N when joining an in-flight
+        //    refresh that's already at 5000/8000.
+        let subID = onIndexing.map { subscribeIndexingProgress($0) }
+        if let onIndexing, let last = lastIndexingProgress {
+            onIndexing(last.done, last.total)
+        }
+        defer {
+            if let subID {
+                // Unsubscribe synchronously — we're on the actor, no hop needed.
+                indexingSubscribers.removeValue(forKey: subID)
+            }
+        }
+
+        // 2. Bring the index up to date (or join an in-flight refresh).
+        //    The await is cancellable per caller; the detached refresh
+        //    survives caller cancellation.
+        try await ensureIndexingComplete()
         let totalIndexed = try await vectorStore.entryCount()
 
-        // 2. Encode the query. `encode` always returns one vector per input.
+        // 3. Encode the query. `encode` always returns one vector per input.
         let queryVecs = try await embedder.encode([query], batchSize: 1, onProgress: nil)
         guard let queryVec = queryVecs.first else {
             return RecallSearchResponse(results: [], indexingCount: totalIndexed)
         }
 
-        // 3. Load every stored embedding into memory. At ~1.5KB per vector
+        // 4. Load every stored embedding into memory. At ~1.5KB per vector
         //    and a realistic ceiling of ~10k entries, this is ~15MB — fine
         //    for an interactive search loop. Future-phase optimization (if
         //    needed): persistent kNN index instead of brute-force scan.
@@ -278,7 +325,7 @@ final actor RecallStack {
             return RecallSearchResponse(results: [], indexingCount: totalIndexed)
         }
 
-        // 4. Hydrate entries so we can both build session-level dedup keys
+        // 5. Hydrate entries so we can both build session-level dedup keys
         //    and emit `RecallResult`s without a second DB round-trip.
         let allEntries = try await vectorStore.entries(forIDs: ids)
         var idToEntry: [Int64: HistoryEntry] = [:]
@@ -293,7 +340,7 @@ final actor RecallStack {
             return "\(e.agent)|\(e.sessionID)"
         }
 
-        // 5. Top-K with (agent, session_id) dedup. Mirrors
+        // 6. Top-K with (agent, session_id) dedup. Mirrors
         //    recall/search.py's posture of one row per session.
         let hits = Search.topK(
             queryVector: queryVec,
@@ -303,7 +350,7 @@ final actor RecallStack {
             dedupKeys: dedupKeys
         )
 
-        // 6. Map to RecallResult. Skip any hit whose entry vanished between
+        // 7. Map to RecallResult. Skip any hit whose entry vanished between
         //    the embedding-load and the entry-hydrate (shouldn't happen —
         //    same DB read transaction conceptually — but be defensive).
         let results: [RecallResult] = hits.compactMap { hit in
@@ -351,5 +398,76 @@ final actor RecallStack {
             // doesn't show a misleading resume command.
             return ""
         }
+    }
+
+    // MARK: - Background indexing coordination.
+
+    /// Trigger indexing (or join an in-flight pass) and wait for it to
+    /// complete. The await is cancellable per the caller's Task; the
+    /// underlying detached refresh is NOT — canceling a search leaves the
+    /// indexing running so the next search joins it instead of restarting.
+    private func ensureIndexingComplete() async throws {
+        if let existing = indexingTask {
+            // Join the in-flight refresh. Caller cancel aborts only this
+            // await; the detached task keeps running.
+            try await existing.value
+            return
+        }
+        // Start a new detached refresh. `Task.detached` is the key — it
+        // breaks the parent-task cancellation chain so caller cancellation
+        // doesn't propagate into `indexer.refresh`. The slot-and-clear
+        // pattern coalesces concurrent ensure calls onto the same task.
+        let task = Task<Void, Error>.detached { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.runDetachedIndexing()
+                await self.clearIndexingTask()
+            } catch {
+                await self.clearIndexingTask()
+                throw error
+            }
+        }
+        indexingTask = task
+        try await task.value
+    }
+
+    /// The body of the detached indexing task. Calls `indexer.refresh`
+    /// with a progress callback that broadcasts back to the actor's
+    /// subscriber list. Runs as a non-isolated context so the `Task` slot
+    /// in `ensureIndexingComplete` is the only escape hatch from caller
+    /// cancellation.
+    private func runDetachedIndexing() async throws {
+        try await indexer.refresh(batchSize: 64, onProgress: { [weak self] done, total in
+            Task { [weak self] in
+                await self?.broadcastIndexingProgress(done: done, total: total)
+            }
+        })
+    }
+
+    /// Add a progress subscriber. Returns the id to use for unsubscribe.
+    /// Searches add themselves on entry and remove on exit (via `defer`).
+    private func subscribeIndexingProgress(
+        _ callback: @Sendable @escaping (Int, Int) -> Void
+    ) -> UUID {
+        let id = UUID()
+        indexingSubscribers[id] = callback
+        return id
+    }
+
+    /// Update `lastIndexingProgress` and forward to every active subscriber.
+    /// Called from the detached indexing task via an actor hop.
+    private func broadcastIndexingProgress(done: Int, total: Int) {
+        lastIndexingProgress = (done, total)
+        for callback in indexingSubscribers.values {
+            callback(done, total)
+        }
+    }
+
+    /// Clear the indexing-task slot. The next caller of
+    /// `ensureIndexingComplete` will start a fresh refresh (cheap when
+    /// cursors are already caught up). Called from the detached task
+    /// itself on completion or error.
+    private func clearIndexingTask() {
+        indexingTask = nil
     }
 }
