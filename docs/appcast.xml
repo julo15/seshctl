@@ -3,6 +3,66 @@
     <channel>
         <title>Seshctl</title>
         <item>
+            <title>0.5.0</title>
+            <pubDate>Wed, 27 May 2026 13:17:58 -0400</pubDate>
+            <sparkle:version>6</sparkle:version>
+            <sparkle:shortVersionString>0.5.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h1>Seshctl 0.5.0</h1>
+
+<h2>Native semantic search — no Python required</h2>
+
+<p>Seshctl&rsquo;s search box now runs entirely in-app. The standalone <code>recall</code> Python CLI is gone — embedding inference, vector storage, and top-K ranking are all native Swift, backed by a quantized CoreML model that ships inside the app bundle. No <code>pip install</code>, no <code>~/.local/share/recall/venv/</code>, no first-search HuggingFace download.</p>
+
+<p>The user experience is unchanged: type in the search box, results appear. On a fresh install the first query indexes your existing Claude Code, Codex, and Gemini transcripts in the background (progress shown in the search section). Subsequent searches are instant.</p>
+
+<p><strong>Migration for 0.4.x users:</strong> the old Python <code>recall</code> install at <code>~/.local/share/recall/venv/</code> is no longer used and can be removed at your leisure — Seshctl never touches it. To clean up, run <code>~/Documents/me/recall/uninstall.sh</code> (or wherever you originally installed recall from) and <code>trash ~/.local/share/recall ~/.local/bin/recall ~/.recall</code>. The new native index lives at <code>~/Library/Application Support/Seshctl/seshctl.sqlite</code> and builds from scratch on first search after the upgrade.</p>
+
+<p><strong>Privacy:</strong> indexed transcript text stays in the local seshctl SQLite — same locality as the prior <code>recall</code> implementation at <code>~/.recall/metadata.jsonl</code>, no network exposure. The CoreML model ships in the DMG and everything runs locally.</p>
+
+<h2>New row layout — stacked by default</h2>
+
+<p>Session rows now stack sender / branch / preview vertically in one full-width column: bold sender at the top, branch demoted to a smaller monotone label, preview below in the larger title style. Local and remote rows both use the new layout. The legacy two-column layout is still available in <strong>Settings → Appearance → Stacked row layout</strong> if you prefer it.</p>
+
+<p>With per-repo accent coloring on, the sender now picks up the repo&rsquo;s hashed accent so each row reads as one colored token per repo. Branch and worktree labels stay monotone — only the sender carries the accent. The unread accent bar and tree-view group dot are unchanged.</p>
+
+<h2>Live row recaps</h2>
+
+<p>Local Claude Code rows now show the assistant&rsquo;s streaming response as the row preview within ~2s of the first text block landing, instead of staying pinned to <code>You: &lt;last prompt&gt;</code> for the duration of a multi-tool-call turn. If you queue a follow-up mid-response, the row flips back to the user prompt.</p>
+
+<p>Pure-remote claude.ai Cowork rows get the same treatment: the row preview is now the latest assistant message (with the clock glyph) instead of the static session title.</p>
+
+<h2>Smaller UX polish</h2>
+
+<ul>
+<li><strong>Animated session-list reorders.</strong> Rows spring to their new positions when the order changes (e.g. a session bumps to the top after a new message), and selection follows the row across the reorder. First refresh after the panel reopens still snaps without animation.</li>
+<li><strong>Yesterday timestamps are context-aware.</strong> List view (time-sorted) shows yesterday rows as the clock time (e.g. <code>10:40 PM</code>) since the <code>Yesterday</code> section header already carries the day. Tree view (repo-grouped, no time headers) shows yesterday rows as <code>1d</code> instead of <code>Apr 14</code>.</li>
+<li><strong>Recall failures are now visible.</strong> When semantic search fails (timeout, crash, unknown error), the search section shows an orange triangle row with the first line of the failure message. Previously the spinner just vanished and you got nothing.</li>
+</ul>
+
+
+<h2>Fixes</h2>
+
+<ul>
+<li><strong><code>o</code> (open detail) now works on sessions that <code>cd</code>&rsquo;d into a worktree mid-session.</strong> Sessions that moved into <code>.claude/worktrees/&lt;name&gt;</code> after starting in the parent repo used to hit &ldquo;No transcript available&rdquo; because Claude re-derives the transcript path from the current cwd on every event. The same root cause was silently emptying those rows' previews. Resolved via a three-step path resolver: stored path → computed Claude path → conversation-id glob.</li>
+<li><strong>Row recap survives tool_use mid-turn.</strong> Any assistant turn ending in a tool_use sub-event (e.g. <code>/juplan</code>&rsquo;s interview prompts, <code>AskUserQuestion</code>) was clobbering the captured assistant text, so the row fell back to the last user prompt. Fixed by treating only <code>user</code> events as turn boundaries.</li>
+<li><strong>Transcript view no longer hangs on held navigation keys.</strong> Held <code>Ctrl+B</code> (or <code>Ctrl+F</code>/<code>D</code>/<code>U</code>, <code>j</code>/<code>k</code>) on a large transcript used to saturate the main run loop at ~30 Hz key-repeat. Now snappy: cached scroll-view lookup, synchronous bounds updates with no per-keystroke animation. <code>gg</code> and <code>G</code> still animate.</li>
+</ul>
+
+
+<h2>Under the hood</h2>
+
+<ul>
+<li><code>all-MiniLM-L6-v2</code> sentence embeddings, INT8-weight-quantized + FP32 compute, converted to CoreML and bundled at ~22MB.</li>
+<li>Tokenization via <code>huggingface/swift-transformers</code> (pinned to 1.3.3). Token IDs are byte-identical to the Python <code>tokenizers</code> library — there&rsquo;s a parity test asserting this against 20 reference strings.</li>
+<li>Storage and incremental indexing in seshctl&rsquo;s existing GRDB-backed SQLite via three new <code>recall_*</code> tables.</li>
+<li>DMG size goes from ~10MB to ~37MB — one-time cost on the full download; Sparkle deltas stay small because the model is byte-stable across releases.</li>
+</ul>
+
+]]></description>
+            <enclosure url="https://github.com/julo15/seshctl/releases/download/v0.5.0/Seshctl-0.5.0.dmg" length="38486924" type="application/octet-stream" sparkle:edSignature="mi0Yw61vz0PORYmrwN6io3uWviqrG+ZCccdJyABkcrbQIlPlvHblVTEzHE1E0HVQAHTPFnwgFa6ZTwoW+5k7AA=="/>
+        </item>
+        <item>
             <title>0.4.1</title>
             <pubDate>Thu, 21 May 2026 11:56:33 -0400</pubDate>
             <sparkle:version>5</sparkle:version>

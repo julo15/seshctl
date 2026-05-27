@@ -121,6 +121,20 @@ public actor EmbeddingService {
         case tokenizerMissing(String)
     }
 
+    /// Test/dev helper: return the bundled tokenizer folder URL if it can
+    /// be resolved, or `nil` otherwise. Goes through the same two-path
+    /// fallback as the production initializer (`.app/Contents/Resources/Models/`
+    /// then SwiftPM `Bundle.module/Models/`), so tests that only need the
+    /// tokenizer folder don't have to duplicate the lookup logic — and
+    /// crucially don't fall over when `Bundle.module` is the test target's
+    /// bundle (which does not carry `Models/`).
+    static func bundledTokenizerFolderURL() -> URL? {
+        switch resolveBundledResources() {
+        case .success(let r): return r.tokenizerFolderURL
+        case .failure: return nil
+        }
+    }
+
     /// Locate the bundled `.mlpackage` and tokenizer folder. Returns a
     /// `.failure(.modelMissing)` when neither candidate path has the
     /// model, and `.failure(.tokenizerMissing)` when the model exists but
