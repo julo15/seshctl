@@ -8,6 +8,23 @@
 // per-chunk cancellation actually fires within `perChunkDelayNanos` of
 // the caller canceling — instead of the real EmbeddingService's
 // "in-flight chunk runs to completion" worst case.
+//
+// ## Intentional semantic differences vs. production `EmbeddingService`
+//
+// - **Cancellation is doubly responsive.** Both `Task.checkCancellation()`
+//   AND `Task.sleep(...)` honor cancellation. The real `EmbeddingService`
+//   only checks at chunk boundaries; mid-chunk CoreML.prediction is
+//   uninterruptible. Don't write "cancel latency ≤ X ms" tests against
+//   the mock — they'd be too generous to translate to production.
+//
+// - **Output vectors are all `0.1`, NOT L2-unit-normalized** (norm ≈ 1.96).
+//   `Search.topK` documents but does not `precondition`-check unit-norm,
+//   and with all-equal vectors every cosine dot product is identical.
+//   That's fine for `entryCount`/progress-event assertions but would
+//   make any "expect top result is X" assertion non-deterministic.
+//   **MockEmbedder is timing-only — for content-assertion tests, use
+//   the real `EmbeddingService()` (the existing `endToEnd…` test does
+//   this).**
 
 import Foundation
 @testable import SeshctlRecall
@@ -33,16 +50,17 @@ actor MockEmbedder: Embedder {
         var results: [[Float]] = []
         results.reserveCapacity(total)
 
+        // Hoisted constant — every text gets the same dummy vector. See the
+        // file-level doc comment about the (intentional) non-unit-norm.
+        let dummyVector = [Float](repeating: 0.1, count: vectorDim)
+
         var index = 0
         while index < total {
             try Task.checkCancellation()
             try await Task.sleep(nanoseconds: perChunkDelayNanos)
             let upper = min(index + chunkSize, total)
             for _ in index..<upper {
-                // Deterministic dummy vector — distinguishable across calls
-                // is not needed because the timing-sensitive tests don't
-                // assert on vector content.
-                results.append([Float](repeating: 0.1, count: vectorDim))
+                results.append(dummyVector)
             }
             index = upper
             onProgress?(index, total)
