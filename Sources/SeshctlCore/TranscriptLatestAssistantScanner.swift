@@ -20,10 +20,12 @@ import Foundation
 /// {"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"AskUserQuestion",...}]}}
 /// ```
 ///
-/// Turn boundaries are `user` events (either a fresh prompt or a
-/// `tool_result`-bearing user message). Consecutive `assistant` events
-/// with no intervening `user` event are sub-events of the same logical
-/// turn, even if the trailing event is tool_use-only.
+/// Turn boundaries for this scanner are *fresh-prompt* `user` events
+/// only; `tool_result`-only user events are mid-turn continuations and
+/// don't reset the state machine (see Rule 2 below for the precise
+/// content-shape check). Consecutive `assistant` events with no
+/// intervening fresh-prompt `user` event are sub-events of the same
+/// logical turn, even if the trailing event is tool_use-only.
 ///
 /// State-machine rules:
 ///
@@ -110,6 +112,7 @@ public enum TranscriptLatestAssistantScanner {
                 // `tool_result` is a continuation; anything else (string
                 // content, array with text/image/etc., missing/malformed) is
                 // treated as a fresh prompt and clears.
+                // Keep iff content is a non-empty array of pure tool_result blocks.
                 if let message = obj["message"] as? [String: Any],
                    let content = message["content"] as? [[String: Any]],
                    !content.isEmpty,
