@@ -17,6 +17,44 @@ import Testing
 
 // MARK: - MockAdapter (mirrors the pattern in IndexerTests.swift).
 
+/// Adapter that returns DIFFERENT batches based on the cursor it's given:
+/// first call (cursor == nil) emits `firstBatch` + `firstCursor`; second
+/// call (cursor == firstCursor) emits `secondBatch` + `secondCursor`; any
+/// later call is a no-op. Used by the back-to-back-refresh tests where each
+/// search needs real entries to index so the indexer actually fires
+/// per-chunk progress events.
+private actor VaryingAdapter: Adapter {
+    nonisolated let name: String
+    nonisolated let firstBatch: [HistoryEntry]
+    nonisolated let secondBatch: [HistoryEntry]
+    nonisolated let firstCursor: Data
+    nonisolated let secondCursor: Data
+
+    init(
+        name: String,
+        firstBatch: [HistoryEntry],
+        secondBatch: [HistoryEntry],
+        firstCursor: Data,
+        secondCursor: Data
+    ) {
+        self.name = name
+        self.firstBatch = firstBatch
+        self.secondBatch = secondBatch
+        self.firstCursor = firstCursor
+        self.secondCursor = secondCursor
+    }
+
+    func load(cursor: Data?) async throws -> (entries: [HistoryEntry], newCursor: Data) {
+        if cursor == nil {
+            return (firstBatch, firstCursor)
+        } else if cursor == firstCursor {
+            return (secondBatch, secondCursor)
+        } else {
+            return ([], cursor ?? Data())
+        }
+    }
+}
+
 private actor MockAdapter: Adapter {
     nonisolated let name: String
     nonisolated let entries: [HistoryEntry]
@@ -141,17 +179,19 @@ struct RecallServiceTests {
         // not the detached refresh itself. The DB keeps gaining rows after
         // the cancel.
         //
-        // 200 entries × ~50ms per CoreML predict ≈ 10s total embed time
-        // across 4 default-batch-size (64) chunks. The polling loop waits
-        // for the first chunk to land (entryCount > 0), cancels, then
-        // verifies entryCount keeps growing.
+        // 130 entries × ~50ms per CoreML predict ≈ 6.5s total embed time
+        // across 3 default-batch-size (64) chunks (64 + 64 + 2). Sized to
+        // stay comfortably under AGENTS.md's 30s test-timeout guidance
+        // even on cold-cache CI runners. The polling loop waits for the
+        // first chunk to land (entryCount > 0), cancels, then verifies
+        // entryCount keeps growing.
         //
         // Without `Task.detached` in `RecallStack.ensureIndexingComplete`,
         // the cancel would propagate into `indexer.refresh` and finalCount
         // would stay at countAtCancel — the test would fail.
         RecallService._resetForTests()
         let db = try SeshctlDatabase.temporary()
-        let entries = (0..<200).map { i in
+        let entries = (0..<130).map { i in
             makeEntry(text: "cancellation-test-entry-\(i)", sessionID: "S\(i)")
         }
         let mock = MockAdapter(name: "claude", entries: entries, cursor: Data("v1".utf8))
@@ -185,6 +225,70 @@ struct RecallServiceTests {
         #expect(
             finalCount > countAtCancel,
             "indexing should have continued past cancel — countAtCancel=\(countAtCancel), finalCount=\(finalCount)"
+        )
+    }
+
+    @Test("back-to-back refreshes both broadcast intermediate progress (passID isolates passes)")
+    func backToBackRefreshesEmitProgress() async throws {
+        // H-1 regression: a late progress Task from Run 1 can land on the
+        // actor AFTER Run 2 has cleared the seed, re-poisoning
+        // lastIndexingProgress. Without the passID guard, every Run 2
+        // chunk would then look "out-of-order" to the monotonic-done
+        // guard and the UI bar would get stuck at Run 1's final value.
+        //
+        // This test exercises the back-to-back path: Run 1 indexes its
+        // batch, Run 2 indexes a SECOND batch (via VaryingAdapter), Run 2
+        // subscribes a collector. Without passID isolation, intermediate
+        // events from Run 2 could be dropped. With passID, Run 1's late
+        // events are recognized as stale and don't affect Run 2.
+        //
+        // The test isn't a perfect race-reproducer (timing is
+        // non-deterministic), but it pins the happy path and catches the
+        // straightforward regression where someone deletes the passID
+        // guard.
+        RecallService._resetForTests()
+        let db = try SeshctlDatabase.temporary()
+        let firstBatch = (0..<80).map { i in
+            makeEntry(text: "first-batch-entry-\(i)", sessionID: "S1-\(i)")
+        }
+        let secondBatch = (0..<80).map { i in
+            makeEntry(text: "second-batch-entry-\(i)", sessionID: "S2-\(i)")
+        }
+        let adapter = VaryingAdapter(
+            name: "claude",
+            firstBatch: firstBatch,
+            secondBatch: secondBatch,
+            firstCursor: Data("cursor-1".utf8),
+            secondCursor: Data("cursor-2".utf8)
+        )
+        RecallService.configureForTesting(database: db, adapters: [adapter])
+
+        // Run 1: drives the first batch through the index.
+        _ = try await RecallService.search(query: "x")
+
+        // Run 2: subscribe a collector + drive the second batch.
+        actor Collector {
+            private(set) var events: [(done: Int, total: Int)] = []
+            func record(done: Int, total: Int) { events.append((done, total)) }
+            func snapshot() -> [(done: Int, total: Int)] { events }
+        }
+        let collector = Collector()
+        let onIndexing: @Sendable (Int, Int) -> Void = { done, total in
+            Task { await collector.record(done: done, total: total) }
+        }
+        _ = try await RecallService.search(query: "y", onIndexing: onIndexing)
+        // Give pending progress Tasks a moment to land on the collector.
+        for _ in 0..<20 { await Task.yield() }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let events = await collector.snapshot()
+        // At least one intermediate event (done < total) must have been
+        // broadcast to the Run 2 subscriber — proves that passID isolation
+        // didn't drop them as stale.
+        let intermediates = events.filter { $0.done < $0.total }
+        #expect(
+            intermediates.isEmpty == false,
+            "Run 2 should have broadcast at least one intermediate progress event; got \(events)"
         )
     }
 

@@ -233,6 +233,16 @@ final actor RecallStack {
     /// receive the current progress instead of waiting for the next batch.
     private var lastIndexingProgress: (done: Int, total: Int)?
 
+    /// Monotonically-increasing tag identifying the current indexing pass.
+    /// `runDetachedIndexing` increments this before starting each refresh and
+    /// captures the value for use in the progress callback. The broadcast
+    /// helper drops events whose `passID` doesn't match the current value —
+    /// kills the cross-pass leak where a late-arriving progress Task from
+    /// Run 1 lands on the actor AFTER Run 2 has already cleared the seed
+    /// and re-poisons `lastIndexingProgress`. Without this, Run 2's chunks
+    /// look "out-of-order" to the monotonic-done guard and get dropped.
+    private var indexingPassID: Int = 0
+
     private init(
         database: SeshctlDatabase,
         vectorStore: VectorStore,
@@ -418,10 +428,12 @@ final actor RecallStack {
         // doesn't propagate into `indexer.refresh`. The slot-and-clear
         // pattern coalesces concurrent ensure calls onto the same task.
         //
-        // Strong `self` capture is safe: the detached task is held by
-        // `indexingTask` on `self`, so `self` outlives the task body.
-        // The inner progress-hop Task (in runDetachedIndexing) uses
-        // `[weak self]` for symmetry with the actor-method release timing.
+        // Strong `self` capture is safe: the detached Task itself retains
+        // `self` for the lifetime of the closure body — independent of any
+        // external hold on the Task handle. The `indexingTask` slot is
+        // just a coalescing handle for concurrent `ensureIndexingComplete`
+        // callers; clearing it from `clearIndexingTask` (which is called
+        // from inside the body) doesn't shorten the body's `self` lifetime.
         let task = Task<Void, Error>.detached { [self] in
             do {
                 try await self.runDetachedIndexing()
@@ -441,13 +453,22 @@ final actor RecallStack {
     /// in `ensureIndexingComplete` is the only escape hatch from caller
     /// cancellation.
     private func runDetachedIndexing() async throws {
-        // Clear any prior pass's final value so a new search joining the
-        // fresh refresh BEFORE the first chunk fires doesn't see a stale
-        // seed (e.g. "8000/8000" left over from the last completed run).
+        // Tag this pass + clear any prior pass's final value so a new
+        // search joining the fresh refresh BEFORE the first chunk fires
+        // doesn't see a stale seed (e.g. "8000/8000" left over from the
+        // last completed run). The passID tag also defends against
+        // late-arriving progress Tasks from the prior pass — see
+        // `broadcastIndexingProgress`.
+        indexingPassID += 1
+        let myPassID = indexingPassID
         lastIndexingProgress = nil
         try await indexer.refresh(batchSize: 64, onProgress: { [weak self] done, total in
             Task { [weak self] in
-                await self?.broadcastIndexingProgress(done: done, total: total)
+                await self?.broadcastIndexingProgress(
+                    passID: myPassID,
+                    done: done,
+                    total: total
+                )
             }
         })
     }
@@ -465,14 +486,26 @@ final actor RecallStack {
     /// Update `lastIndexingProgress` and forward to every active subscriber.
     /// Called from the detached indexing task via an actor hop.
     ///
-    /// Drops out-of-order events: each per-chunk progress event spawns its
-    /// own Task to hop back to the actor, and the actor's executor may
-    /// schedule them out of FIFO order. Without the guard, `lastIndexingProgress`
-    /// could briefly go backward and a search joining mid-flight would see
-    /// a stale snapshot (also surfaces as UI progress-bar jitter). The
-    /// stale event is silently dropped — subscribers may occasionally miss
-    /// an intermediate value, but the FINAL `(done == total)` always lands.
-    private func broadcastIndexingProgress(done: Int, total: Int) {
+    /// Drops two classes of stale events:
+    ///
+    /// 1. **Cross-pass leakage** — a progress Task spawned by Run 1 that
+    ///    lands on the actor AFTER Run 2 has started clears `passID` will
+    ///    be discarded by the passID guard. Without this, Run 2's first
+    ///    chunks look "out-of-order" to the monotonic-done guard and the
+    ///    UI bar gets stuck at Run 1's final value.
+    ///
+    /// 2. **Intra-pass FIFO violation** — each per-chunk progress event
+    ///    spawns its own Task to hop back to the actor, and the actor's
+    ///    executor may schedule them out of FIFO order within a single
+    ///    pass. The monotonic-done guard discards the stale event so
+    ///    `lastIndexingProgress` never goes backward and the UI never
+    ///    jitters.
+    ///
+    /// Subscribers may occasionally miss an intermediate value but the
+    /// FINAL `(done == total)` always lands (it's never dropped by either
+    /// guard — `prev.done > done` is false at the terminal value).
+    private func broadcastIndexingProgress(passID: Int, done: Int, total: Int) {
+        guard passID == indexingPassID else { return }
         if let prev = lastIndexingProgress, prev.done > done, prev.total == total {
             return
         }

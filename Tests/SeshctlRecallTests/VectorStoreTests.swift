@@ -288,4 +288,18 @@ struct VectorStoreTests {
         let result = try await store.filterAlreadyIndexed([])
         #expect(result.isEmpty)
     }
+
+    @Test("filterAlreadyIndexed on empty store returns ALL inputs (fast path)")
+    func filterAlreadyIndexedEmptyStore() async throws {
+        // Exercises the `guard !existing.isEmpty else { return entries }`
+        // fast path added to skip the per-entry Set lookup walk on the
+        // first-ever-refresh case.
+        let store = try makeStore()
+        let entries = (0..<5).map { makeEntry(seed: $0) }
+        let result = try await store.filterAlreadyIndexed(entries)
+        #expect(result.count == 5)
+        // Preserves caller order — guarded against a future refactor that
+        // accidentally sorts or filters.
+        #expect(result.map(\.text) == entries.map(\.text))
+    }
 }
