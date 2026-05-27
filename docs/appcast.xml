@@ -3,6 +3,42 @@
     <channel>
         <title>Seshctl</title>
         <item>
+            <title>0.5.0</title>
+            <pubDate>Wed, 27 May 2026 13:17:58 -0400</pubDate>
+            <sparkle:version>6</sparkle:version>
+            <sparkle:shortVersionString>0.5.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h1>Seshctl 0.5.0</h1>
+
+<h2>Native semantic search — no Python required</h2>
+
+<p>Seshctl&rsquo;s search box now runs entirely in-app. The standalone <code>recall</code> Python CLI is gone — embedding inference, vector storage, and top-K ranking are all native Swift, backed by a quantized CoreML model that ships inside the app bundle. No <code>pip install</code>, no <code>~/.local/share/recall/venv/</code>, no first-search HuggingFace download.</p>
+
+<p>The user experience is unchanged: type in the search box, results appear. On a fresh install the first query indexes your existing Claude Code, Codex, and Gemini transcripts in the background (progress shown in the search section). Subsequent searches are instant.</p>
+
+<h2>Migration note for 0.4.x users</h2>
+
+<p>The old Python <code>recall</code> install at <code>~/.local/share/recall/venv/</code> is no longer used and can be removed at your leisure — Seshctl never touches it. To clean up, run <code>~/Documents/me/recall/uninstall.sh</code> (or wherever you originally installed recall from) and <code>trash ~/.local/share/recall ~/.local/bin/recall ~/.recall</code>.</p>
+
+<p>The new native index lives alongside the rest of seshctl&rsquo;s state in the local SQLite at <code>~/Library/Application Support/Seshctl/seshctl.sqlite</code>. It builds from scratch on first search after the upgrade — usually under a minute, with progress shown in the panel.</p>
+
+<h2>Privacy</h2>
+
+<p>Semantic search stores indexed transcript text in the local seshctl SQLite at <code>~/Library/Application Support/Seshctl/seshctl.sqlite</code> — same locality as the prior <code>recall</code> implementation at <code>~/.recall/metadata.jsonl</code>. No network exposure: the CoreML model ships in the DMG and everything runs locally.</p>
+
+<h2>Under the hood</h2>
+
+<ul>
+<li><code>all-MiniLM-L6-v2</code> sentence embeddings, INT8-weight-quantized + FP32 compute, converted to CoreML and bundled at ~22MB.</li>
+<li>Tokenization via <code>huggingface/swift-transformers</code> (pinned to 1.3.3). Token IDs are byte-identical to the Python <code>tokenizers</code> library — there&rsquo;s a parity test asserting this against 20 reference strings.</li>
+<li>Storage and incremental indexing in seshctl&rsquo;s existing GRDB-backed SQLite via three new <code>recall_*</code> tables.</li>
+<li>DMG size goes from ~10MB to ~37MB — one-time cost on the full download; Sparkle deltas stay small because the model is byte-stable across releases.</li>
+</ul>
+
+]]></description>
+            <enclosure url="https://github.com/julo15/seshctl/releases/download/v0.5.0/Seshctl-0.5.0.dmg" length="38486924" type="application/octet-stream" sparkle:edSignature="mi0Yw61vz0PORYmrwN6io3uWviqrG+ZCccdJyABkcrbQIlPlvHblVTEzHE1E0HVQAHTPFnwgFa6ZTwoW+5k7AA=="/>
+        </item>
+        <item>
             <title>0.4.1</title>
             <pubDate>Thu, 21 May 2026 11:56:33 -0400</pubDate>
             <sparkle:version>5</sparkle:version>
