@@ -239,4 +239,53 @@ struct VectorStoreTests {
         let different = HistoryEntry.textHash(for: "hello world!")
         #expect(h1 != different)
     }
+
+    @Test("filterAlreadyIndexed returns only entries not yet persisted")
+    func filterAlreadyIndexedReturnsOnlyNew() async throws {
+        let store = try makeStore()
+        let persisted = (0..<3).map { makeEntry(seed: $0) }
+        let vectors = (0..<3).map { makeVector(seed: $0) }
+        _ = try await store.insert(entries: persisted, embeddings: vectors)
+
+        // Mix: 3 already-in-DB + 2 new.
+        let new = (3..<5).map { makeEntry(seed: $0) }
+        let mixed = persisted + new
+        let remaining = try await store.filterAlreadyIndexed(mixed)
+        #expect(remaining.count == 2)
+        #expect(Set(remaining.map(\.text)) == Set(["entry-3", "entry-4"]))
+    }
+
+    @Test("filterAlreadyIndexed treats different sessions as distinct (composite dedup key)")
+    func filterAlreadyIndexedSessionDistinct() async throws {
+        let store = try makeStore()
+        // Same text, same agent, different sessions — both should remain
+        // "new" until persisted independently.
+        let aText = "shared"
+        let entryA = HistoryEntry(
+            id: nil, agent: "claude", role: "user",
+            sessionID: "session-A", project: "/p",
+            timestamp: 1.0, text: aText,
+            textHash: HistoryEntry.textHash(for: aText)
+        )
+        let entryB = HistoryEntry(
+            id: nil, agent: "claude", role: "user",
+            sessionID: "session-B", project: "/p",
+            timestamp: 2.0, text: aText,
+            textHash: HistoryEntry.textHash(for: aText)
+        )
+        _ = try await store.insert(
+            entries: [entryA],
+            embeddings: [makeVector(seed: 0)]
+        )
+        let remaining = try await store.filterAlreadyIndexed([entryA, entryB])
+        #expect(remaining.count == 1, "session-B should still be 'new'")
+        #expect(remaining.first?.sessionID == "session-B")
+    }
+
+    @Test("filterAlreadyIndexed on empty input returns empty")
+    func filterAlreadyIndexedEmpty() async throws {
+        let store = try makeStore()
+        let result = try await store.filterAlreadyIndexed([])
+        #expect(result.isEmpty)
+    }
 }

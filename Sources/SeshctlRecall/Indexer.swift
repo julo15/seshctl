@@ -37,28 +37,34 @@ public actor Indexer {
     /// For each registered adapter, in order:
     /// 1. Read the persisted cursor (or `nil` on first run).
     /// 2. Ask the adapter to walk + emit fresh entries past the cursor.
-    /// 3. Embed the texts in `batchSize`-sized chunks via `EmbeddingService`.
-    /// 4. Insert (entries, embeddings) into the store. UNIQUE(text_hash)
-    ///    drops any duplicates left from re-walks.
-    /// 5. Persist the new cursor — only after the insert succeeds, so a
-    ///    crash mid-embed re-walks the same range on the next refresh.
+    /// 3. Filter out entries already in the DB from a prior canceled
+    ///    refresh (resumability — see `VectorStore.filterAlreadyIndexed`).
+    /// 4. For each chunk of `batchSize` entries:
+    ///    a. Check cancellation.
+    ///    b. Embed the chunk's texts via `EmbeddingService`.
+    ///    c. Insert (chunk entries, embeddings) into the store.
+    ///    d. Fire the progress callback.
+    /// 5. Persist the new cursor — only after ALL chunks for the adapter
+    ///    succeed, so a cancellation mid-adapter leaves the cursor stale
+    ///    and the resumed refresh re-walks (cheap) and re-filters (skips
+    ///    already-persisted via the composite UNIQUE constraint).
     ///
     /// Drift check runs first: if entry/embedding counts disagree, wipe
     /// everything (including cursors) and re-walk from the beginning.
     ///
-    /// Progress: `onProgress(done, total)` fires after each adapter's
-    /// batch completes. `total` is the cumulative count of entries seen
-    /// across adapters so far — it grows as adapters report new batches,
-    /// rather than being known up front. The final call always satisfies
-    /// `done == total`.
+    /// Progress: `onProgress(done, total)` fires once after the filter
+    /// step (to credit already-persisted entries from a prior canceled
+    /// run) and once per chunk thereafter. `total` is the cumulative
+    /// count of entries seen across adapters so far. The final call
+    /// satisfies `done == total` unless cancellation fired.
     public func refresh(
         batchSize: Int = 64,
         onProgress: (@Sendable (Int, Int) -> Void)? = nil
     ) async throws {
         if try await store.detectDrift() {
-            // Stderr log is the temporary surface; Phase 6/8 will wire to
-            // ~/Library/Logs/Seshctl/install.log via the existing
-            // appendInstallLog helper.
+            // Stderr log is the temporary surface; routing to
+            // ~/Library/Logs/Seshctl/install.log via appendInstallLog is a
+            // known follow-up.
             FileHandle.standardError.write(Data(
                 "[recall] drift detected (entries vs embeddings count mismatch); clearing index\n".utf8
             ))
@@ -69,41 +75,56 @@ public actor Indexer {
         var total = 0
 
         for adapter in adapters {
+            try Task.checkCancellation()
             let cursor = try await store.readCursor(adapterName: adapter.name)
-            let (newEntries, newCursor) = try await adapter.load(cursor: cursor)
-            guard !newEntries.isEmpty else {
+            let (allNewEntries, newCursor) = try await adapter.load(cursor: cursor)
+            guard !allNewEntries.isEmpty else {
                 // Even with zero new entries, advance the cursor so future
-                // refreshes don't re-walk the same files. Adapters that
-                // produce a stable cursor with no entries (e.g. "scanned
-                // everything, nothing new") will land here.
+                // refreshes don't re-walk the same files.
                 try await store.writeCursor(adapterName: adapter.name, cursor: newCursor)
                 continue
             }
 
-            total += newEntries.count
-            // Capture pre-encode `done` so the embedder's per-batch callback
-            // can be lifted to the global (cross-adapter) progress space.
-            // Without this, the user sees zero progress until ALL of an
-            // adapter's entries finish embedding — ~7 minutes for an
-            // 8000-row Claude history.
-            let baseDone = done
-            let totalSnapshot = total
-            let embeddings = try await embedder.encode(
-                newEntries.map(\.text),
-                batchSize: batchSize,
-                onProgress: { batchDone, _ in
-                    onProgress?(baseDone + batchDone, totalSnapshot)
-                }
-            )
-            precondition(
-                embeddings.count == newEntries.count,
-                "Indexer: embedder returned \(embeddings.count) vectors for \(newEntries.count) inputs"
-            )
-            try await store.insert(entries: newEntries, embeddings: embeddings)
-            try await store.writeCursor(adapterName: adapter.name, cursor: newCursor)
+            // Resumability: filter out entries already in the DB from a
+            // prior canceled refresh. The composite UNIQUE
+            // (text_hash, agent, session_id) makes this load-bearing —
+            // without the filter we'd re-embed entries we already paid
+            // CoreML cost for, just for the INSERT OR IGNORE to drop them.
+            let toEmbed = try await store.filterAlreadyIndexed(allNewEntries)
+            let alreadyDone = allNewEntries.count - toEmbed.count
 
-            done += newEntries.count
+            total += allNewEntries.count
+            done += alreadyDone
+            // Credit already-persisted work to progress immediately so the
+            // user sees the "we resumed from N/total" state up front.
             onProgress?(done, total)
+
+            let chunkSize = max(1, batchSize)
+            var chunkStart = 0
+            while chunkStart < toEmbed.count {
+                try Task.checkCancellation()
+                let chunkEnd = min(chunkStart + chunkSize, toEmbed.count)
+                let chunk = Array(toEmbed[chunkStart..<chunkEnd])
+                let chunkEmbeddings = try await embedder.encode(
+                    chunk.map(\.text),
+                    batchSize: chunk.count
+                )
+                precondition(
+                    chunkEmbeddings.count == chunk.count,
+                    "Indexer: embedder returned \(chunkEmbeddings.count) vectors for \(chunk.count) inputs"
+                )
+                try await store.insert(entries: chunk, embeddings: chunkEmbeddings)
+                done += chunk.count
+                onProgress?(done, total)
+                chunkStart = chunkEnd
+            }
+
+            // Cursor only after ALL of this adapter's entries are persisted.
+            // A cancellation mid-loop above leaves the cursor stale; the
+            // resumed refresh re-walks (cheap) and filterAlreadyIndexed
+            // skips what we already wrote.
+            try Task.checkCancellation()
+            try await store.writeCursor(adapterName: adapter.name, cursor: newCursor)
         }
     }
 }

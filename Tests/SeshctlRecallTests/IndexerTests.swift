@@ -210,4 +210,58 @@ struct IndexerTests {
         let cursor = try await store.readCursor(adapterName: "mock-claude")
         #expect(cursor == Data("fresh".utf8))
     }
+
+    @Test("refresh skips already-persisted entries (resume-after-cancel path)")
+    func refreshSkipsAlreadyPersistedEntries() async throws {
+        let service = try await EmbeddingService()
+        let db = try SeshctlDatabase.temporary()
+        let store = VectorStore(database: db)
+
+        // Simulate: the prior refresh ran far enough to persist 4 of 7
+        // entries into the DB but was canceled before writing the cursor.
+        let allEntries = (0..<7).map { makeEntry(seed: $0) }
+        let preExisting = Array(allEntries.prefix(4))
+        let preVectors = preExisting.map { _ in [Float](repeating: 0.2, count: 384) }
+        _ = try await store.insert(entries: preExisting, embeddings: preVectors)
+        // NOTE: deliberately did NOT write the adapter's cursor — that's
+        // the canceled-before-cursor-write state we're testing.
+
+        // Adapter returns ALL 7 entries (it re-walked because cursor is nil).
+        let adapter = MockAdapter(
+            name: "mock-claude",
+            entries: allEntries,
+            cursor: Data("end".utf8)
+        )
+
+        actor ProgressSink {
+            private(set) var calls: [(Int, Int)] = []
+            func record(_ d: Int, _ t: Int) { calls.append((d, t)) }
+            func snapshot() -> [(Int, Int)] { calls }
+        }
+        let sink = ProgressSink()
+
+        let indexer = Indexer(store: store, embedder: service, adapters: [adapter])
+        try await indexer.refresh(batchSize: 4, onProgress: { d, t in
+            Task { await sink.record(d, t) }
+        })
+        for _ in 0..<10 { await Task.yield() }
+
+        // All 7 are now in the DB (no dupes from the composite UNIQUE).
+        let count = try await store.entryCount()
+        #expect(count == 7)
+
+        // Cursor is now written — adapter is "complete".
+        let cursor = try await store.readCursor(adapterName: "mock-claude")
+        #expect(cursor == Data("end".utf8))
+
+        // Progress credits the 4 already-persisted entries up front, then
+        // climbs as the remaining 3 finish embedding.
+        let progress = await sink.snapshot()
+        #expect(progress.isEmpty == false)
+        // First progress fire should already be >= 4 (the resumed credit).
+        #expect(progress.first!.0 >= 4, "expected the resumed credit before any embedding")
+        // Final progress fire should be 7/7.
+        #expect(progress.last?.0 == 7)
+        #expect(progress.last?.1 == 7)
+    }
 }

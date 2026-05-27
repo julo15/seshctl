@@ -241,6 +241,11 @@ public actor EmbeddingService {
 
         var index = 0
         while index < total {
+            // Cooperative cancellation point: when the UI cancels the search
+            // task (user starts a new query, presses esc), the in-flight
+            // embed bails between chunks instead of running to completion
+            // and competing with the new search for the same actor.
+            try Task.checkCancellation()
             let upper = min(index + chunkSize, total)
             let chunk = Array(texts[index..<upper])
             let tokenized = await tokenizer.encode(chunk)

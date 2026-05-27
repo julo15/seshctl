@@ -153,6 +153,52 @@ public actor VectorStore {
         }
     }
 
+    /// Return the subset of `entries` whose `(text_hash, agent, session_id)`
+    /// triple is NOT already in `recall_entries`. Used by `Indexer.refresh`
+    /// to make canceled-then-resumed indexing cheap: the adapter still
+    /// re-walks the same transcripts (cheap), but only entries not yet
+    /// persisted go through the expensive embed step.
+    ///
+    /// Loads ALL existing triples into a Set once per call (8k rows × ~80
+    /// bytes = ~640KB resident, trivial). Don't call this in a hot loop.
+    public func filterAlreadyIndexed(_ entries: [HistoryEntry]) throws -> [HistoryEntry] {
+        guard !entries.isEmpty else { return [] }
+        let existing = try loadExistingDedupKeys()
+        return entries.filter { entry in
+            !existing.contains(Self.dedupKey(
+                textHash: entry.textHash,
+                agent: entry.agent,
+                sessionID: entry.sessionID
+            ))
+        }
+    }
+
+    private func loadExistingDedupKeys() throws -> Set<String> {
+        try database.dbPool.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: "SELECT text_hash, agent, session_id FROM recall_entries"
+            )
+            var keys = Set<String>()
+            keys.reserveCapacity(rows.count)
+            for row in rows {
+                keys.insert(Self.dedupKey(
+                    textHash: row["text_hash"],
+                    agent: row["agent"],
+                    sessionID: row["session_id"]
+                ))
+            }
+            return keys
+        }
+    }
+
+    private static func dedupKey(textHash: String, agent: String, sessionID: String) -> String {
+        // `|` is not a valid char in either text_hash (hex SHA-256), agent
+        // (lowercase ASCII), or session_id (uuid-ish), so collisions are
+        // structurally impossible.
+        "\(textHash)|\(agent)|\(sessionID)"
+    }
+
     /// Total number of rows in `recall_entries`. Used for indexing UX
     /// ("indexing N entries") and tests.
     public func entryCount() throws -> Int {
