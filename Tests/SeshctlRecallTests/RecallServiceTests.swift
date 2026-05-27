@@ -179,35 +179,40 @@ struct RecallServiceTests {
         // not the detached refresh itself. The DB keeps gaining rows after
         // the cancel.
         //
-        // 130 entries × ~50ms per CoreML predict ≈ 6.5s total embed time
-        // across 3 default-batch-size (64) chunks (64 + 64 + 2). Sized to
-        // stay comfortably under AGENTS.md's 30s test-timeout guidance
-        // even on cold-cache CI runners. The polling loop waits for the
-        // first chunk to land (entryCount > 0), cancels, then verifies
-        // entryCount keeps growing.
+        // Uses MockEmbedder with a 30ms per-chunk delay so the test runs
+        // in <500ms total (vs ~6.5s with the real CoreML embedder) and
+        // doesn't depend on CoreML wall-clock or the bundled model. The
+        // indexer's batchSize is 64, so 150 entries → 3 chunks × 30ms =
+        // ~90ms of embed work. Poll at 10ms intervals for the first
+        // chunk to land, cancel, poll for further growth.
         //
         // Without `Task.detached` in `RecallStack.ensureIndexingComplete`,
         // the cancel would propagate into `indexer.refresh` and finalCount
         // would stay at countAtCancel — the test would fail.
         RecallService._resetForTests()
         let db = try SeshctlDatabase.temporary()
-        let entries = (0..<130).map { i in
+        let entries = (0..<150).map { i in
             makeEntry(text: "cancellation-test-entry-\(i)", sessionID: "S\(i)")
         }
         let mock = MockAdapter(name: "claude", entries: entries, cursor: Data("v1".utf8))
-        RecallService.configureForTesting(database: db, adapters: [mock])
+        let embedder = MockEmbedder(perChunkDelayNanos: 30_000_000)
+        RecallService.configureForTesting(
+            database: db,
+            adapters: [mock],
+            embedder: embedder
+        )
         let store = VectorStore(database: db)
 
         let searchTask = Task {
             try? await RecallService.search(query: "anything")
         }
 
-        // Poll until indexing has actually started landing rows (up to 60s).
+        // Poll until indexing has actually started landing rows (up to 5s).
         var countAtCancel = 0
-        for _ in 0..<600 {
+        for _ in 0..<500 {
             countAtCancel = try await store.entryCount()
             if countAtCancel > 0 { break }
-            try await Task.sleep(nanoseconds: 100_000_000)
+            try await Task.sleep(nanoseconds: 10_000_000)
         }
         #expect(countAtCancel > 0, "indexing should have produced at least one row before we cancel")
 
@@ -217,10 +222,10 @@ struct RecallServiceTests {
         // Wait for further rows to land. If the detached pattern is broken,
         // this loop will time out at the same count we sampled before cancel.
         var finalCount = countAtCancel
-        for _ in 0..<300 {
+        for _ in 0..<500 {
             finalCount = try await store.entryCount()
             if finalCount > countAtCancel { break }
-            try await Task.sleep(nanoseconds: 100_000_000)
+            try await Task.sleep(nanoseconds: 10_000_000)
         }
         #expect(
             finalCount > countAtCancel,
@@ -248,6 +253,9 @@ struct RecallServiceTests {
         // guard.
         RecallService._resetForTests()
         let db = try SeshctlDatabase.temporary()
+        // 80 entries per batch → at indexer batchSize=64, that's 2 chunks
+        // per refresh. With MockEmbedder's 20ms per-chunk delay, each
+        // refresh takes ~40ms, total test runtime ~150ms.
         let firstBatch = (0..<80).map { i in
             makeEntry(text: "first-batch-entry-\(i)", sessionID: "S1-\(i)")
         }
@@ -261,7 +269,12 @@ struct RecallServiceTests {
             firstCursor: Data("cursor-1".utf8),
             secondCursor: Data("cursor-2".utf8)
         )
-        RecallService.configureForTesting(database: db, adapters: [adapter])
+        let embedder = MockEmbedder(perChunkDelayNanos: 20_000_000)
+        RecallService.configureForTesting(
+            database: db,
+            adapters: [adapter],
+            embedder: embedder
+        )
 
         // Run 1: drives the first batch through the index.
         _ = try await RecallService.search(query: "x")

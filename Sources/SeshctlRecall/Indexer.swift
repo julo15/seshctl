@@ -19,12 +19,12 @@ import Foundation
 
 public actor Indexer {
     private let store: VectorStore
-    private let embedder: EmbeddingService
+    private let embedder: any Embedder
     private let adapters: [any Adapter]
 
     public init(
         store: VectorStore,
-        embedder: EmbeddingService,
+        embedder: any Embedder,
         adapters: [any Adapter]
     ) {
         self.store = store
@@ -111,7 +111,8 @@ public actor Indexer {
                 let chunk = Array(toEmbed[chunkStart..<chunkEnd])
                 let chunkEmbeddings = try await embedder.encode(
                     chunk.map(\.text),
-                    batchSize: chunk.count
+                    batchSize: chunk.count,
+                    onProgress: nil
                 )
                 precondition(
                     chunkEmbeddings.count == chunk.count,

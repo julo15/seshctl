@@ -101,6 +101,7 @@ public struct RecallService: Sendable {
     nonisolated(unsafe) private static var sharedDatabase: SeshctlDatabase?
     nonisolated(unsafe) private static var sharedStackTask: Task<RecallStack, Error>?
     nonisolated(unsafe) private static var sharedAdaptersOverride: [any Adapter]?
+    nonisolated(unsafe) private static var sharedEmbedderOverride: (any Embedder)?
 
     /// Internal accessor for `RecallStack.build()` to read the configured
     /// database under the lock. Not part of the public API.
@@ -117,6 +118,17 @@ public struct RecallService: Sendable {
         sharedLock.lock()
         defer { sharedLock.unlock() }
         return sharedAdaptersOverride
+    }
+
+    /// Internal accessor for `RecallStack.build()` to read the
+    /// test-injected embedder override, if any. Production code paths see
+    /// `nil` and fall through to `try await EmbeddingService()` (which
+    /// loads the bundled CoreML model). Test paths inject a `MockEmbedder`
+    /// so they don't depend on CoreML wall-clock or the bundled resources.
+    static func sharedEmbedderOverrideAccessor() -> (any Embedder)? {
+        sharedLock.lock()
+        defer { sharedLock.unlock() }
+        return sharedEmbedderOverride
     }
 
     /// Return the shared stack, constructing it on first call. Concurrent
@@ -172,25 +184,31 @@ public struct RecallService: Sendable {
         sharedDatabase = nil
         sharedStackTask = nil
         sharedAdaptersOverride = nil
+        sharedEmbedderOverride = nil
     }
 
-    /// Test-only entry point: configure with both the database AND an
-    /// explicit adapter list. Bypasses `AdapterRegistry.defaultAdapters()`
-    /// so tests can inject mock adapters that DON'T walk the developer's
-    /// real `~/.claude/projects`, `~/.codex`, `~/.gemini` directories.
+    /// Test-only entry point: configure with the database, an explicit
+    /// adapter list, and optionally an explicit embedder. Bypasses
+    /// `AdapterRegistry.defaultAdapters()` so tests can inject mock
+    /// adapters that DON'T walk the developer's real `~/.claude/projects`,
+    /// `~/.codex`, `~/.gemini` directories. Passing a non-nil `embedder`
+    /// (typically a `MockEmbedder`) also bypasses the bundled CoreML model
+    /// load so timing-sensitive tests don't depend on CoreML wall-clock.
     ///
     /// Always pair with `_resetForTests()` between test cases.
     @_spi(Testing)
     public static func configureForTesting(
         database: SeshctlDatabase,
-        adapters: [any Adapter]
+        adapters: [any Adapter],
+        embedder: (any Embedder)? = nil
     ) {
         sharedLock.lock()
         defer { sharedLock.unlock() }
         sharedDatabase = database
         sharedAdaptersOverride = adapters
+        sharedEmbedderOverride = embedder
         // Clear any prior stack so the next search rebuilds against the
-        // injected adapters.
+        // injected adapters + embedder.
         sharedStackTask = nil
     }
 }
@@ -203,7 +221,7 @@ public struct RecallService: Sendable {
 final actor RecallStack {
     private let database: SeshctlDatabase
     private let vectorStore: VectorStore
-    private let embedder: EmbeddingService
+    private let embedder: any Embedder
     private let indexer: Indexer
 
     // MARK: - Background indexing state.
@@ -246,7 +264,7 @@ final actor RecallStack {
     private init(
         database: SeshctlDatabase,
         vectorStore: VectorStore,
-        embedder: EmbeddingService,
+        embedder: any Embedder,
         indexer: Indexer
     ) {
         self.database = database
@@ -258,13 +276,15 @@ final actor RecallStack {
     /// Build the stack. Reads the database configured via
     /// `RecallService.configure(database:)` — throws
     /// `RecallError.searchFailed(...)` if `configure()` was never called.
-    /// The `EmbeddingService()` init also throws (model resource not found)
-    /// until Phase 7 ships the bundled `.mlpackage`.
+    /// The `EmbeddingService()` init throws (model resource not found) if
+    /// the bundled `.mlpackage` is missing.
     ///
     /// In test contexts that called
-    /// `RecallService.configureForTesting(database:adapters:)`, the
-    /// injected adapter list replaces `AdapterRegistry.defaultAdapters()`
-    /// so tests don't walk the developer's real transcript directories.
+    /// `RecallService.configureForTesting(database:adapters:embedder:)`,
+    /// the injected adapter list replaces `AdapterRegistry.defaultAdapters()`
+    /// and a non-nil injected embedder replaces the real
+    /// `EmbeddingService` — so tests don't walk the developer's real
+    /// transcript directories nor pay CoreML wall-clock cost.
     static func build() async throws -> RecallStack {
         guard let database = RecallService.sharedDatabaseAccessor() else {
             throw RecallError.searchFailed(
@@ -273,7 +293,12 @@ final actor RecallStack {
             )
         }
         let vectorStore = VectorStore(database: database)
-        let embedder = try await EmbeddingService()
+        let embedder: any Embedder
+        if let injected = RecallService.sharedEmbedderOverrideAccessor() {
+            embedder = injected
+        } else {
+            embedder = try await EmbeddingService()
+        }
         let adapters = RecallService.sharedAdaptersOverrideAccessor()
             ?? AdapterRegistry.defaultAdapters()
         let indexer = Indexer(
