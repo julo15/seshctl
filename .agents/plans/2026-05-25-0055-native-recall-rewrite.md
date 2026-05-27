@@ -1,5 +1,104 @@
 # Plan: Native Swift recall rewrite (v0.5.0)
 
+## Status (2026-05-27)
+
+**Phases 1-8 COMPLETE. PR #54 squash-merged to `main` as `19992dc`.**
+**Phases 9 + 10 remain — needed to actually ship v0.5.0.**
+
+What's already on `main`:
+
+- Full `SeshctlRecall` SwiftPM target: `Embedder` protocol + `EmbeddingService`
+  (CoreML), `TokenizerService` (swift-transformers 1.3.3), `VectorStore`
+  (GRDB), `Indexer`, `Search.topK`, `RecallService` static facade, `Adapter`
+  protocol + Claude/Codex/Gemini adapters, `AdapterRegistry`, `HistoryEntry`.
+- Bundled INT8 CoreML model at
+  `Sources/SeshctlRecall/Models/all-MiniLM-L6-v2-int8.mlpackage` (22MB) +
+  `tokenizer.json` + `tokenizer_config.json`.
+- `scripts/build-app-bundle.sh` copies `Models/` into
+  `Seshctl.app/Contents/Resources/Models/`.
+- Background indexing: `RecallStack.indexingTask` is detached so caller
+  cancellation doesn't stop indexing. `passID` guard isolates progress
+  events between consecutive refreshes. `lastIndexingProgress` cache seeds
+  late-arriving search subscribers.
+- Resumability: `VectorStore.filterAlreadyIndexed` + chunked
+  `Indexer.refresh` so cancel-then-resume only re-embeds unfinished entries.
+- v14 migration drops + recreates `recall_*` with composite
+  `UNIQUE (text_hash, agent, session_id)` so dev DBs already on the old
+  v13 schema get promoted.
+- 938 tests passing in ~3s. `MockEmbedder` test seam (configurable per-chunk
+  delay) means timing-sensitive tests don't depend on CoreML wall-clock.
+- 4 review rounds in `.agents/reviews/2026-05-27-{0010,0100,0121,0152}-pr-54-r{1..4}.md`.
+- DMG size: 37MB. App: 81MB. Cold-start indexing: ~6-7 min for 8k entries.
+
+**Known TODOs still in code comments** (documented, not blocking v0.5.0):
+
+- `EmbeddingService` forces `computeUnits = .cpuOnly` — Phase 1 spike found
+  `.all` crashes MPSGraph on this macOS 14 + INT8 model combination.
+  Revisit `.cpuAndGPU` / `.cpuAndNeuralEngine` benchmarking when time allows.
+- `Indexer` drift detection logs to stderr; routing to
+  `~/Library/Logs/Seshctl/install.log` via `appendInstallLog` is deferred.
+- Bundled embedder runs single-string predictions (CoreML model has fixed
+  `[1, 256]` input shape). Batched inference via flexible-shape conversion
+  or `MLBatchProvider` deferred.
+- `Indexer.filterAlreadyIndexed` called once per adapter → 3 full table
+  scans + 3 Set builds per refresh. Cheap fix (load Set once at top of
+  refresh) deferred.
+
+## What's left for v0.5.0 ship (Phase 9 + Phase 10)
+
+### Phase 9 — fixture-based parity tests + coverage verification
+
+Detail in "Step 9: Write Tests" below, but already partially done. Remaining:
+
+1. **TokenizerParityTests** with captured fixtures. The spike directory
+   `.agents/spikes/2026-05-25-recall-spike/` contains `python-reference.json`
+   with 20 reference strings + their Python-side token IDs + embeddings.
+   Need a Swift test that loads those fixtures (or commits them as a small
+   JSON file under `Tests/SeshctlRecallTests/Fixtures/`) and asserts
+   `TokenizerService.encode` produces token IDs identical to the Python
+   reference for all 20 strings. The spike artifacts are `.gitignore`d so
+   the fixtures need to be re-captured + committed under `Tests/`.
+2. **Coverage verification**: run `swift test --enable-code-coverage`,
+   extract coverage for `Sources/SeshctlRecall/*` via the jq pipeline in
+   AGENTS.md, confirm ≥60% line coverage. Document any files below the bar.
+
+### Phase 10 — release polish + ship
+
+1. **Bump version**: `Resources/Info.plist`:
+   - `CFBundleShortVersionString` → `0.5.0`
+   - `CFBundleVersion` → `6`
+2. **Write `docs/release-notes/0.5.0.md`**. Headline: native semantic
+   search, no Python required. Cover:
+   - The recall rewrite (no more `~/.local/share/recall/venv/`)
+   - DMG size bump (~10MB → 37MB)
+   - One-line privacy note (per r1 Q-2): "Semantic search stores indexed
+     transcript text in the local seshctl SQLite at
+     `~/Library/Application Support/Seshctl/seshctl.sqlite` — same
+     locality as the prior recall implementation at
+     `~/.recall/metadata.jsonl`, no network exposure."
+   - Migration note: legacy `~/.local/share/recall/venv/` is left alone;
+     users can remove it manually via `recall/uninstall.sh`.
+3. **Update `README.md`**: remove the "install recall" prerequisite from
+   the compatibility section. Update screenshot if the search section
+   visibly changed (probably hasn't).
+4. **Write `docs/recall-rewrite.md`** — short architectural note for
+   future maintainers. Cover: where the model lives, how to bump it
+   (re-run `.agents/spikes/2026-05-25-recall-spike/convert-model.py`,
+   verify parity, commit the new `Sources/SeshctlRecall/Models/...`),
+   the detached BG-indexing pattern + passID guard, the resumability
+   contract via composite UNIQUE + `filterAlreadyIndexed`.
+5. **Optionally**: update `AGENTS.md` "Adding an LLM Tool" section now
+   that the SeshctlRecall surfaces exist (was done in r1 fix, verify
+   still accurate post-merge).
+6. **Dry-run release pipeline**: `make dist` → 37MB DMG; `make appcast`
+   → updated `docs/appcast.xml`. Inspect both before publishing.
+7. **`make publish`** when ready — this commits Info.plist + appcast +
+   release notes, pushes, polls GitHub Pages, then `gh release create
+   v0.5.0` with the DMG.
+
+After Phase 10, the v0.5.0 release is live and Sparkle-installed users
+auto-update.
+
 ## Working Protocol
 - Use parallel subagents for independent tasks (per-adapter ports, test scaffolding, doc updates).
 - Mark steps done as you complete them — a fresh agent should be able to find where to resume from the checkboxes.
