@@ -102,6 +102,10 @@ public actor Indexer {
             let chunkSize = max(1, batchSize)
             var chunkStart = 0
             while chunkStart < toEmbed.count {
+                // Worst-case cancellation latency: one chunk's embed time
+                // (~50ms × chunkSize CoreML predictions ≈ 3s for the
+                // default batchSize=64). CoreML.prediction is synchronous
+                // so the in-flight chunk can't be interrupted partway.
                 try Task.checkCancellation()
                 let chunkEnd = min(chunkStart + chunkSize, toEmbed.count)
                 let chunk = Array(toEmbed[chunkStart..<chunkEnd])

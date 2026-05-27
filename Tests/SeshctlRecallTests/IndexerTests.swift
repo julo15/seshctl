@@ -221,6 +221,9 @@ struct IndexerTests {
         // entries into the DB but was canceled before writing the cursor.
         let allEntries = (0..<7).map { makeEntry(seed: $0) }
         let preExisting = Array(allEntries.prefix(4))
+        // Dummy non-normalized vectors — this test exercises the resumability
+        // path (insert + skip-already-indexed), not search quality, so the
+        // vectors only need to be the right shape.
         let preVectors = preExisting.map { _ in [Float](repeating: 0.2, count: 384) }
         _ = try await store.insert(entries: preExisting, embeddings: preVectors)
         // NOTE: deliberately did NOT write the adapter's cursor — that's

@@ -417,8 +417,12 @@ final actor RecallStack {
         // breaks the parent-task cancellation chain so caller cancellation
         // doesn't propagate into `indexer.refresh`. The slot-and-clear
         // pattern coalesces concurrent ensure calls onto the same task.
-        let task = Task<Void, Error>.detached { [weak self] in
-            guard let self else { return }
+        //
+        // Strong `self` capture is safe: the detached task is held by
+        // `indexingTask` on `self`, so `self` outlives the task body.
+        // The inner progress-hop Task (in runDetachedIndexing) uses
+        // `[weak self]` for symmetry with the actor-method release timing.
+        let task = Task<Void, Error>.detached { [self] in
             do {
                 try await self.runDetachedIndexing()
                 await self.clearIndexingTask()
@@ -437,6 +441,10 @@ final actor RecallStack {
     /// in `ensureIndexingComplete` is the only escape hatch from caller
     /// cancellation.
     private func runDetachedIndexing() async throws {
+        // Clear any prior pass's final value so a new search joining the
+        // fresh refresh BEFORE the first chunk fires doesn't see a stale
+        // seed (e.g. "8000/8000" left over from the last completed run).
+        lastIndexingProgress = nil
         try await indexer.refresh(batchSize: 64, onProgress: { [weak self] done, total in
             Task { [weak self] in
                 await self?.broadcastIndexingProgress(done: done, total: total)
@@ -456,7 +464,18 @@ final actor RecallStack {
 
     /// Update `lastIndexingProgress` and forward to every active subscriber.
     /// Called from the detached indexing task via an actor hop.
+    ///
+    /// Drops out-of-order events: each per-chunk progress event spawns its
+    /// own Task to hop back to the actor, and the actor's executor may
+    /// schedule them out of FIFO order. Without the guard, `lastIndexingProgress`
+    /// could briefly go backward and a search joining mid-flight would see
+    /// a stale snapshot (also surfaces as UI progress-bar jitter). The
+    /// stale event is silently dropped — subscribers may occasionally miss
+    /// an intermediate value, but the FINAL `(done == total)` always lands.
     private func broadcastIndexingProgress(done: Int, total: Int) {
+        if let prev = lastIndexingProgress, prev.done > done, prev.total == total {
+            return
+        }
         lastIndexingProgress = (done, total)
         for callback in indexingSubscribers.values {
             callback(done, total)
@@ -467,6 +486,12 @@ final actor RecallStack {
     /// `ensureIndexingComplete` will start a fresh refresh (cheap when
     /// cursors are already caught up). Called from the detached task
     /// itself on completion or error.
+    ///
+    /// Safe because (a) only the detached task itself calls this, and
+    /// (b) `indexingTask` is only ever assigned from nil → new value
+    /// (the `if let existing` guard in `ensureIndexingComplete` returns
+    /// before reaching the assignment when the slot is non-nil), so the
+    /// clear never accidentally drops a newer task.
     private func clearIndexingTask() {
         indexingTask = nil
     }

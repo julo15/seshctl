@@ -164,6 +164,9 @@ public actor VectorStore {
     public func filterAlreadyIndexed(_ entries: [HistoryEntry]) throws -> [HistoryEntry] {
         guard !entries.isEmpty else { return [] }
         let existing = try loadExistingDedupKeys()
+        // First-ever-refresh fast path: nothing in DB → every input is new.
+        // Skip the filter walk + per-entry Set lookups.
+        guard !existing.isEmpty else { return entries }
         return entries.filter { entry in
             !existing.contains(Self.dedupKey(
                 textHash: entry.textHash,

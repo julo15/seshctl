@@ -241,10 +241,12 @@ public actor EmbeddingService {
 
         var index = 0
         while index < total {
-            // Cooperative cancellation point: when the UI cancels the search
-            // task (user starts a new query, presses esc), the in-flight
-            // embed bails between chunks instead of running to completion
-            // and competing with the new search for the same actor.
+            // Cooperative cancellation point. With the indexer's per-chunk
+            // pattern (it passes `batchSize: chunk.count`, so this while loop
+            // runs exactly once per call), this check effectively bails
+            // before kicking off the CoreML pass if the caller has already
+            // canceled. For callers that pass a smaller batchSize relative
+            // to input, the check also fires between internal chunks.
             try Task.checkCancellation()
             let upper = min(index + chunkSize, total)
             let chunk = Array(texts[index..<upper])

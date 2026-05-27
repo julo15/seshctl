@@ -134,6 +134,60 @@ struct RecallServiceTests {
         #expect(resp.indexingCount == 5)
     }
 
+    @Test("indexing continues after the triggering search Task is canceled")
+    func indexingSurvivesCallerCancellation() async throws {
+        // The headline behavior of the detached-indexing change: canceling
+        // a search's Task aborts ONLY the await on `indexingTask.value`,
+        // not the detached refresh itself. The DB keeps gaining rows after
+        // the cancel.
+        //
+        // 200 entries × ~50ms per CoreML predict ≈ 10s total embed time
+        // across 4 default-batch-size (64) chunks. The polling loop waits
+        // for the first chunk to land (entryCount > 0), cancels, then
+        // verifies entryCount keeps growing.
+        //
+        // Without `Task.detached` in `RecallStack.ensureIndexingComplete`,
+        // the cancel would propagate into `indexer.refresh` and finalCount
+        // would stay at countAtCancel — the test would fail.
+        RecallService._resetForTests()
+        let db = try SeshctlDatabase.temporary()
+        let entries = (0..<200).map { i in
+            makeEntry(text: "cancellation-test-entry-\(i)", sessionID: "S\(i)")
+        }
+        let mock = MockAdapter(name: "claude", entries: entries, cursor: Data("v1".utf8))
+        RecallService.configureForTesting(database: db, adapters: [mock])
+        let store = VectorStore(database: db)
+
+        let searchTask = Task {
+            try? await RecallService.search(query: "anything")
+        }
+
+        // Poll until indexing has actually started landing rows (up to 60s).
+        var countAtCancel = 0
+        for _ in 0..<600 {
+            countAtCancel = try await store.entryCount()
+            if countAtCancel > 0 { break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        #expect(countAtCancel > 0, "indexing should have produced at least one row before we cancel")
+
+        searchTask.cancel()
+        _ = await searchTask.value
+
+        // Wait for further rows to land. If the detached pattern is broken,
+        // this loop will time out at the same count we sampled before cancel.
+        var finalCount = countAtCancel
+        for _ in 0..<300 {
+            finalCount = try await store.entryCount()
+            if finalCount > countAtCancel { break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        #expect(
+            finalCount > countAtCancel,
+            "indexing should have continued past cancel — countAtCancel=\(countAtCancel), finalCount=\(finalCount)"
+        )
+    }
+
     @Test("concurrent searches share a single in-flight indexing pass")
     func concurrentSearchesShareIndexing() async throws {
         // Three simultaneous search calls should all join the same detached
