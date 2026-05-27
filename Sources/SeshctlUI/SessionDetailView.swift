@@ -201,11 +201,12 @@ public struct SessionDetailView: View {
         }
 
         let newY = min(max(currentY + delta, 0), max(maxY, 0))
-        // Quick animation — kept shorter than AppDelegate's keyboard-scroll
-        // throttle interval so successive scrolls don't queue overlapping
-        // animations (the original cause of the held-key hang).
+        // Quick animation. Duration is kept strictly shorter than the
+        // keyboard-scroll throttle interval (see `KeyboardScrollTiming`) so
+        // successive scrolls don't queue overlapping animations — the
+        // original cause of the held-key hang.
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.04
+            context.duration = KeyboardScrollTiming.animationDuration
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             context.allowsImplicitAnimation = true
             clipView.setBoundsOrigin(NSPoint(x: 0, y: newY))

@@ -18,15 +18,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var connectionStore: ClaudeCodeConnectionStore?
     private var navigationState = NavigationState()
     private var pendingG = false
-    private var lastDetailScrollAt: TimeInterval = 0
-    private let remoteBrowserCoordinator = RemoteBrowserCoordinator()
-
     // Held key-repeat fires every ~33 ms but each scroll synchronously
     // materializes a viewport's worth of rows (each one re-parses markdown
     // through cmark-gfm — no cache). At ~70 ms per burst the events queue
-    // faster than they drain and the main thread pegs. Cap to ~12 Hz so the
-    // run loop has breathing room between scrolls.
-    private static let detailScrollMinInterval: TimeInterval = 0.05
+    // faster than they drain and the main thread pegs. The throttle caps
+    // accepted scrolls so the run loop has breathing room between bursts.
+    // Interval + animation duration live on `KeyboardScrollTiming` so the
+    // animation-shorter-than-throttle invariant is visible in one place.
+    private var detailScrollThrottle = ScrollThrottle(minInterval: KeyboardScrollTiming.throttleMinInterval)
+    private let remoteBrowserCoordinator = RemoteBrowserCoordinator()
 
     // Menu-bar status item. Visibility is driven by the
     // `AppearanceDefaults.showStatusBarIconKey` preference (default on); see
@@ -404,14 +404,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // Returns true and updates the timestamp if enough time has passed since
-    // the last accepted scroll, false if the event should be dropped. Applied
-    // to line/page commands only — top/bottom (g/G) are one-shot.
+    // Returns true and stamps the throttle if enough time has passed since
+    // the last accepted scroll, false if the event should be dropped.
     private func throttleDetailScroll() -> Bool {
-        let now = ProcessInfo.processInfo.systemUptime
-        if now - lastDetailScrollAt < Self.detailScrollMinInterval { return false }
-        lastDetailScrollAt = now
-        return true
+        detailScrollThrottle.allow(now: ProcessInfo.processInfo.systemUptime)
     }
 
     private func handleDetailKey(keyCode: UInt16, chars: String?, modifiers: NSEvent.ModifierFlags, vm: SessionDetailViewModel) {
@@ -425,7 +421,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if pendingG {
             pendingG = false
             if chars == "g" {
-                vm.scrollCommand = .top
+                if throttleDetailScroll() { vm.scrollCommand = .top }
                 return
             }
         }
@@ -433,11 +429,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Ctrl+key combos (chars from charactersIgnoringModifiers is the base letter)
         if modifiers.contains(.control), let chars {
             switch chars {
-            case "d": if throttleDetailScroll() { vm.scrollCommand = .halfPageDown }; return
-            case "u": if throttleDetailScroll() { vm.scrollCommand = .halfPageUp }; return
-            case "f": if throttleDetailScroll() { vm.scrollCommand = .pageDown }; return
-            case "b": if throttleDetailScroll() { vm.scrollCommand = .pageUp }; return
-            default: break
+            case "d":
+                if throttleDetailScroll() { vm.scrollCommand = .halfPageDown }
+                return
+            case "u":
+                if throttleDetailScroll() { vm.scrollCommand = .halfPageUp }
+                return
+            case "f":
+                if throttleDetailScroll() { vm.scrollCommand = .pageDown }
+                return
+            case "b":
+                if throttleDetailScroll() { vm.scrollCommand = .pageUp }
+                return
+            default:
+                break
             }
         }
 
@@ -448,7 +453,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             navigationState.backToList()
         // G — jump to bottom
         case (_, "G"):
-            vm.scrollCommand = .bottom
+            if throttleDetailScroll() { vm.scrollCommand = .bottom }
         // g — start gg sequence
         case (_, "g"):
             pendingG = true
