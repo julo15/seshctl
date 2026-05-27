@@ -86,26 +86,26 @@ Inline a 3-line content-shape check in the scanner's user branch. No shared help
 ## Implementation Steps
 
 ### Step 1: Fix the scanner
-- [ ] In `Sources/SeshctlCore/TranscriptLatestAssistantScanner.swift`, change the `else if type == "user"` branch to inspect `message.content`:
+- [x] In `Sources/SeshctlCore/TranscriptLatestAssistantScanner.swift`, change the `else if type == "user"` branch to inspect `message.content`:
   - String content → clear (fresh prompt).
   - Array content where every block has `type == "tool_result"` → leave `pendingText` alone (continuation).
   - Anything else (array with text/image, missing content, malformed) → clear (fresh prompt; safe default).
-- [ ] Update the rule-2 docstring (file header, lines 36-39) to spell out the fresh-prompt vs tool_result distinction. Add a brief note about the rationale (Claude is still mid-turn during tool_result).
+- [x] Update the rule-2 docstring (file header, lines 36-39) to spell out the fresh-prompt vs tool_result distinction. Add a brief note about the rationale (Claude is still mid-turn during tool_result).
 
 ### Step 2: Tests
-- [ ] In `Tests/SeshctlCoreTests/TranscriptLatestAssistantScannerTests.swift`, add:
+- [x] In `Tests/SeshctlCoreTests/TranscriptLatestAssistantScannerTests.swift`, add:
   - `keepsLatestAssistantWhenToolResultFollowsIt` — assistant text → user/tool_result → returns the text.
   - `clearsLatestAssistantWhenFreshUserPromptFollowsIt` — assistant text → user with string content "actually do this instead" → nil. (Mostly duplicates the existing `returnsNilWhenUserTurnFollowsLatestAssistant` but pins it under the new naming for symmetry with the keep-case.)
   - `keepsLatestAssistantAcrossInterleavedToolResults` — text → tool_use → tool_result → tool_use → tool_result → returns the original text.
-- [ ] Update the docstring on `surfacesNextAssistantTextAfterToolResult` (line 98-100) to describe the new mechanism: "text survives the tool_result and is overwritten by the next assistant text block."
+- [x] Update the docstring on `surfacesNextAssistantTextAfterToolResult` (line 98-100) to describe the new mechanism: "text survives the tool_result and is overwritten by the next assistant text block."
 
 ### Step 3: Docs
-- [ ] Update `AGENTS.md` line 185 paragraph: the sentence beginning "it returns `nil` when a `user` event lands after the latest assistant text" needs to clarify that only fresh-prompt user events clear; tool_result user events preserve the text.
+- [x] Update `AGENTS.md` line 185 paragraph: the sentence beginning "it returns `nil` when a `user` event lands after the latest assistant text" needs to clarify that only fresh-prompt user events clear; tool_result user events preserve the text.
 
 ### Step 4: Build + test
-- [ ] `swift build` (timeout 120s; run `make kill-build` first if anything's stale).
-- [ ] `swift test --filter TranscriptLatestAssistantScannerTests` (timeout 30s) — via subagent per AGENTS.md.
-- [ ] Full `swift test` to make sure no consumers regressed.
+- [x] `swift build` (timeout 120s; run `make kill-build` first if anything's stale).
+- [x] `swift test --filter TranscriptLatestAssistantScannerTests` (timeout 30s) — via subagent per AGENTS.md.
+- [x] Full `swift test` to make sure no consumers regressed.
 
 ## Acceptance Criteria
 - [ ] [test] `keepsLatestAssistantWhenToolResultFollowsIt` passes.

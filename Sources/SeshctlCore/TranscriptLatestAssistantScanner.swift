@@ -33,10 +33,20 @@ import Foundation
 ///    they're sub-events of the same turn, not new turns. This is what
 ///    makes the AskUserQuestion case work: the trailing tool_use sub-event
 ///    no longer clobbers the narration that preceded it.
-/// 2. **User-turn-clears-pending → nil.** A `user` event marks a turn
-///    boundary. Clear `pendingText` so callers fall through to `lastAsk`
-///    (the row shows `You: <new prompt>` instead of stale assistant text).
-///    Mirrors `TranscriptAwaySummaryScanner`'s "current state" invalidation.
+/// 2. **Fresh-prompt user events clear; tool_result continuations don't.**
+///    Claude Code uses `type:"user"` for two distinct things: real fresh
+///    prompts from the human, and tool_result continuations that the harness
+///    streams back to the assistant mid-turn. Only the first is a real turn
+///    boundary. Fresh prompts (`message.content` is a string, or an array
+///    containing any text/image/etc. block, or missing/malformed) clear
+///    `pendingText` so callers fall through to `lastAsk` (the row shows
+///    `You: <new prompt>` instead of stale assistant text — mirrors
+///    `TranscriptAwaySummaryScanner`'s "current state" invalidation).
+///    Tool_result-only continuations (`message.content` is a non-empty array
+///    whose every block is `tool_result`) leave `pendingText` alone: Claude
+///    is still mid-turn, the human didn't do anything, and the row preview
+///    should keep showing the latest assistant narration until the next text
+///    block lands.
 /// 3. **System events preserve pendingText.** `system` events (including
 ///    `system/away_summary`) deliberately do NOT clear pendingText — only
 ///    `user` events do. This asymmetry is what lets the consumer-side
@@ -90,7 +100,25 @@ public enum TranscriptLatestAssistantScanner {
                     break
                 }
             } else if type == "user" {
-                pendingText = nil
+                // A `user` event is only a real turn boundary when it carries
+                // a fresh prompt. Claude Code also emits `type:"user"` for
+                // tool_result continuations mid-turn (the assistant fires a
+                // tool_use, the harness streams back the result as a user
+                // event) — those aren't turn boundaries, so they must NOT
+                // clobber `pendingText`. Distinguish by inspecting
+                // `message.content`: an array whose every block is
+                // `tool_result` is a continuation; anything else (string
+                // content, array with text/image/etc., missing/malformed) is
+                // treated as a fresh prompt and clears.
+                if let message = obj["message"] as? [String: Any],
+                   let content = message["content"] as? [[String: Any]],
+                   !content.isEmpty,
+                   content.allSatisfy({ ($0["type"] as? String) == "tool_result" })
+                {
+                    // Tool_result-only continuation — leave pendingText alone.
+                } else {
+                    pendingText = nil
+                }
             }
         }
         guard let raw = pendingText else { return nil }

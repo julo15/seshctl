@@ -93,11 +93,58 @@ struct TranscriptLatestAssistantScannerTests {
         #expect(result == nil)
     }
 
+    @Test("fresh user prompt after assistant text clears (symmetry with the keep-case)")
+    func clearsLatestAssistantWhenFreshUserPromptFollowsIt() {
+        // Twin of `keepsLatestAssistantWhenToolResultFollowsIt`: a fresh
+        // prompt is a real turn boundary, so the row should fall through to
+        // lastAsk and show `You: <new prompt>`. Same observable behavior as
+        // `returnsNilWhenUserTurnFollowsLatestAssistant`; named for symmetry
+        // with the keep-case so the keep/clear pair reads as one rule.
+        let transcript = """
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Mid-stream reply."}]}}
+        {"type":"user","message":{"role":"user","content":"actually do this instead"}}
+        """
+        let result = TranscriptLatestAssistantScanner.extractLatestAssistantText(transcript: transcript)
+        #expect(result == nil)
+    }
+
+    @Test("tool_result user event after assistant text — preserves the text")
+    func keepsLatestAssistantWhenToolResultFollowsIt() {
+        // Tool_result-only user events are continuations, not turn
+        // boundaries. The row should keep showing the latest assistant
+        // narration ("Looking at the auth file…") while the tool runs,
+        // instead of regressing to `You: <stale prompt>`.
+        let transcript = """
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Looking at the auth file…"}]}}
+        {"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"x","content":"file contents"}]}}
+        """
+        let result = TranscriptLatestAssistantScanner.extractLatestAssistantText(transcript: transcript)
+        #expect(result == "Looking at the auth file…")
+    }
+
+    @Test("interleaved tool_use / tool_result chain — original assistant text survives")
+    func keepsLatestAssistantAcrossInterleavedToolResults() {
+        // Multi-tool chains with no narration between calls (Read → Read,
+        // Grep → Grep, etc.) must not drop the prior text. The row should
+        // pin on "Reading the file..." for as long as the chain runs.
+        let transcript = """
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Reading the file..."}]}}
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Read","input":{"path":"foo"}}]}}
+        {"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"a","content":"first result"}]}}
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Read","input":{"path":"bar"}}]}}
+        {"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"b","content":"second result"}]}}
+        """
+        let result = TranscriptLatestAssistantScanner.extractLatestAssistantText(transcript: transcript)
+        #expect(result == "Reading the file...")
+    }
+
     @Test("tool_result user event then next assistant text — returns the new text")
     func surfacesNextAssistantTextAfterToolResult() {
-        // Pins the documented user-boundary policy on the common Bash flow:
-        // the tool_result user event clears pendingText, and the subsequent
-        // assistant text event repopulates it.
+        // Pins the next-text-wins behavior on the common Bash flow: the
+        // text survives the tool_result user event (which no longer clears
+        // pendingText — it's a continuation, not a turn boundary), and is
+        // then overwritten by the next assistant text block ("Found the
+        // answer."). The newest assistant text always wins within a turn.
         let transcript = """
         {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Reading the file..."}]}}
         {"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"cat foo"}}]}}
