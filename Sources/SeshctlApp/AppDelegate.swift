@@ -18,7 +18,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var connectionStore: ClaudeCodeConnectionStore?
     private var navigationState = NavigationState()
     private var pendingG = false
+    private var lastDetailScrollAt: TimeInterval = 0
     private let remoteBrowserCoordinator = RemoteBrowserCoordinator()
+
+    // Held key-repeat fires every ~33 ms but each scroll synchronously
+    // materializes a viewport's worth of rows (each one re-parses markdown
+    // through cmark-gfm — no cache). At ~70 ms per burst the events queue
+    // faster than they drain and the main thread pegs. Cap to ~12 Hz so the
+    // run loop has breathing room between scrolls.
+    private static let detailScrollMinInterval: TimeInterval = 0.05
 
     // Menu-bar status item. Visibility is driven by the
     // `AppearanceDefaults.showStatusBarIconKey` preference (default on); see
@@ -396,6 +404,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // Returns true and updates the timestamp if enough time has passed since
+    // the last accepted scroll, false if the event should be dropped. Applied
+    // to line/page commands only — top/bottom (g/G) are one-shot.
+    private func throttleDetailScroll() -> Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastDetailScrollAt < Self.detailScrollMinInterval { return false }
+        lastDetailScrollAt = now
+        return true
+    }
+
     private func handleDetailKey(keyCode: UInt16, chars: String?, modifiers: NSEvent.ModifierFlags, vm: SessionDetailViewModel) {
         // Handle search mode input
         if vm.isSearching {
@@ -415,10 +433,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Ctrl+key combos (chars from charactersIgnoringModifiers is the base letter)
         if modifiers.contains(.control), let chars {
             switch chars {
-            case "d": vm.scrollCommand = .halfPageDown; return
-            case "u": vm.scrollCommand = .halfPageUp; return
-            case "f": vm.scrollCommand = .pageDown; return
-            case "b": vm.scrollCommand = .pageUp; return
+            case "d": if throttleDetailScroll() { vm.scrollCommand = .halfPageDown }; return
+            case "u": if throttleDetailScroll() { vm.scrollCommand = .halfPageUp }; return
+            case "f": if throttleDetailScroll() { vm.scrollCommand = .pageDown }; return
+            case "b": if throttleDetailScroll() { vm.scrollCommand = .pageUp }; return
             default: break
             }
         }
@@ -436,10 +454,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             pendingG = true
         // j or Down arrow — line down
         case (_, "j"), (125, _):
-            vm.scrollCommand = .lineDown
+            if throttleDetailScroll() { vm.scrollCommand = .lineDown }
         // k or Up arrow — line up
         case (_, "k"), (126, _):
-            vm.scrollCommand = .lineUp
+            if throttleDetailScroll() { vm.scrollCommand = .lineUp }
         // / — enter search mode
         case (_, "/"):
             vm.enterSearch()
