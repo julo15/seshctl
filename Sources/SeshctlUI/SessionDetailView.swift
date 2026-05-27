@@ -201,8 +201,17 @@ public struct SessionDetailView: View {
         }
 
         let newY = min(max(currentY + delta, 0), max(maxY, 0))
-        clipView.setBoundsOrigin(NSPoint(x: 0, y: newY))
-        scrollView.reflectScrolledClipView(clipView)
+        // Quick animation. Duration is kept strictly shorter than the
+        // keyboard-scroll throttle interval (see `KeyboardScrollTiming`) so
+        // successive scrolls don't queue overlapping animations — the
+        // original cause of the held-key hang.
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = KeyboardScrollTiming.animationDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            context.allowsImplicitAnimation = true
+            clipView.setBoundsOrigin(NSPoint(x: 0, y: newY))
+            scrollView.reflectScrolledClipView(clipView)
+        }
     }
 
     // Used once per view lifetime by `scrollByPixels` to populate
