@@ -134,34 +134,28 @@ public struct SessionListView: View {
                     .font(.body)
                     .foregroundStyle(.red)
                     .padding()
-            } else if viewModel.sessions.isEmpty {
-                VStack(spacing: 8) {
-                    Text("No sessions")
-                        .font(.body)
-                        .foregroundStyle(.secondary)
-                    Text("Start a Claude/Gemini/Codex session to see it here.")
-                        .font(.footnote)
-                        .foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
+            } else if let kind = viewModel.emptyState {
+                // Routing policy lives on the viewmodel
+                // (`SessionListViewModel.emptyState`) so it can be unit-
+                // tested independently. The recents-only state was
+                // originally added in PR #32 review S3.
+                switch kind {
+                case .fullyEmpty:
+                    emptyStateView(
+                        headline: "No sessions",
+                        subtext: "Start a Claude/Gemini/Codex session to see it here."
+                    )
+                case .recentsOnly:
+                    emptyStateView(
+                        headline: "No active sessions",
+                        subtext: "Press / to find recent sessions."
+                    )
+                case .filteredOut:
+                    emptyStateView(
+                        headline: "No \(filterShortNoun(viewModel.sourceFilter)) sessions",
+                        subtext: "Press r to change filter."
+                    )
                 }
-                .padding(24)
-            } else if viewModel.filteredRows.isEmpty
-                        && !viewModel.isSearching
-                        && !viewModel.recentRows.isEmpty {
-                // Recents-only state: the user closed their last active
-                // session but historical rows are still available
-                // through search. Without this branch the pane would
-                // render blank — see PR #32 review S3.
-                VStack(spacing: 8) {
-                    Text("No active sessions")
-                        .font(.body)
-                        .foregroundStyle(.secondary)
-                    Text("Press / to find recent sessions.")
-                        .font(.footnote)
-                        .foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
-                }
-                .padding(24)
             } else if viewModel.isTreeMode && !viewModel.isSearching {
                 SessionTreeView(
                     viewModel: viewModel,
@@ -362,6 +356,35 @@ public struct SessionListView: View {
         case .localOnly: return "local only"
         case .remoteOnly: return "remote only"
         }
+    }
+
+    /// Short noun for the active source filter, used in empty-state copy
+    /// like "No remote sessions". The header badge keeps the "only"
+    /// qualifier; this slot reads more naturally without it.
+    private func filterShortNoun(_ filter: SessionListViewModel.SourceFilter) -> String {
+        switch filter {
+        case .all: return "matching" // unreachable: `.filteredOut` only fires when filter != .all
+        case .localOnly: return "local"
+        case .remoteOnly: return "remote"
+        }
+    }
+
+    /// Centered empty-state block that expands to fill the panel so the
+    /// outer `VStack` doesn't vertically center its remaining content
+    /// (which would drift the header to the middle).
+    @ViewBuilder
+    private func emptyStateView(headline: String, subtext: String) -> some View {
+        VStack(spacing: 8) {
+            Text(headline)
+                .font(.body)
+                .foregroundStyle(.secondary)
+            Text(subtext)
+                .font(.footnote)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     /// Renders the row content for a `DisplayRow`. Local rows use the

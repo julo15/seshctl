@@ -126,6 +126,21 @@ public final class SessionListViewModel: ObservableObject {
         fileprivate var includesLocal: Bool { self != .remoteOnly }
         fileprivate var includesRemote: Bool { self != .localOnly }
     }
+
+    /// Which empty-state slot the list view should render in place of the
+    /// row list. Returned by `emptyState`; `nil` means render the normal
+    /// row list (or tree).
+    public enum EmptyStateKind: Sendable {
+        /// Neither local nor remote sessions exist anywhere — point the
+        /// user at starting a CLI session.
+        case fullyEmpty
+        /// No actives under the current filter, but recents are reachable
+        /// via search — point the user at `/`.
+        case recentsOnly
+        /// The current filter excludes every session — point the user at
+        /// `r` to change the filter.
+        case filteredOut
+    }
     public static let inboxBurstWindow: TimeInterval = 10 // 10-second "don't switch under the user" window
     /// Synthetic group name for cloud rows that have no git_repository source.
     public static let cloudNoRepoGroupName: String = "Cloud — no repo"
@@ -455,6 +470,32 @@ public final class SessionListViewModel: ObservableObject {
     /// Ordered rows the view renders. Matches `filteredRows`; retained as
     /// a separate name to keep intent clear at call sites.
     public var orderedRows: [DisplayRow] { filteredRows }
+
+    /// The empty-state slot the list view should render, or `nil` if the
+    /// normal row list / tree should render instead. Centralizes the
+    /// four-branch routing the view used to encode inline so the policy
+    /// is unit-testable and the view collapses to a single `switch`.
+    ///
+    /// - `.fullyEmpty` wins over filter state (truly nothing to show).
+    /// - `isSearching` returns `nil` so the search UI stays visible while
+    ///   the user is typing, even when nothing matches.
+    /// - The `sourceFilter != .all` guard on `.filteredOut` is defensive:
+    ///   with `.all`, an empty `filteredRows`/`recentRows` implies both
+    ///   row sets are empty, which `.fullyEmpty` already caught.
+    public var emptyState: EmptyStateKind? {
+        if sessions.isEmpty && remoteSessions.isEmpty {
+            return .fullyEmpty
+        }
+        if isSearching { return nil }
+        guard filteredRows.isEmpty else { return nil }
+        if !recentRows.isEmpty {
+            return .recentsOnly
+        }
+        if sourceFilter != .all {
+            return .filteredOut
+        }
+        return nil
+    }
 
     /// True when the visible row list contains rows from more than one
     /// agent kind (e.g. Claude + Gemini, or Claude + Codex). Drives the
