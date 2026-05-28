@@ -3,6 +3,24 @@
     <channel>
         <title>Seshctl</title>
         <item>
+            <title>0.5.1</title>
+            <pubDate>Wed, 27 May 2026 21:49:32 -0400</pubDate>
+            <sparkle:version>7</sparkle:version>
+            <sparkle:shortVersionString>0.5.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h1>Seshctl 0.5.1</h1>
+
+<h2>Held-key transcript scroll, actually fixed this time</h2>
+
+<p>0.5.0 claimed the transcript-view hang on held <code>Ctrl+B</code> (and <code>Ctrl+F</code>/<code>D</code>/<code>U</code>, <code>j</code>/<code>k</code>) was resolved. It wasn&rsquo;t — the May fix removed two contributing factors (per-keystroke <code>NSView</code> walk, overlapping 80 ms animations) but left the dominant one untouched: each page-jump materializes 15–30 rows in one tick, and each row synchronously re-parses its markdown through cmark-gfm with no cache. A single burst could exceed the ~33 ms macOS key-repeat interval, so events queued faster than they drained and the main thread pegged at 100% CPU.</p>
+
+<p>0.5.1 throttles keyboard scroll commands to ~20 Hz so the run loop has breathing room between bursts. A brief 40 ms ease-out animation is restored on each scroll — kept strictly shorter than the throttle window so animations can&rsquo;t queue. <code>g</code>/<code>G</code> and <code>gg</code> are now throttled too (previously they fired a SwiftUI animation tick on every key-repeat, even though the anchor target is idempotent). Trackpad scrolling is unchanged — it never used this path.</p>
+
+<p>The fix is a backpressure bound, not a per-row speedup; transcripts with very heavy markdown will still feel each scroll. A future release will cache parsed markdown per turn so the underlying cost goes away.</p>
+]]></description>
+            <enclosure url="https://github.com/julo15/seshctl/releases/download/v0.5.1/Seshctl-0.5.1.dmg" length="38492793" type="application/octet-stream" sparkle:edSignature="hqqTGExJzCCZ2qvDA5a3e72WExsvhG51wVIp2rzAqP5k74JzxbVygtYpjQdo3f0KHZcuzP7TQm3GdVenK86gAw=="/>
+        </item>
+        <item>
             <title>0.5.0</title>
             <pubDate>Wed, 27 May 2026 13:17:58 -0400</pubDate>
             <sparkle:version>6</sparkle:version>
@@ -77,36 +95,6 @@
 <p>If you&rsquo;re seeing this prompt: the loop works end-to-end.</p>
 ]]></description>
             <enclosure url="https://github.com/julo15/seshctl/releases/download/v0.4.1/Seshctl-0.4.1.dmg" length="11683207" type="application/octet-stream" sparkle:edSignature="KvICFnFVyB9/Ah+EHavHi2OH/voV1fGXw6+tl748owNQo7ieJeIwz6WqH9y+G4pORT2EG1FELIc9i6+MZzi4AQ=="/>
-        </item>
-        <item>
-            <title>0.4.0</title>
-            <pubDate>Thu, 21 May 2026 09:55:34 -0400</pubDate>
-            <sparkle:version>4</sparkle:version>
-            <sparkle:shortVersionString>0.4.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h1>Seshctl 0.4.0</h1>
-
-<h2>In-app auto-updates</h2>
-
-<p>Seshctl now updates itself. On launch (and once a day after that), the app quietly checks for a new release; when one is available you get a standard <strong>Update Available</strong> prompt with release notes and an <strong>Install Update</strong> button. One click downloads, verifies, swaps the app in <code>/Applications</code>, and relaunches — no DMG drag, no Gatekeeper prompt.</p>
-
-<p>You can also trigger a check on demand from the menu-bar gear → <strong>About</strong> → <strong>Check for Updates…</strong>.</p>
-
-<p><strong>One-time manual step for 0.3.0 users:</strong> this is the first release with auto-updates baked in, so 0.3.0 itself can&rsquo;t update itself to 0.4.0. Download <code>Seshctl-0.4.0.dmg</code> once from the GitHub Release below and drag it over your existing install. Every release after 0.4.0 will arrive in-app.</p>
-
-<h2>Row recaps for Claude Code sessions</h2>
-
-<p>Claude Code session rows now show the latest <strong>recap</strong> (the &ldquo;away summary&rdquo; Claude writes when a session goes idle) in the preview slot instead of the last assistant reply. The recap is usually a tighter one-line read of where the session left off. Rows with no recap yet fall back to the old preview chain unchanged.</p>
-
-<h2>Under the hood</h2>
-
-<ul>
-<li>Sparkle 2.9 embedded into the app bundle, signed with our self-signed cert + EdDSA update key.</li>
-<li>Appcast hosted at <code>https://julo15.github.io/seshctl/appcast.xml</code> (GitHub Pages), DMGs served from GitHub Releases.</li>
-</ul>
-
-]]></description>
-            <enclosure url="https://github.com/julo15/seshctl/releases/download/v0.4.0/Seshctl-0.4.0.dmg" length="11683224" type="application/octet-stream" sparkle:edSignature="t/nrPV/CeBZFhTiZBjzzZJFHRq07K9HdU02dve1hTBRnJvkxX21/oqckzA6YcAMkM0ci4P4NdbsABAx2XyPQCw=="/>
         </item>
     </channel>
 </rss>
