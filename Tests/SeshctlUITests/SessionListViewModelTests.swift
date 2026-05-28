@@ -2705,4 +2705,145 @@ struct SessionListViewModelTests {
 
         #expect(vm.latestAssistantById[session.id] == nil)
     }
+
+    // MARK: - emptyState routing
+
+    private static func makeRemoteForEmptyState(
+        id: String,
+        connected: Bool = true
+    ) -> RemoteClaudeCodeSession {
+        RemoteClaudeCodeSession(
+            id: id,
+            title: "Remote",
+            model: "claude-opus-4-7",
+            repoUrl: nil,
+            branches: [],
+            status: "active",
+            workerStatus: "idle",
+            connectionStatus: connected ? "connected" : "disconnected",
+            lastEventAt: Date(),
+            createdAt: Date(),
+            unread: false
+        )
+    }
+
+    @Test("emptyState is .fullyEmpty when no local or remote sessions")
+    @MainActor
+    func emptyStateFullyEmpty() throws {
+        let db = try SeshctlDatabase.temporary()
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+
+        #expect(vm.emptyState == .fullyEmpty)
+    }
+
+    @Test("emptyState .fullyEmpty wins over isSearching")
+    @MainActor
+    func emptyStateFullyEmptyBeatsSearching() throws {
+        let db = try SeshctlDatabase.temporary()
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+        vm.enterSearch()
+
+        #expect(vm.emptyState == .fullyEmpty)
+    }
+
+    @Test("emptyState is nil when active rows exist")
+    @MainActor
+    func emptyStateNilWithActiveRows() throws {
+        let db = try SeshctlDatabase.temporary()
+        try db.startSession(tool: .claude, directory: "/tmp/a", pid: 1)
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+
+        #expect(vm.emptyState == nil)
+    }
+
+    @Test("emptyState is .recentsOnly when only recents survive the filter")
+    @MainActor
+    func emptyStateRecentsOnly() throws {
+        let (defaults, suite) = makeIsolatedDefaults(#function)
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+
+        let db = try SeshctlDatabase.temporary()
+        try db.startSession(tool: .claude, directory: "/tmp/r", pid: 1)
+        try db.endSession(pid: 1, tool: .claude)
+
+        let vm = SessionListViewModel(database: db, enableGC: false, defaults: defaults)
+        vm.refresh()
+
+        #expect(vm.emptyState == .recentsOnly)
+    }
+
+    @Test("emptyState is .filteredOut when filter excludes every session")
+    @MainActor
+    func emptyStateFilteredOut() throws {
+        let (defaults, suite) = makeIsolatedDefaults(#function)
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+
+        let db = try SeshctlDatabase.temporary()
+        // Local active session present, no remotes.
+        try db.startSession(tool: .claude, directory: "/tmp/a", pid: 1)
+
+        let vm = SessionListViewModel(database: db, enableGC: false, defaults: defaults)
+        vm.sourceFilter = .remoteOnly
+        vm.refresh()
+
+        #expect(vm.emptyState == .filteredOut)
+    }
+
+    @Test("emptyState .filteredOut for localOnly with only remotes present")
+    @MainActor
+    func emptyStateFilteredOutLocalOnly() throws {
+        let (defaults, suite) = makeIsolatedDefaults(#function)
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+
+        let db = try SeshctlDatabase.temporary()
+        try db.upsertRemoteClaudeCodeSessions([Self.makeRemoteForEmptyState(id: "cse_only")])
+
+        let vm = SessionListViewModel(database: db, enableGC: false, defaults: defaults)
+        vm.sourceFilter = .localOnly
+        vm.refresh()
+
+        #expect(vm.emptyState == .filteredOut)
+    }
+
+    @Test("emptyState is nil while isSearching with non-empty data")
+    @MainActor
+    func emptyStateNilDuringSearch() throws {
+        let (defaults, suite) = makeIsolatedDefaults(#function)
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+
+        let db = try SeshctlDatabase.temporary()
+        try db.startSession(tool: .claude, directory: "/tmp/a", pid: 1)
+        try db.endSession(pid: 1, tool: .claude)
+
+        let vm = SessionListViewModel(database: db, enableGC: false, defaults: defaults)
+        vm.refresh()
+        // Without search: .recentsOnly fires.
+        #expect(vm.emptyState == .recentsOnly)
+
+        vm.enterSearch()
+        // Search UI must stay visible; emptyState clears.
+        #expect(vm.emptyState == nil)
+    }
+
+    @Test("emptyState .filteredOut wins over tree mode")
+    @MainActor
+    func emptyStateFilteredOutBeatsTreeMode() throws {
+        let (defaults, suite) = makeIsolatedDefaults(#function)
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+
+        let db = try SeshctlDatabase.temporary()
+        try db.startSession(tool: .claude, directory: "/tmp/a", pid: 1)
+
+        let vm = SessionListViewModel(database: db, enableGC: false, defaults: defaults)
+        vm.sourceFilter = .remoteOnly
+        vm.isTreeMode = true
+        vm.refresh()
+
+        // The view consults `emptyState` before falling into the tree branch,
+        // so the user gets actionable copy instead of a blank tree.
+        #expect(vm.emptyState == .filteredOut)
+    }
 }
