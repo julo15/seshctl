@@ -134,7 +134,7 @@ public struct SessionListView: View {
                     .font(.body)
                     .foregroundStyle(.red)
                     .padding()
-            } else if viewModel.sessions.isEmpty {
+            } else if viewModel.sessions.isEmpty && viewModel.remoteSessions.isEmpty {
                 VStack(spacing: 8) {
                     Text("No sessions")
                         .font(.body)
@@ -145,6 +145,7 @@ public struct SessionListView: View {
                         .multilineTextAlignment(.center)
                 }
                 .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if viewModel.filteredRows.isEmpty
                         && !viewModel.isSearching
                         && !viewModel.recentRows.isEmpty {
@@ -162,6 +163,26 @@ public struct SessionListView: View {
                         .multilineTextAlignment(.center)
                 }
                 .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if viewModel.filteredRows.isEmpty
+                        && viewModel.recentRows.isEmpty
+                        && !viewModel.isSearching
+                        && viewModel.sourceFilter != .all {
+                // Filter excludes every session. Without this branch we'd
+                // render an empty ScrollView and (for the empty-state
+                // branches above) the outer VStack would center its
+                // remaining content, drifting the header to the middle.
+                VStack(spacing: 8) {
+                    Text("No \(filterBadgeText(viewModel.sourceFilter)) sessions")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                    Text("Press r to change filter.")
+                        .font(.footnote)
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if viewModel.isTreeMode && !viewModel.isSearching {
                 SessionTreeView(
                     viewModel: viewModel,
