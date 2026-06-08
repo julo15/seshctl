@@ -30,9 +30,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // Timestamp of the most recent panel close (any path: click-outside,
     // Esc/toggle-off, or losing key focus when a transcript link opens a
-    // browser). Used by `togglePanel()` to decide whether a reopen is a quick
-    // round-trip — in which case an open transcript (and its scroll position)
-    // is preserved — versus a fresh glance, where we drop back to the list.
+    // browser — that last case closes via `FloatingPanel.resignKey` → the
+    // `onDismiss` closure, not an explicit call here). Used by `togglePanel()`
+    // to decide whether a reopen is a quick round-trip — in which case an open
+    // transcript (and its scroll position) is preserved — versus a fresh
+    // glance, where we drop back to the list.
     private var lastPanelCloseAt: Date?
     // How long after closing the panel a reopen still counts as "coming right
     // back," preserving the open transcript instead of resetting to the list.
@@ -40,6 +42,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // than `inboxBurstWindow` (10s) / `focusMemoryWindow` (30s) — those gate
     // momentary close/reopen flicker, whereas this spans an off-app detour.)
     private static let detailPreserveWindow: TimeInterval = 180
+
+    /// Whether a reopen counts as "coming right back" — i.e. close to enough to
+    /// the last close (`lastCloseAt`) to preserve the open transcript instead of
+    /// resetting to the list. Pure + injectable so the window boundary is
+    /// unit-testable without a real clock (mirrors
+    /// `SessionListViewModel.applyInboxAwareResetIfNeeded(now:burstWindow:)`).
+    nonisolated static func shouldPreserveDetail(lastCloseAt: Date?, now: Date, window: TimeInterval) -> Bool {
+        guard let lastCloseAt else { return false }
+        return now.timeIntervalSince(lastCloseAt) <= window
+    }
 
     // Menu-bar status item. Visibility is driven by the
     // `AppearanceDefaults.showStatusBarIconKey` preference (default on); see
@@ -248,9 +260,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // from a transcript, read it, come back" land you where you were
             // rather than at the list. Beyond the window, a reopen is treated
             // as a fresh glance and resets to the list.
-            let cameRightBack = lastPanelCloseAt.map {
-                Date().timeIntervalSince($0) <= Self.detailPreserveWindow
-            } ?? false
+            let cameRightBack = Self.shouldPreserveDetail(
+                lastCloseAt: lastPanelCloseAt, now: Date(), window: Self.detailPreserveWindow)
             if navigationState.screen == .detail && !cameRightBack {
                 navigationState.backToList()
             }
@@ -448,6 +459,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // them to the first responder via the standard action selectors; if
         // nothing is selected the send is a harmless no-op.
         if modifiers.contains(.command), let chars {
+            // A Cmd shortcut is never part of a `gg` sequence — cancel any
+            // pending `g` so a later bare `g` doesn't spuriously jump to top
+            // (mirrors the resets in `handleNormalKey`).
+            pendingG = false
             switch chars {
             case "c":
                 NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil)

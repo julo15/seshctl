@@ -27,10 +27,25 @@ struct MessageBodyText: View {
                 // would appear inert. Opening via NSWorkspace works regardless
                 // of activation state.
                 .environment(\.openURL, OpenURLAction { url in
-                    NSWorkspace.shared.open(url)
+                    // Only follow web/mail links. Transcript text is whatever
+                    // the agent wrote, so a rendered link could carry a
+                    // `file://` or custom app scheme; swallow those rather than
+                    // hand them to NSWorkspace. Return `.handled` either way so
+                    // nothing falls through to the (non-working) default action.
+                    if Self.isOpenableLinkScheme(url) {
+                        NSWorkspace.shared.open(url)
+                    }
                     return .handled
                 })
         }
+    }
+
+    /// Whether a transcript link should be opened. Restricted to web and mail
+    /// schemes so untrusted transcript content can't trigger a one-click open
+    /// of a local resource (`file://`) or an arbitrary registered app scheme.
+    static func isOpenableLinkScheme(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased() else { return false }
+        return ["http", "https", "mailto"].contains(scheme)
     }
 
     private var transcriptTheme: Theme {
