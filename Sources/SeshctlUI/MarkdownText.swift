@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import SeshctlCore
 import MarkdownUI
@@ -19,7 +20,32 @@ struct MessageBodyText: View {
         } else {
             Markdown(text)
                 .markdownTheme(transcriptTheme)
+                // Route link taps through NSWorkspace explicitly. SwiftUI's
+                // default `openURL` action does not reliably open a browser
+                // from Seshctl's non-activating `LSUIElement` panel (the app
+                // is never the active app), so links rendered by MarkdownUI
+                // would appear inert. Opening via NSWorkspace works regardless
+                // of activation state.
+                .environment(\.openURL, OpenURLAction { url in
+                    // Only follow web/mail links. Transcript text is whatever
+                    // the agent wrote, so a rendered link could carry a
+                    // `file://` or custom app scheme; swallow those rather than
+                    // hand them to NSWorkspace. Return `.handled` either way so
+                    // nothing falls through to the (non-working) default action.
+                    if Self.isOpenableLinkScheme(url) {
+                        NSWorkspace.shared.open(url)
+                    }
+                    return .handled
+                })
         }
+    }
+
+    /// Whether a transcript link should be opened. Restricted to web and mail
+    /// schemes so untrusted transcript content can't trigger a one-click open
+    /// of a local resource (`file://`) or an arbitrary registered app scheme.
+    static func isOpenableLinkScheme(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased() else { return false }
+        return ["http", "https", "mailto"].contains(scheme)
     }
 
     private var transcriptTheme: Theme {
