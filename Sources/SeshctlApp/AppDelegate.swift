@@ -28,6 +28,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var detailScrollThrottle = ScrollThrottle(minInterval: KeyboardScrollTiming.throttleMinInterval)
     private let remoteBrowserCoordinator = RemoteBrowserCoordinator()
 
+    // Timestamp of the most recent panel close (any path: click-outside,
+    // Esc/toggle-off, or losing key focus when a transcript link opens a
+    // browser). Used by `togglePanel()` to decide whether a reopen is a quick
+    // round-trip — in which case an open transcript (and its scroll position)
+    // is preserved — versus a fresh glance, where we drop back to the list.
+    private var lastPanelCloseAt: Date?
+    // How long after closing the panel a reopen still counts as "coming right
+    // back," preserving the open transcript instead of resetting to the list.
+    // Sized to cover reading a linked page; tune freely. (Deliberately longer
+    // than `inboxBurstWindow` (10s) / `focusMemoryWindow` (30s) — those gate
+    // momentary close/reopen flicker, whereas this spans an off-app detour.)
+    private static let detailPreserveWindow: TimeInterval = 180
+
     // Menu-bar status item. Visibility is driven by the
     // `AppearanceDefaults.showStatusBarIconKey` preference (default on); see
     // `reconcileStatusItemVisibility()`. The Show/Hide menu item is held
@@ -173,6 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             // Stop polling when panel is dismissed via click-outside
             panelRef.onDismiss = { [weak self] in
+                self?.lastPanelCloseAt = Date()
                 self?.viewModel?.recordPanelClose()
                 self?.viewModel?.panelDidHide()
             }
@@ -216,6 +230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func dismissPanel() {
         panel?.orderOut(nil)
+        lastPanelCloseAt = Date()
         viewModel?.recordPanelClose()
         viewModel?.panelDidHide()
     }
@@ -227,11 +242,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             viewModel?.applyInboxAwareResetIfNeeded()
             viewModel?.panelDidShow()
             viewModel?.resetSelection()
-            // Return to list when reopening
-            if navigationState.screen == .detail {
+            // Return to list when reopening — but keep an open transcript (and
+            // its scroll position, which the persistent panel view retains) if
+            // the panel is reopened soon after closing. This makes "open a link
+            // from a transcript, read it, come back" land you where you were
+            // rather than at the list. Beyond the window, a reopen is treated
+            // as a fresh glance and resets to the list.
+            let cameRightBack = lastPanelCloseAt.map {
+                Date().timeIntervalSince($0) <= Self.detailPreserveWindow
+            } ?? false
+            if navigationState.screen == .detail && !cameRightBack {
                 navigationState.backToList()
             }
         } else {
+            lastPanelCloseAt = Date()
             viewModel?.recordPanelClose()
             viewModel?.panelDidHide()
         }
@@ -415,6 +439,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if vm.isSearching {
             handleDetailSearchKey(keyCode: keyCode, chars: chars, modifiers: modifiers, vm: vm)
             return
+        }
+
+        // Standard macOS editing shortcuts for the selectable transcript text.
+        // The floating panel swallows every keyDown before AppKit's responder
+        // chain runs (there's no Edit menu), so Cmd+C / Cmd+A would otherwise
+        // never reach the text element that owns the current selection. Forward
+        // them to the first responder via the standard action selectors; if
+        // nothing is selected the send is a harmless no-op.
+        if modifiers.contains(.command), let chars {
+            switch chars {
+            case "c":
+                NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil)
+                return
+            case "a":
+                NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
+                return
+            case "f":
+                // Standard Find shortcut, mirroring the `/` binding below.
+                vm.enterSearch()
+                return
+            default:
+                break
+            }
         }
 
         // Handle gg sequence

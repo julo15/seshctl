@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import SeshctlCore
 import MarkdownUI
@@ -19,6 +20,16 @@ struct MessageBodyText: View {
         } else {
             Markdown(text)
                 .markdownTheme(transcriptTheme)
+                // Route link taps through NSWorkspace explicitly. SwiftUI's
+                // default `openURL` action does not reliably open a browser
+                // from Seshctl's non-activating `LSUIElement` panel (the app
+                // is never the active app), so links rendered by MarkdownUI
+                // would appear inert. Opening via NSWorkspace works regardless
+                // of activation state.
+                .environment(\.openURL, OpenURLAction { url in
+                    NSWorkspace.shared.open(url)
+                    return .handled
+                })
         }
     }
 
