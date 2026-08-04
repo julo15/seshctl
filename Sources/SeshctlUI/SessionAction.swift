@@ -8,6 +8,9 @@ public enum SessionActionTarget {
     case activeSession(Session)
     /// An inactive session (completed/canceled/stale) — resume it.
     case inactiveSession(Session)
+    /// A set of closed sessions to reopen together, each in its own terminal
+    /// tab. Used by the recents view after the user marks rows.
+    case restoreSessions([Session])
     /// An inactive or active Claude session — fork it into a new branched session in a new terminal tab. Original session is unaffected.
     case forkSession(Session)
     /// A recall search result, optionally linked to a matched session for focusing or host app resolution.
@@ -46,6 +49,9 @@ public enum SessionAction {
 
         case .inactiveSession(let session):
             resumeInactiveSession(session, markRead: markRead, dismiss: dismiss, environment: environment)
+
+        case .restoreSessions(let sessions):
+            restoreSessions(sessions, markRead: markRead, dismiss: dismiss, environment: environment)
 
         case .forkSession(let session):
             forkSession(session, markRead: markRead, dismiss: dismiss, environment: environment)
@@ -114,6 +120,112 @@ public enum SessionAction {
             // rememberFocused is intentionally skipped for resume paths.
             focusActiveSession(session, markRead: { _ in }, rememberFocused: { _ in }, dismiss: dismiss, environment: environment)
         }
+    }
+
+    /// Gap between one restore and the next.
+    ///
+    /// `TerminalController.resumeInTerminal` runs `open -b` and then, 300ms
+    /// later, an AppleScript that adds a tab to the app's *front window*.
+    /// Dispatching several of those at once makes them compete for that window
+    /// while it is still being created, so the restores are spaced instead.
+    static let restoreStagger: TimeInterval = 0.6
+
+    /// One session's resolved restore inputs, computed before dispatch so the
+    /// staggered walk does no work between tabs.
+    struct RestorePlan: Sendable {
+        let directory: String
+        let command: String
+        let bundleId: String?
+    }
+
+    /// Build the dispatch list for a restore. Sessions with no resume command
+    /// are dropped; the caller already refuses to mark them, so this only
+    /// catches a row that changed between marking and pressing enter.
+    static func restorePlans(
+        for sessions: [Session],
+        environment env: SystemEnvironment? = nil
+    ) -> [RestorePlan] {
+        sessions.compactMap { session in
+            guard let command = TerminalController.buildResumeCommand(session: session) else {
+                return nil
+            }
+            return RestorePlan(
+                directory: session.directory,
+                command: command,
+                bundleId: TerminalController.resolveAppBundleId(session: session, environment: env)
+            )
+        }
+    }
+
+    /// Reopen several closed sessions, each in its own terminal tab.
+    ///
+    /// A single session takes the existing one-row path, so `enter` on an
+    /// unmarked row behaves exactly as it does outside recents mode.
+    private static func restoreSessions(
+        _ sessions: [Session],
+        markRead: (Session) -> Void,
+        dismiss: () -> Void,
+        environment: SystemEnvironment? = nil
+    ) {
+        guard !sessions.isEmpty else { return }
+        if sessions.count == 1 {
+            resumeInactiveSession(
+                sessions[0], markRead: markRead, dismiss: dismiss, environment: environment)
+            return
+        }
+
+        for session in sessions {
+            markRead(session)
+        }
+        // Dismiss once, before the walk. The panel must not sit in front of
+        // the tabs it is opening.
+        dismiss()
+
+        let plans = restorePlans(for: sessions, environment: environment)
+        dispatchRestores(ArraySlice(plans), failures: [], environment: environment)
+    }
+
+    /// Walk the restore list one tab at a time, then hand the user whatever
+    /// failed. Recursive rather than a loop of delayed closures so there is no
+    /// shared mutable state to synchronise, and so each tab is only requested
+    /// after the previous request returned.
+    ///
+    /// Failed commands are pooled and copied once at the end. Copying each one
+    /// as it fails would leave the clipboard holding only the last failure.
+    private static func dispatchRestores(
+        _ plans: ArraySlice<RestorePlan>,
+        failures: [String],
+        environment: SystemEnvironment?
+    ) {
+        guard let plan = plans.first else {
+            finishRestores(failures: failures)
+            return
+        }
+
+        var failures = failures
+        let dispatched = TerminalController.resume(
+            command: plan.command,
+            directory: plan.directory,
+            bundleId: plan.bundleId,
+            environment: environment
+        )
+        if !dispatched {
+            failures.append(compoundShellCommand(plan.command, directory: plan.directory))
+        }
+
+        let rest = plans.dropFirst()
+        guard !rest.isEmpty else {
+            finishRestores(failures: failures)
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + restoreStagger) {
+            dispatchRestores(rest, failures: failures, environment: environment)
+        }
+    }
+
+    private static func finishRestores(failures: [String]) {
+        guard !failures.isEmpty else { return }
+        copyToClipboard(failures.joined(separator: "\n"))
     }
 
     private static func forkSession(

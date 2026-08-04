@@ -47,14 +47,74 @@ Press **Cmd+Shift+S** to toggle the session panel.
 - **f** — fork the selected Claude session into a new branched session in a new tab (then **y** to confirm, **n** to cancel)
 - **o** — open session detail view
 - **x** — kill session process (then **y** to confirm, **n** to cancel)
+- **d** — delete the row from seshctl (then **y** to confirm, **n** to cancel)
+- **t** — regenerate the selected session's title from its latest messages
 - **u** — mark the selected session as read
 - **U** — mark all sessions as read (then **y** to confirm, **n** to cancel)
 - **r** — cycle the source filter: all → local only → cloud only → all
+- **c** — toggle recents: closed sessions you can reopen
+- **space** or **x** — in recents, mark the selected row to reopen
+- **a** — in recents, mark every visible row (press again to clear)
+- **/** then **tab** — in recents, narrow the list, then mark rows in it
 - **v** — toggle list/tree view
 - **h / l** — in tree mode, jump to previous/next group
 - **/** — search/filter sessions
 - **?** — open the keyboard help popover
 - **q** or **Esc** — dismiss the panel
+
+**Show agent name** (**⋯ → Appearance**, on by default) names the agent behind each session — Claude Code, Codex, Cursor, Gemini — in the row subtitle. The corner badge encodes the same thing as a colored monogram, but it's suppressed when every visible session shares one agent, so a list of only Claude Code sessions would otherwise show no agent at all.
+
+**Show model** (Appearance, on by default) adds the model next to the agent — `Claude Code Opus 5`, `Codex GPT-5.5`. It's read from the transcript, so it appears only where one is recorded: always for Claude Code, and for Codex once the session records a turn context. Cursor and Gemini write no transcript, so they never show one.
+### Session titles
+
+Off by default. When enabled under **⋯ → Appearance**, each session gets a short title generated once from its opening exchange and then left alone — the way Claude.ai and ChatGPT name a thread:
+
+```
+seshctl
+Claude Code · main
+Diversify repo color palette
+968 tests pass. Both installed — no failures outside…
+```
+
+The title answers "what is this session"; the preview line below it still answers "what did it just say". The title is frozen on purpose — a live-updating label would read `yes do that` half the time. Press **t** on a row to regenerate it from the *latest* messages, which is what you want when a session has drifted from what it started as.
+
+Titling shells out to `claude -p` with Haiku, so it uses your Claude quota — roughly one short call per session, plus one per **t**. That's why it's opt-in rather than on by default. It works for Claude Code and Codex; Cursor and Gemini have no transcript to read.
+
+#### Clearing a ghost row
+
+Close a terminal hard and its agent never fires an end hook, so the row can outlive the process. **x** can't help — there's nothing left to signal. **d** deletes the row itself.
+
+Most ghosts are cleaned up automatically: each poll marks active sessions whose PID is dead as stale, and stale rows drop out of the list. Two cases slip through, and both leave a row still looking active:
+
+- The session has no PID recorded, so the liveness check never runs on it.
+- The PID was recycled by an unrelated process, so the dead session keeps testing alive.
+
+Already-ended rows aren't in the default list at all. Press **c** for recents, or **/** to search, then **d**.
+### Reopening closed sessions
+
+Quit your terminal with several agents running and every one of those rows goes stale. Press **c** to see them.
+
+Recents lists your closed local sessions, newest first, one row per conversation, with the first 8 characters of the resume id. Cloud sessions are left out: those reopen in a browser, not a tab. Press **space** or **x** to mark a row, or **a** to mark all of them. Press **enter** and each marked session reopens in its own terminal tab, using `claude --resume <id>`, `codex resume <id>`, or `pi --session <id>`. With nothing marked, **enter** reopens the selected row on its own.
+
+Tabs open one at a time rather than all at once, because the terminal needs a moment to finish creating each window before the next one is asked for.
+
+Everything listed can be reopened. Rows that can't are left out: Cursor chats have no shell resume command, and some older rows were recorded without a conversation id. Find those with **/** if you want to clear them with **d**. If a reopen fails (the directory is gone, the terminal won't script), the commands land on your clipboard instead.
+
+A conversation that is running again is left out of recents entirely. Its old row describes the previous run of a session already visible in the live list.
+
+Pressing **c** reloads first, so a session you closed a moment ago is already there. Unread markers are suppressed in recents, since "has this said something since I last looked" means nothing for a session that has stopped. Your list/tree setting is remembered: recents is flat while it is open, and **c** again puts your grouping back.
+
+#### Narrowing the list
+
+Press **/** inside recents to filter it. Every word you type has to match, but each word may match a different part of the row: its repo, title, branch, directory, tool, or last message. So `sesh dedup` finds the `seshctl` session titled "Session deduplication verification". One word is often not enough on its own, since a busy repo can own half the list.
+
+Typing sends letters to the query, so press **tab** to mark rows. **x** or **space** marks the selected one, **a** marks everything the query left visible, **enter** reopens them.
+
+Marks outlive the query. Search `location`, press **a**, clear the query, search `elmozi`, press **a**, and **enter** reopens both sets. A row that scrolls out of view because it stopped matching keeps its mark.
+
+This filter reads the session rows only, not your transcripts. To search what was actually said, use **/** from the live list instead: that runs a semantic search over your history and lists the matches under a "Semantic" heading.
+
+**Esc** backs out one step at a time: clear the query, leave recents, close the panel.
 
 ### Session detail
 
@@ -88,7 +148,27 @@ Accounts with Google-only sign-in: add an email/password or passkey on claude.ai
 | Claude Code | Full | Full | Bridged claude.ai sessions show as a single row with a cloud glyph |
 | Codex | Partial | Full | No `UserPromptSubmit` (no "In Progress" state); no `SessionEnd` (closes on `Stop` only) |
 | Cursor (1.7+) | Full | None | Workspace focus works out of the box; chat-thread focus needs the bundled companion extension (auto-installed from the in-app **Editor Integrations** window) |
+| Pi | Extension | Full | Pi has no hook system; the bundled companion extension registers sessions instead — see [Pi setup](#pi-setup) |
 | Gemini | None | None | CLI-only tracking via `seshctl-cli start --tool gemini` |
+
+#### Pi setup
+
+Pi has no hook system — it has a TypeScript extension API instead — so seshctl ships a companion extension rather than shell hooks. Install drops it at:
+
+```
+$PI_CODING_AGENT_DIR/extensions/seshctl.ts     # or ~/.pi/agent/extensions/seshctl.ts
+```
+
+Pi auto-discovers everything in that directory, so there's nothing to enable. Restart Pi and its sessions show up with the same working/idle states as Claude Code and Codex.
+
+If you set `PI_CODING_AGENT_DIR` (common after Pi's home moved to `~/.agents`), note that seshctl launched from the Dock inherits no shell environment. It falls back to `~/.agents` when that directory holds a `settings.json` and `~/.pi/agent` doesn't exist. If you keep Pi somewhere else entirely, copy the file yourself:
+
+```sh
+cp /Applications/Seshctl.app/Contents/Resources/extensions/pi/seshctl.ts \
+   "$PI_CODING_AGENT_DIR/extensions/seshctl.ts"
+```
+
+Uninstall removes only `seshctl.ts` — your other extensions in that folder are left alone.
 
 ### Terminal apps
 

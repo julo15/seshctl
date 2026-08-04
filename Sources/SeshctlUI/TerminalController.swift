@@ -265,6 +265,7 @@ public enum TerminalController {
         case .claude: binary = "claude"
         case .gemini: binary = "gemini"
         case .codex: binary = "codex"
+        case .pi: binary = "pi"
         case .cursor: return nil
         }
 
@@ -278,6 +279,9 @@ public enum TerminalController {
         switch session.tool {
         case .codex:
             parts.append("resume")
+        case .pi:
+            // Pi's `--session` accepts a full path or a partial UUID.
+            parts.append("--session")
         case .claude, .gemini:
             parts.append("--resume")
         case .cursor:

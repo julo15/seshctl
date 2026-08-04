@@ -265,6 +265,8 @@ public enum FirstLaunchInstaller {
             scripts: HookSpec.cursorScriptNames,
             actions: &actions
         )
+        // Pi has no hook system, so its integration ships as an extension.
+        installPiExtension(bundleURL: bundleURL, paths: paths, actions: &actions)
 
         // 5. Register hooks in Claude Code settings.
         try injectHookEntries(
@@ -351,6 +353,9 @@ public enum FirstLaunchInstaller {
             paths: paths,
             actions: &actions
         )
+
+        // 2c. Remove the Pi companion extension (Pi has no hooks to strip).
+        removePiExtension(paths: paths, actions: &actions)
 
         // 3. Remove hook scripts directory.
         let fm = FileManager.default
@@ -458,6 +463,57 @@ public enum FirstLaunchInstaller {
         }
         public var codexConfigFile: String {
             homeRoot.appendingPathComponent(".agents/config.toml").path
+        }
+
+        /// Every directory that looks like a Pi agent home.
+        ///
+        /// Pi resolves its own home as `PI_CODING_AGENT_DIR`, else
+        /// `~/.pi/agent`. A GUI app launched from the Dock inherits no shell
+        /// environment, so it can't read that variable — and Pi's home
+        /// migration to `~/.agents` leaves the old tree behind complete with a
+        /// stale `settings.json`. Neither "the directory exists" nor "it has a
+        /// settings.json" identifies the live one.
+        ///
+        /// So don't guess. Installing into a dead home means the integration
+        /// silently never loads, which is far worse than leaving one 4 KB file
+        /// in a directory the user abandoned — and uninstall removes both.
+        /// When `PI_CODING_AGENT_DIR` IS readable it is authoritative and the
+        /// only candidate.
+        ///
+        /// The environment variable is consulted ONLY when `homeRoot` is the
+        /// current user's real home: it describes *this* user's install, and
+        /// honoring it under a temp `homeRoot` would let a test write into the
+        /// user's live Pi extensions directory.
+        public var piAgentDirs: [String] {
+            let fm = FileManager.default
+            let isRealHome = homeRoot.standardizedFileURL
+                == fm.homeDirectoryForCurrentUser.standardizedFileURL
+            if isRealHome,
+               let env = ProcessInfo.processInfo.environment["PI_CODING_AGENT_DIR"],
+               !env.isEmpty
+            {
+                return [(env as NSString).expandingTildeInPath]
+            }
+
+            let standard = homeRoot.appendingPathComponent(".pi/agent").path
+            let migrated = homeRoot.appendingPathComponent(".agents").path
+
+            var dirs: [String] = []
+            for candidate in [standard, migrated] {
+                let settings = (candidate as NSString).appendingPathComponent("settings.json")
+                if fm.fileExists(atPath: settings) { dirs.append(candidate) }
+            }
+            // Pi isn't installed yet. Use its documented default so a later
+            // install picks the extension up without re-running ours.
+            return dirs.isEmpty ? [standard] : dirs
+        }
+
+        /// Pi auto-discovers `<agentDir>/extensions/*.ts`. seshctl drops a
+        /// single file there rather than registering a path in Pi's
+        /// `settings.json`, because auto-discovery needs no edit to a file the
+        /// user also hand-maintains.
+        public var piExtensionFiles: [String] {
+            piAgentDirs.map { ($0 as NSString).appendingPathComponent("extensions/seshctl.ts") }
         }
 
         public var appSupportDir: String {
@@ -698,6 +754,84 @@ public enum FirstLaunchInstaller {
             try withGuard.write(toFile: dst, atomically: true, encoding: .utf8)
             try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dst)
             actions.append(.hookScriptWritten(dst))
+        }
+    }
+
+    /// Locates the bundled Pi extension source. Mirrors
+    /// `resolveHookSourceDirs`: the app bundle first, then the repo tree so a
+    /// dev run out of `.build/` still finds it.
+    static func resolvePiExtensionSource(bundleURL: URL?) -> String? {
+        let fm = FileManager.default
+
+        if let bundleURL {
+            let bundled = bundleURL
+                .appendingPathComponent("Contents/Resources/extensions/pi/seshctl.ts").path
+            if fm.fileExists(atPath: bundled) { return bundled }
+        }
+
+        let execDir = (CommandLine.arguments[0] as NSString).deletingLastPathComponent
+        let candidates: [String] = [
+            (execDir as NSString).appendingPathComponent("../../pi-extension/seshctl.ts"),
+            (execDir as NSString).appendingPathComponent("../pi-extension/seshctl.ts"),
+            (execDir as NSString).appendingPathComponent("../../../pi-extension/seshctl.ts"),
+            (fm.currentDirectoryPath as NSString).appendingPathComponent("pi-extension/seshctl.ts"),
+        ]
+        for cand in candidates {
+            let resolved = (cand as NSString).standardizingPath
+            if fm.fileExists(atPath: resolved) { return resolved }
+        }
+        return nil
+    }
+
+    /// Installs the Pi companion extension into `<agentDir>/extensions/`.
+    ///
+    /// Best-effort by design, unlike the hook bundles: Pi may not be installed
+    /// at all, and neither a missing source nor an unwritable agent dir is
+    /// worth failing the whole install over. With Pi absent the file just sits
+    /// unread; the other tools are unaffected either way.
+    static func installPiExtension(bundleURL: URL?, paths: Paths, actions: inout [Action]) {
+        guard let source = resolvePiExtensionSource(bundleURL: bundleURL) else {
+            actions.append(.noted("pi extension source not found; skipped"))
+            return
+        }
+
+        let fm = FileManager.default
+        guard let contents = try? String(contentsOfFile: source, encoding: .utf8) else {
+            actions.append(.noted("pi extension source unreadable; skipped"))
+            return
+        }
+
+        for dest in paths.piExtensionFiles {
+            let destDir = (dest as NSString).deletingLastPathComponent
+            do {
+                try fm.createDirectory(atPath: destDir, withIntermediateDirectories: true)
+                if fm.fileExists(atPath: dest) {
+                    try fm.removeItem(atPath: dest)
+                }
+                try contents.write(toFile: dest, atomically: true, encoding: .utf8)
+                actions.append(.hookScriptWritten(dest))
+            } catch {
+                actions.append(
+                    .noted("pi extension install failed at \(dest): \(error.localizedDescription)")
+                )
+            }
+        }
+    }
+
+    /// Removes the Pi companion extension from every candidate home. Deletes
+    /// only seshctl's own file — the user's other extensions share those
+    /// directories.
+    static func removePiExtension(paths: Paths, actions: inout [Action]) {
+        let fm = FileManager.default
+        for dest in paths.piExtensionFiles where fm.fileExists(atPath: dest) {
+            do {
+                try fm.removeItem(atPath: dest)
+                actions.append(.removedFile(dest))
+            } catch {
+                actions.append(
+                    .noted("pi extension removal failed at \(dest): \(error.localizedDescription)")
+                )
+            }
         }
     }
 
@@ -1438,6 +1572,26 @@ extension FirstLaunchInstaller {
                 echo "  warning: failed to uninstall extension from ${label}" >&2
             fi
         }
+
+        # Pi has no hook system, so seshctl integrates via an extension file dropped
+        # into Pi's auto-discovery directory. Remove only our own file — the user's
+        # other extensions live in the same folder.
+        # Install writes to every candidate Pi home (the ~/.pi/agent -> ~/.agents
+        # migration leaves both looking live), so removal sweeps all of them.
+        echo "==> Removing Pi companion extension"
+        pi_removed=0
+        for pi_dir in "${PI_CODING_AGENT_DIR:-}" "$HOME/.pi/agent" "$HOME/.agents"; do
+            [ -n "$pi_dir" ] || continue
+            pi_extension="$pi_dir/extensions/seshctl.ts"
+            if [ -f "$pi_extension" ]; then
+                rm -f "$pi_extension"
+                echo "  removed $pi_extension"
+                pi_removed=1
+            fi
+        done
+        if [ "$pi_removed" -eq 0 ]; then
+            echo "  no Pi extension found, skipping"
+        fi
 
         echo "==> Uninstalling Seshctl extension from editors"
         uninstall_editor_extension "VS Code" "/Applications/Visual Studio Code.app" "code"

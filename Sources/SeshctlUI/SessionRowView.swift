@@ -29,18 +29,38 @@ public struct SessionRowView: View {
     /// `Session.previewContent(awaySummary:)`. Sourced from
     /// `SessionListViewModel.awaySummariesById`.
     var awaySummary: String? = nil
+    /// Display-ready model name for this session, e.g. `"Opus 5"`. Nil when the
+    /// transcript records none. Sourced from `SessionListViewModel.modelsById`.
+    var model: String? = nil
+    /// True while a title is being generated for this session. Drives the
+    /// "Titling…" placeholder — the model call takes several seconds, and
+    /// without it pressing `t` looks like a no-op.
+    var isTitling: Bool = false
     /// How yesterday-bucket timestamps render in the row's age slot — see
     /// `SessionAgeDisplay.YesterdayStyle`. Driven by the parent view: the
     /// time-sorted inbox passes `.timeOfDay`, the repo-grouped tree view
     /// passes `.relativeDay`.
     var yesterdayStyle: SessionAgeDisplay.YesterdayStyle = .date
+    /// Whether to show the restore checkbox at the head of line 1. True only
+    /// in recents mode, where `space` marks rows to reopen together. Outside
+    /// that mode the slot is not reserved, so ordinary rows keep their layout.
+    var showMarkSlot: Bool = false
+    /// Whether this row is marked for restore.
+    var isMarked: Bool = false
+    /// Whether this row can be marked. An unmarkable row draws a dimmed
+    /// placeholder rather than an empty box, so the user can tell "not
+    /// selected" apart from "cannot be selected".
+    var isMarkable: Bool = true
 
     var onDetail: (() -> Void)?
 
     @AppStorage(AppearanceDefaults.repoAccentBarKey) private var repoAccentBarEnabled: Bool = AppearanceDefaults.repoAccentBarDefault
     @AppStorage(AppearanceDefaults.stackedRowLayoutKey) private var stackedRowLayoutEnabled: Bool = AppearanceDefaults.stackedRowLayoutDefault
+    @AppStorage(AppearanceDefaults.showAgentNameKey) private var showAgentName: Bool = AppearanceDefaults.showAgentNameDefault
+    @AppStorage(AppearanceDefaults.sessionTitlesKey) private var sessionTitlesEnabled: Bool = AppearanceDefaults.sessionTitlesDefault
+    @AppStorage(AppearanceDefaults.showModelKey) private var showModel: Bool = AppearanceDefaults.showModelDefault
 
-    public init(session: Session, hostApp: HostAppInfo, isUnread: Bool = false, isBridged: Bool = false, showCloudAffordances: Bool = false, showAgentBadge: Bool = true, awaySummary: String? = nil, yesterdayStyle: SessionAgeDisplay.YesterdayStyle = .date, onDetail: (() -> Void)? = nil) {
+    public init(session: Session, hostApp: HostAppInfo, isUnread: Bool = false, isBridged: Bool = false, showCloudAffordances: Bool = false, showAgentBadge: Bool = true, awaySummary: String? = nil, model: String? = nil, isTitling: Bool = false, yesterdayStyle: SessionAgeDisplay.YesterdayStyle = .date, showMarkSlot: Bool = false, isMarked: Bool = false, isMarkable: Bool = true, onDetail: (() -> Void)? = nil) {
         self.session = session
         self.hostApp = hostApp
         self.isUnread = isUnread
@@ -48,7 +68,12 @@ public struct SessionRowView: View {
         self.showCloudAffordances = showCloudAffordances
         self.showAgentBadge = showAgentBadge
         self.awaySummary = awaySummary
+        self.model = model
+        self.isTitling = isTitling
         self.yesterdayStyle = yesterdayStyle
+        self.showMarkSlot = showMarkSlot
+        self.isMarked = isMarked
+        self.isMarkable = isMarkable
         self.onDetail = onDetail
     }
 
@@ -111,6 +136,7 @@ public struct SessionRowView: View {
     private var stackedContent: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
+                markGlyph
                 SenderText(display: session.senderDisplay, isUnread: isUnread, isStacked: true)
                     .foregroundStyle(senderColor())
                 if isUnread {
@@ -121,6 +147,8 @@ public struct SessionRowView: View {
 
             subtitleRow(stacked: true)
                 .fontWeight(isUnread ? .bold : .regular)
+
+            titleView
 
             previewView
                 .padding(.top, 6)
@@ -143,6 +171,7 @@ public struct SessionRowView: View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
+                    markGlyph
                     SenderText(display: session.senderDisplay, isUnread: isUnread, isStacked: false)
                         .foregroundStyle(senderColor())
                     if isUnread {
@@ -151,6 +180,7 @@ public struct SessionRowView: View {
                 }
 
                 subtitleRow(stacked: false)
+                titleView
             }
             .fontWeight(isUnread ? .bold : .regular)
             .frame(width: SenderColumnLayout.width, alignment: .leading)
@@ -166,6 +196,32 @@ public struct SessionRowView: View {
     @ViewBuilder
     private func subtitleRow(stacked: Bool) -> some View {
         HStack(spacing: 4) {
+            if showAgentName {
+                // Tinted with the agent's badge color so the name and the
+                // corner badge read as the same signal rather than two
+                // competing ones.
+                Text(session.tool.agentDisplayName)
+                    .font(.system(size: SenderColumnLayout.subtitleSize(isUnread: isUnread, stacked: stacked), weight: .medium))
+                    .foregroundStyle(AgentBadgeSpec.forAgent(session.tool).color)
+                    .lineLimit(1)
+                    .fixedSize()
+                // Model rides directly after the agent that's running it, in
+                // the agent's tint but at normal weight so it reads as a
+                // qualifier rather than a second heading. Absent whenever the
+                // transcript records no model — Codex only writes one when the
+                // session switches, and Cursor/Gemini write no transcript.
+                if showModel, let model {
+                    Text(model)
+                        .font(.system(size: SenderColumnLayout.subtitleSize(isUnread: isUnread, stacked: stacked)))
+                        .foregroundStyle(AgentBadgeSpec.forAgent(session.tool).color.opacity(0.75))
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+                Text("·")
+                    .font(.system(size: SenderColumnLayout.subtitleSize(isUnread: isUnread, stacked: stacked)))
+                    .foregroundStyle(.tertiary)
+            }
+
             if showCloudAffordances {
                 Image(systemName: "laptopcomputer")
                     .font(.footnote)
@@ -196,6 +252,86 @@ public struct SessionRowView: View {
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+            }
+
+            // The resume id, so the user can match a row against a terminal
+            // or paste it into `--resume` by hand. Shown only in recents mode,
+            // where reopening is the job; live rows have no use for it.
+            if showMarkSlot, let shortId = Self.shortConversationId(session.conversationId) {
+                Text(shortId)
+                    .font(.system(size: SenderColumnLayout.subtitleSize(isUnread: isUnread, stacked: stacked), design: .monospaced))
+                    .foregroundStyle(.quaternary)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .help(session.conversationId ?? "")
+            }
+        }
+    }
+
+    /// Restore checkbox for recents mode. Renders nothing outside that mode,
+    /// so no other view reserves the space.
+    ///
+    /// An unmarkable row gets a dimmed slash rather than an empty box. Cursor
+    /// rows and rows with no conversation id have no resume command, and a
+    /// blank checkbox would read as "not marked yet" instead of "cannot be
+    /// marked".
+    @ViewBuilder
+    private var markGlyph: some View {
+        if showMarkSlot {
+            if !isMarkable {
+                Image(systemName: "square.slash")
+                    .font(.footnote)
+                    .foregroundStyle(.quaternary)
+                    .help("No resume command for this session")
+            } else {
+                Image(systemName: isMarked ? "checkmark.square.fill" : "square")
+                    .font(.footnote)
+                    .foregroundStyle(isMarked ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary))
+                    .help(isMarked ? "Marked to reopen" : "Press space to mark")
+            }
+        }
+    }
+
+    /// Short form of the agent's own conversation id, which is the argument
+    /// `claude --resume` / `codex resume` / `pi --session` take.
+    ///
+    /// `session.id` is deliberately not shown. It is a local primary key with
+    /// no meaning outside seshctl's database, so it would be noise.
+    static func shortConversationId(_ conversationId: String?) -> String? {
+        guard let conversationId, !conversationId.isEmpty else { return nil }
+        return String(conversationId.prefix(8))
+    }
+
+    /// Frozen thread title, rendered between the branch subtitle and the live
+    /// message preview.
+    ///
+    /// The two lines answer different questions and both earn their space: the
+    /// title says *what this session is* and never changes, the preview says
+    /// *what it just said*. Styled a step below the sender and a step above the
+    /// subtitle so the eye lands on repo → title → preview.
+    ///
+    /// Renders nothing when the feature is off or the session has no title yet
+    /// — a placeholder would make every untitled row look broken while the
+    /// background titler works through the list.
+    @ViewBuilder
+    private var titleView: some View {
+        if sessionTitlesEnabled {
+            if isTitling {
+                // Only shown while a generation is actually running, so it
+                // never becomes the resting state of an untitled row.
+                Text("Titling\u{2026}")
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(.tertiary)
+                    .italic()
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if let title = session.title, !title.isEmpty {
+                Text(title)
+                    .font(.system(size: 13, weight: isUnread ? .semibold : .regular))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }

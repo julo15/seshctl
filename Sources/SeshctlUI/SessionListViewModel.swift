@@ -8,13 +8,38 @@ import SeshctlRecall
 @MainActor
 public final class SessionListViewModel: ObservableObject {
     @Published public private(set) var sessions: [Session] = []
+    /// Closed sessions, newest first, one row per conversation. Loaded by
+    /// `refresh()` from `Database.listRecentSessions`, which is separate from
+    /// the `listSessions` window so history and live rows don't compete for
+    /// the same 50-row budget. Feeds `recentRows`.
+    ///
+    /// Rows Seshctl spawned for itself are dropped here rather than in
+    /// `recentLocalRows`, so the global `/` search and `sessionsToRestore` are
+    /// covered by the same filter. See `InternalSession`.
+    @Published public private(set) var recentSessions: [Session] = []
     @Published public private(set) var remoteSessions: [RemoteClaudeCodeSession] = []
     @Published public private(set) var error: String?
     @Published public var selectedIndex: Int = 0
     @Published public var isSearching: Bool = false
+    /// Whether the seshboard is showing closed sessions instead of live ones.
+    /// Mutually exclusive with `isSearching` and `isTreeMode`. Deliberately not
+    /// persisted: the panel should open on live sessions every time, because
+    /// recents is a task ("put my terminal back") rather than a preference.
+    @Published public private(set) var isRecentsMode: Bool = false
+    /// Rows the user marked for restore, by `session.id`. Only populated in
+    /// recents mode. A row can only be marked when it has a resume command, so
+    /// `enter` can never dispatch a restore that silently does nothing.
+    @Published public private(set) var markedSessionIds: Set<String> = []
+    /// The tree setting recents suspended, held so it can be put back on exit.
+    /// Nil whenever recents is not responsible for the current value.
+    private var treeModeBeforeRecents: Bool?
     @Published public var searchQuery: String = ""
     @Published public var isNavigatingSearch: Bool = false
     @Published public var pendingKillSessionId: String?
+    /// Row awaiting delete confirmation. Separate from `pendingKillSessionId`
+    /// so the two prompts can't be mistaken for one another — one signals a
+    /// live process, the other erases a row whose process is already gone.
+    @Published public var pendingDeleteSessionId: String?
     @Published public var pendingForkSessionId: String?
     @Published public var pendingMarkAllRead: Bool = false
     @Published public var showingHelp: Bool = false
@@ -69,6 +94,15 @@ public final class SessionListViewModel: ObservableObject {
     /// Pruned by `pruneTranscriptLatestAssistantCache(keepingPaths:)` on each
     /// refresh.
     private var transcriptLatestAssistantCache: [String: (mtime: Date, text: String?)] = [:]
+    /// Per-transcript cache: `path → (mtime, model)`. Mirrors
+    /// `transcriptAwaySummaryCache` for the model the session is running.
+    /// Pruned by `pruneTranscriptModelCache(keepingPaths:)` on each refresh.
+    private var transcriptModelCache: [String: (mtime: Date, model: String?)] = [:]
+    /// Display-ready model name per session id, e.g. `"Opus 5"`, `"GPT-5.5"`.
+    /// Absent for sessions whose transcript records no model — Codex only
+    /// writes one when the session switches models, and Cursor/Gemini write no
+    /// transcript at all.
+    @Published public private(set) var modelsById: [String: String] = [:]
     @Published public private(set) var recallResults: [RecallResult] = []
     @Published public private(set) var isRecallSearching: Bool = false
     @Published public private(set) var recallIndexingDone: Int?
@@ -88,6 +122,21 @@ public final class SessionListViewModel: ObservableObject {
     /// cloud row selected. The view observes this, renders a toast, then
     /// calls `acknowledgeCloudKillToast()` to reset.
     @Published public private(set) var showedCloudKillToast: Bool = false
+
+    /// Sessions currently being titled. Titling shells out to `claude -p`
+    /// (~5-7s), so it must never run twice for the same session, and the
+    /// scheduler keeps at most one in flight overall — a burst of new sessions
+    /// should trickle rather than fork a subprocess per row.
+    /// Published so the row can show that a title is being generated. Without
+    /// it a `t` press looks like nothing happened for the ~5-7s the model call
+    /// takes.
+    @Published public private(set) var titlingInFlight: Set<String> = []
+    /// Last titling attempt per session, successful or not. A failed attempt
+    /// leaves `title` nil, so without this the scheduler would retry the same
+    /// session every 2s forever when the CLI is broken or out of quota.
+    private var lastTitleAttemptAt: [String: Date] = [:]
+    /// How long to wait before retrying a session whose titling failed.
+    static let titleRetryBackoff: TimeInterval = 600
 
     private let database: SeshctlDatabase
     private let refreshInterval: TimeInterval
@@ -135,11 +184,17 @@ public final class SessionListViewModel: ObservableObject {
         /// user at starting a CLI session.
         case fullyEmpty
         /// No actives under the current filter, but recents are reachable
-        /// via search — point the user at `/`.
+        /// via `c`.
         case recentsOnly
         /// The current filter excludes every session — point the user at
         /// `r` to change the filter.
         case filteredOut
+        /// Recents mode is on and there is no closed session to restore.
+        case noRecents
+        /// Recents mode is on with a search query that matches nothing.
+        /// Distinct from `noRecents` because the fix is different: clear the
+        /// query rather than leave the view.
+        case noRecentsMatch
     }
     public static let inboxBurstWindow: TimeInterval = 10 // 10-second "don't switch under the user" window
     /// Synthetic group name for cloud rows that have no git_repository source.
@@ -204,6 +259,11 @@ public final class SessionListViewModel: ObservableObject {
         pendingForkSessionId = nil
         pendingMarkAllRead = false
         showingHelp = false
+        // The panel opens on live sessions every time. Recents is a task the
+        // user finishes, not a view they leave switched on.
+        isRecentsMode = false
+        markedSessionIds = []
+        restoreTreeModeAfterRecents()
     }
 
     public func stopPolling() {
@@ -260,7 +320,12 @@ public final class SessionListViewModel: ObservableObject {
                 lastGC = Date()
             }
             sessions = try database.listSessions(limit: 50)
+            recentSessions = try database.listRecentSessions(limit: Self.recentSessionLimit)
+                .filter { !InternalSession.isSelfSpawned(hostAppBundleId: $0.hostAppBundleId) }
             remoteSessions = try database.listRemoteClaudeCodeSessions()
+            // Marks are keyed by id, so a row that gc'd away mid-session must
+            // not stay marked and become a restore that silently does nothing.
+            pruneMarksToVisibleRows()
             var unread = Set(sessions.filter { session in
                 let actionable = session.status == .idle || session.status == .waiting || session.status == .completed || session.status == .canceled || session.status == .stale
                 guard actionable else { return false }
@@ -277,8 +342,12 @@ public final class SessionListViewModel: ObservableObject {
             // possible `~/.claude/projects/` glob walk) would run up to 4×
             // per session every 2 seconds. Non-Claude tools are skipped —
             // the scanners would early-out on them anyway.
+            // Codex is included because the model scanner and the titler both
+            // read its transcript. The bridge / away-summary / latest-assistant
+            // helpers each guard on `.claude` internally and return before
+            // touching the filesystem, so they're unaffected by the wider set.
             var resolvedPathsBySessionId: [String: String] = [:]
-            for session in sessions where session.tool == .claude {
+            for session in sessions where TranscriptParser.parsesTranscripts(session.tool) {
                 if let path = TranscriptParser.resolveExistingTranscript(for: session)?.path {
                     resolvedPathsBySessionId[session.id] = path
                 }
@@ -327,8 +396,20 @@ public final class SessionListViewModel: ObservableObject {
                 }
             }
             latestAssistantById = latest
+            var models: [String: String] = [:]
+            for session in sessions {
+                guard let path = resolvedPathsBySessionId[session.id] else { continue }
+                if let raw = cachedModel(for: session, transcriptPath: path) {
+                    models[session.id] = TranscriptModelScanner.displayName(for: raw)
+                }
+            }
+            modelsById = models
             pruneTranscriptLatestAssistantCache(keepingPaths: livePaths)
             pruneTranscriptBridgeCache(keepingPaths: livePaths)
+            pruneTranscriptModelCache(keepingPaths: livePaths)
+            // At most one background titling job per cycle. No-ops unless the
+            // user opted in — it spends Claude quota.
+            scheduleTitlingIfNeeded(resolvedPaths: resolvedPathsBySessionId)
             // Re-pin `selectedIndex` to the previously-selected row's new
             // position. If the row vanished (closed + filtered out of
             // `orderedRows`), clamp `selectedIndex` to the new array bounds
@@ -361,15 +442,7 @@ public final class SessionListViewModel: ObservableObject {
     /// fields match as before — this is the local-only slice.
     public var localFilteredSessions: [Session] {
         guard isSearching, !searchQuery.isEmpty else { return sessions }
-        let query = searchQuery.lowercased()
-        return sessions.filter { session in
-            session.directory.lowercased().contains(query)
-                || (session.gitRepoName?.lowercased().contains(query) ?? false)
-                || (session.gitBranch?.lowercased().contains(query) ?? false)
-                || (session.lastAsk?.lowercased().contains(query) ?? false)
-                || (session.lastReply?.lowercased().contains(query) ?? false)
-                || session.tool.rawValue.lowercased().contains(query)
-        }
+        return sessions.filter { matchesSearchQuery($0) }
     }
 
     /// Local active sessions (idle, working, or waiting).
@@ -377,9 +450,67 @@ public final class SessionListViewModel: ObservableObject {
         localFilteredSessions.filter { $0.isActive }
     }
 
-    /// Local recent sessions (completed/canceled/stale).
+    /// Local recent sessions (completed/canceled/stale), deduped to one row
+    /// per conversation. Reads `recentSessions` rather than filtering
+    /// `sessions`, so a conversation resumed several times shows once.
     public var localRecentSessions: [Session] {
-        localFilteredSessions.filter { !$0.isActive }
+        guard isSearching, !searchQuery.isEmpty else { return recentSessions }
+        return recentSessions.filter { matchesSearchQuery($0) }
+    }
+
+    /// Whether a session matches the active search query. Shared by the active
+    /// and recent slices so both halves of a search agree on what a hit is.
+    private func matchesSearchQuery(_ session: Session) -> Bool {
+        Self.matches(session: session, query: searchQuery)
+    }
+
+    /// Split a query into lowercased tokens on whitespace.
+    ///
+    /// Tokens are ANDed across the row, fields are ORed within a token. A
+    /// single `contains` over the whole query only matched when every word
+    /// appeared consecutively in one field, so `sesh dedup` found nothing.
+    /// Tokenized, it finds a `seshctl` row titled "Session deduplication
+    /// verification". This is what makes a 100-row recents list narrowable:
+    /// `loc` alone leaves 46 rows in a real database, `loc pr` leaves two.
+    nonisolated static func searchTokens(_ query: String) -> [String] {
+        query.lowercased().split(whereSeparator: \.isWhitespace).map(String.init)
+    }
+
+    /// Static and `nonisolated` so the match rule tests without a view model,
+    /// database, clock, or MainActor hop. An empty query matches everything.
+    nonisolated static func matches(session: Session, query: String) -> Bool {
+        let tokens = searchTokens(query)
+        guard !tokens.isEmpty else { return true }
+        let fields: [String?] = [
+            session.directory,
+            session.gitRepoName,
+            session.gitBranch,
+            session.lastAsk,
+            session.lastReply,
+            session.title,
+            session.tool.rawValue,
+        ]
+        let haystack = fields.compactMap { $0?.lowercased() }
+        return tokens.allSatisfy { token in
+            haystack.contains { $0.contains(token) }
+        }
+    }
+
+    /// Remote counterpart of `matches(session:query:)`. Same token rule over
+    /// the three fields a cloud row carries, so one query can't behave
+    /// differently on the two halves of a search.
+    nonisolated static func matches(remote: RemoteClaudeCodeSession, query: String) -> Bool {
+        let tokens = searchTokens(query)
+        guard !tokens.isEmpty else { return true }
+        let fields: [String?] = [
+            remote.title,
+            DisplayRow.repoShortName(from: remote.repoUrl),
+            remote.branches.joined(separator: " "),
+        ]
+        let haystack = fields.compactMap { $0?.lowercased() }
+        return tokens.allSatisfy { token in
+            haystack.contains { $0.contains(token) }
+        }
     }
 
     /// Local-only ordered list (active then recent). In tree mode, returns
@@ -408,13 +539,7 @@ public final class SessionListViewModel: ObservableObject {
     /// `title`, derived repo short name, and `branches[]`.
     private var filteredRemoteSessions: [RemoteClaudeCodeSession] {
         guard isSearching, !searchQuery.isEmpty else { return remoteSessions }
-        let query = searchQuery.lowercased()
-        return remoteSessions.filter { remote in
-            let titleHit = remote.title.lowercased().contains(query)
-            let repoHit = (DisplayRow.repoShortName(from: remote.repoUrl)?.lowercased().contains(query)) ?? false
-            let branchesHit = remote.branches.joined(separator: " ").lowercased().contains(query)
-            return titleHit || repoHit || branchesHit
-        }
+        return remoteSessions.filter { Self.matches(remote: $0, query: searchQuery) }
     }
 
     /// Active rows: local `isActive == true` sessions plus remote sessions
@@ -437,7 +562,7 @@ public final class SessionListViewModel: ObservableObject {
     /// connected. Sorted by timestamp desc. Honors `sourceFilter`.
     public var recentRows: [DisplayRow] {
         let localRecent: [DisplayRow] = sourceFilter.includesLocal
-            ? localFilteredSessions.filter { !$0.isActive }.map { .local($0) }
+            ? localRecentSessions.map { .local($0) }
             : []
         let remoteRecent: [DisplayRow] = sourceFilter.includesRemote
             ? filteredRemoteSessions
@@ -446,6 +571,35 @@ public final class SessionListViewModel: ObservableObject {
                 .map { .remote($0) }
             : []
         return (localRecent + remoteRecent).sorted { $0.sortTimestamp > $1.sortTimestamp }
+    }
+
+    /// Closed local sessions that can actually be reopened, newest first.
+    ///
+    /// Everything in the recents view is restorable. Two kinds of row are
+    /// filtered out because they never could be:
+    ///
+    /// - **No conversation id.** Nothing to pass to `--resume`. 40 of the 169
+    ///   closed rows in a real database were these.
+    /// - **Cursor.** Its chats have no shell resume command at all.
+    ///
+    /// They were previously rendered with a dimmed checkbox that refused the
+    /// mark, which turned a quarter of the list into rows the user had to read
+    /// and then skip. They remain reachable through `/` search, which is where
+    /// `d` deletes them.
+    ///
+    /// Disconnected cloud rows are excluded for the same reason: they reopen
+    /// in a browser, not a tab. `sourceFilter` is ignored here, since the view
+    /// is local by definition and a remote-only filter would just empty it.
+    ///
+    /// `localRecentSessions` applies the search query, so `/` inside recents
+    /// narrows this list in place. Marks are not filtered with it: they live
+    /// in `markedSessionIds` and are resolved against the full recents set by
+    /// `sessionsToRestore`.
+    public var recentLocalRows: [DisplayRow] {
+        localRecentSessions
+            .filter { isMarkable($0) }
+            .map { DisplayRow.local($0) }
+            .sorted { $0.sortTimestamp > $1.sortTimestamp }
     }
 
     /// The view-facing filtered + mode-aware row list. Tree mode and the
@@ -458,6 +612,11 @@ public final class SessionListViewModel: ObservableObject {
     /// flips to true, so the user sees the full corpus to start
     /// narrowing from.
     public var filteredRows: [DisplayRow] {
+        // Recents wins over tree mode. Entering recents clears `isTreeMode`,
+        // so the two can't both be set; the ordering here is belt and braces.
+        if isRecentsMode {
+            return recentLocalRows
+        }
         if isTreeMode {
             return treeOrderedRows
         }
@@ -483,8 +642,14 @@ public final class SessionListViewModel: ObservableObject {
     ///   with `.all`, an empty `filteredRows`/`recentRows` implies both
     ///   row sets are empty, which `.fullyEmpty` already caught.
     public var emptyState: EmptyStateKind? {
-        if sessions.isEmpty && remoteSessions.isEmpty {
+        if sessions.isEmpty && recentSessions.isEmpty && remoteSessions.isEmpty {
             return .fullyEmpty
+        }
+        // Recents can show an empty state while searching, unlike the global
+        // search below: there are no recall rows underneath it to hide.
+        if isRecentsMode {
+            guard filteredRows.isEmpty else { return nil }
+            return searchQuery.isEmpty ? .noRecents : .noRecentsMatch
         }
         if isSearching { return nil }
         guard filteredRows.isEmpty else { return nil }
@@ -661,6 +826,165 @@ public final class SessionListViewModel: ObservableObject {
         selectedIndex = orderedRows.isEmpty ? -1 : 0
     }
 
+    /// How many closed sessions the recents view loads. Larger than the
+    /// 50-row live window because history is the whole point of the view, and
+    /// the rows are deduped by conversation before they get here.
+    static let recentSessionLimit = 100
+
+    // MARK: - Recents mode
+
+    /// Enter or leave recents mode. Recents replaces the live list with closed
+    /// sessions the user can reopen, so it clears tree mode and search rather
+    /// than composing with them.
+    public func toggleRecentsMode() {
+        pendingKillSessionId = nil
+        pendingDeleteSessionId = nil
+        pendingForkSessionId = nil
+        pendingMarkAllRead = false
+        if isRecentsMode {
+            exitRecentsMode()
+        } else {
+            enterRecentsMode()
+        }
+    }
+
+    public func enterRecentsMode() {
+        if isSearching { exitSearch() }
+        // Recents is a flat history list, so tree grouping is suspended while
+        // it is open. Suspended, not discarded: the value is stashed here and
+        // put back on exit.
+        //
+        // The write goes through `isApplyingTransientReset` because
+        // `isTreeMode`'s `didSet` persists to UserDefaults. Without the guard,
+        // one press of `c` would overwrite the user's saved tree preference
+        // with `false` and it would never come back, even after a relaunch.
+        treeModeBeforeRecents = isTreeMode
+        setTreeModeWithoutPersisting(false)
+        isRecentsMode = true
+        markedSessionIds = []
+        // Reload on entry. The poll marks a hard-closed session stale on its
+        // own, but only every 2 seconds. Pressing `c` right after quitting a
+        // terminal should show those rows immediately, not a beat later.
+        refresh()
+        selectedIndex = orderedRows.isEmpty ? -1 : 0
+    }
+
+    public func exitRecentsMode() {
+        // A query typed inside recents narrowed the closed list. It has no
+        // meaning once that list is gone, so leaving takes it along.
+        if isSearching { exitSearch() }
+        isRecentsMode = false
+        markedSessionIds = []
+        restoreTreeModeAfterRecents()
+        selectedIndex = orderedRows.isEmpty ? -1 : 0
+    }
+
+    /// Put back the tree setting recents suspended. No-op when recents never
+    /// changed it, so calling this from several exit paths is safe.
+    private func restoreTreeModeAfterRecents() {
+        guard let previous = treeModeBeforeRecents else { return }
+        treeModeBeforeRecents = nil
+        setTreeModeWithoutPersisting(previous)
+    }
+
+    /// Change `isTreeMode` without writing through to UserDefaults. For view
+    /// state the user did not choose, which must not overwrite what they did.
+    private func setTreeModeWithoutPersisting(_ value: Bool) {
+        guard isTreeMode != value else { return }
+        isApplyingTransientReset = true
+        isTreeMode = value
+        isApplyingTransientReset = false
+    }
+
+    // MARK: - Restore marks
+
+    /// Whether a session can be restored, and therefore whether it can be
+    /// marked. Rows without a resume command (Cursor, or any row missing a
+    /// conversation id) refuse the mark, so the user never selects a row that
+    /// would do nothing on `enter`.
+    public func isMarkable(_ session: Session) -> Bool {
+        TerminalController.buildResumeCommand(session: session) != nil
+    }
+
+    /// Local rows in the current ordering that can be restored.
+    public var markableRows: [Session] {
+        orderedRows.compactMap { row in
+            guard case .local(let session) = row, isMarkable(session) else { return nil }
+            return session
+        }
+    }
+
+    /// Mark or unmark the selected row. Silently ignores a row that has no
+    /// resume command, and any remote row.
+    public func toggleMarkForSelected() {
+        guard isRecentsMode, let session = selectedSession, isMarkable(session) else { return }
+        if markedSessionIds.contains(session.id) {
+            markedSessionIds.remove(session.id)
+        } else {
+            markedSessionIds.insert(session.id)
+        }
+    }
+
+    /// Mark every restorable row, or clear the marks when all of them are
+    /// already marked. One key covers both directions.
+    ///
+    /// Scoped to the rows a search query left visible, in both directions.
+    /// Assigning the visible set outright would discard marks the query is
+    /// hiding, so `a` under one query would silently undo `a` under the last
+    /// one. With no query every row is visible, which is the original
+    /// behavior.
+    public func toggleMarkAll() {
+        guard isRecentsMode else { return }
+        let markable = markableRows
+        guard !markable.isEmpty else { return }
+        let visibleIds = Set(markable.map(\.id))
+        if visibleIds.isSubset(of: markedSessionIds) {
+            markedSessionIds.subtract(visibleIds)
+        } else {
+            markedSessionIds.formUnion(visibleIds)
+        }
+    }
+
+    public func clearMarks() {
+        markedSessionIds = []
+    }
+
+    /// Sessions `enter` should restore: the marked set when it is non-empty,
+    /// otherwise the selected row on its own. Returned newest first, so tabs
+    /// open in the order the rows are displayed.
+    ///
+    /// The marked branch walks `recentSessions`, not `markableRows`. A search
+    /// inside recents hides rows without unmarking them, so resolving against
+    /// the visible list would silently drop every mark the query filtered out.
+    /// That is what makes the compose work: narrow to `location`, mark three,
+    /// clear the query, narrow to `elmozi`, mark two, restore all five.
+    public var sessionsToRestore: [Session] {
+        guard isRecentsMode else { return [] }
+        if markedSessionIds.isEmpty {
+            guard let session = selectedSession, isMarkable(session) else { return [] }
+            return [session]
+        }
+        return recentSessions
+            .filter { markedSessionIds.contains($0.id) && isMarkable($0) }
+            .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    /// Drop marks whose row is no longer displayed. `refresh()` calls this
+    /// because gc, a delete, or a resume that reactivates a conversation can
+    /// all remove a row from under a mark.
+    private func pruneMarksToVisibleRows() {
+        guard !markedSessionIds.isEmpty else { return }
+        let visible = Set(recentSessions.map(\.id))
+        markedSessionIds.formIntersection(visible)
+    }
+
+    /// Look up a local session by id across both the live window and the
+    /// recents list. `orderedRows` carries the `Session` value itself, so this
+    /// is only needed by call sites that hold an id alone.
+    public func session(withId id: String) -> Session? {
+        sessions.first { $0.id == id } ?? recentSessions.first { $0.id == id }
+    }
+
     /// Toggle between list and tree mode. Remap `selectedIndex` by
     /// `row.id` so the same row stays selected across the switch.
     /// Falls back to index 0 when the prior row isn't in the new ordering,
@@ -669,6 +993,15 @@ public final class SessionListViewModel: ObservableObject {
         pendingKillSessionId = nil
         pendingForkSessionId = nil
         pendingMarkAllRead = false
+        // Tree mode groups live sessions by repo. Recents is a flat history
+        // list, so `v` leaves recents rather than trying to combine them.
+        //
+        // Restore first, then toggle. `v` should flip the user's real
+        // preference, not the `false` recents parked there.
+        if isRecentsMode && isSearching { exitSearch() }
+        isRecentsMode = false
+        markedSessionIds = []
+        restoreTreeModeAfterRecents()
         let prior = orderedRows
         let priorSelected: DisplayRow? = {
             guard selectedIndex >= 0, selectedIndex < prior.count else { return nil }
@@ -870,6 +1203,32 @@ public final class SessionListViewModel: ObservableObject {
         return summary
     }
 
+    /// Scan the session's transcript for the model in effect, re-using a
+    /// previous result when the transcript's mtime hasn't advanced. Mirrors
+    /// `cachedAwaySummary(for:transcriptPath:)`.
+    ///
+    /// Unlike its siblings this serves two tools — `TranscriptModelScanner`
+    /// reads `message.model` for Claude and `model_change.modelId` for Codex —
+    /// so the tool guard lives inside the scanner rather than here.
+    fileprivate func cachedModel(for session: Session, transcriptPath path: String) -> String? {
+        let mtime = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+        if let mtime, let cached = transcriptModelCache[path], cached.mtime == mtime {
+            return cached.model
+        }
+        let model = TranscriptModelScanner.extractModel(transcriptPath: path, tool: session.tool)
+        if let mtime {
+            transcriptModelCache[path] = (mtime, model)
+        }
+        return model
+    }
+
+    /// Drop cache entries for transcripts whose owning session is no longer in
+    /// the live list. Mirrors `pruneTranscriptAwaySummaryCache`.
+    fileprivate func pruneTranscriptModelCache(keepingPaths paths: [String]) {
+        let live = Set(paths)
+        transcriptModelCache = transcriptModelCache.filter { live.contains($0.key) }
+    }
+
     /// Scan the session's transcript for the latest in-progress assistant
     /// text, re-using a previous result when the transcript's mtime hasn't
     /// advanced. Mirrors `cachedAwaySummary(for:transcriptPath:)`.
@@ -886,6 +1245,126 @@ public final class SessionListViewModel: ObservableObject {
             transcriptLatestAssistantCache[path] = (mtime, text)
         }
         return text
+    }
+
+    // MARK: - Session titling
+
+    /// Tools whose transcripts we can parse well enough to title from. Cursor
+    /// and Gemini write no transcript at all (see the README compatibility
+    /// table), so they're permanently untitleable rather than merely pending.
+    static let titleableTools: Set<SessionTool> = [.claude, .codex, .pi]
+
+    /// Pick the next session to title, or nil when there's nothing to do.
+    ///
+    /// Pure so the selection rules can be tested without a database, a
+    /// subprocess, or a clock. Ordering follows `sessions`, which is
+    /// recency-sorted, so the session the user most likely just started gets
+    /// titled first.
+    static func nextTitlingCandidate(
+        sessions: [Session],
+        lastAttemptAt: [String: Date],
+        inFlight: Set<String>,
+        now: Date,
+        backoff: TimeInterval = titleRetryBackoff
+    ) -> Session? {
+        sessions.first { session in
+            guard titleableTools.contains(session.tool) else { return false }
+            // Frozen: a title is written once and never recomputed. Only an
+            // explicit user retitle overwrites it.
+            guard session.title == nil else { return false }
+            guard session.isActive else { return false }
+            guard !inFlight.contains(session.id) else { return false }
+            guard let attempted = lastAttemptAt[session.id] else { return true }
+            return now.timeIntervalSince(attempted) >= backoff
+        }
+    }
+
+    /// Kick off at most one background titling job per refresh.
+    ///
+    /// Runs off the main actor because `SessionTitler.generate` blocks on a
+    /// subprocess for several seconds; inline it would freeze the panel. Every
+    /// failure path is silent — no title is a normal state, not an error worth
+    /// showing.
+    fileprivate func scheduleTitlingIfNeeded(resolvedPaths: [String: String]) {
+        let enabled = UserDefaults.standard.object(forKey: AppearanceDefaults.sessionTitlesKey) as? Bool
+            ?? AppearanceDefaults.sessionTitlesDefault
+        guard enabled else { return }
+        guard titlingInFlight.isEmpty else { return }
+        guard let cli = SessionTitler.resolveClaudeCLI() else { return }
+        guard let session = Self.nextTitlingCandidate(
+            sessions: sessions,
+            lastAttemptAt: lastTitleAttemptAt,
+            inFlight: titlingInFlight,
+            now: Date()
+        ) else { return }
+        // Claude paths are pre-resolved for this refresh cycle; Codex isn't in
+        // that map, so fall back to the hook-supplied path.
+        guard let path = resolvedPaths[session.id]
+            ?? session.transcriptPath.flatMap({ FileManager.default.fileExists(atPath: $0) ? $0 : nil })
+        else { return }
+
+        titlingInFlight.insert(session.id)
+        lastTitleAttemptAt[session.id] = Date()
+        runTitling(sessionId: session.id, tool: session.tool, transcriptPath: path, cli: cli, material: .opening)
+    }
+
+    /// Shared body for automatic and user-requested titling.
+    private func runTitling(
+        sessionId: String,
+        tool: SessionTool,
+        transcriptPath: String,
+        cli: URL,
+        material: SessionTitler.Material
+    ) {
+        let database = self.database
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let title: String? = {
+                guard let data = try? Data(contentsOf: URL(fileURLWithPath: transcriptPath)),
+                      let turns = try? TranscriptParser.parse(data: data, tool: tool)
+                else { return nil }
+                // Automatic titling waits for a complete exchange; an explicit
+                // retitle does not, because the user asked for it now.
+                if material == .opening, !SessionTitler.hasCompleteFirstExchange(turns: turns) {
+                    return nil
+                }
+                guard let excerpt = SessionTitler.excerpt(turns: turns, material: material) else { return nil }
+                return SessionTitler.generate(excerpt: excerpt, cli: cli)
+            }()
+
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.titlingInFlight.remove(sessionId)
+                // Persist even a nil title: the stamped `title_updated_at` is
+                // what the backoff reads so a broken CLI isn't retried on every
+                // refresh.
+                try? database.setSessionTitle(id: sessionId, title: title, at: Date())
+                if title != nil { self.refresh() }
+            }
+        }
+    }
+
+    /// Regenerate the selected session's title from its *latest* turns,
+    /// overwriting whatever is there. Bound to `t` in the list view.
+    ///
+    /// Deliberately reads different material than automatic titling: the only
+    /// reason to ask for a retitle is that the session drifted from its opening
+    /// exchange, so re-reading that exchange would reproduce the same words.
+    public func retitleSelectedSession() {
+        // Gated on the same setting as automatic titling: with titles off the
+        // row doesn't render one, so generating it would spend a model call on
+        // something the user can't see.
+        let enabled = UserDefaults.standard.object(forKey: AppearanceDefaults.sessionTitlesKey) as? Bool
+            ?? AppearanceDefaults.sessionTitlesDefault
+        guard enabled else { return }
+        guard let session = selectedSession else { return }
+        guard Self.titleableTools.contains(session.tool) else { return }
+        guard !titlingInFlight.contains(session.id) else { return }
+        guard let cli = SessionTitler.resolveClaudeCLI() else { return }
+        guard let path = TranscriptParser.resolveExistingTranscript(for: session)?.path else { return }
+
+        titlingInFlight.insert(session.id)
+        lastTitleAttemptAt[session.id] = Date()
+        runTitling(sessionId: session.id, tool: session.tool, transcriptPath: path, cli: cli, material: .latest)
     }
 
     /// Drop cache entries for transcripts whose owning session is no longer
@@ -958,6 +1437,18 @@ public final class SessionListViewModel: ObservableObject {
     }
 
     public func enterSearch() {
+        // Two different searches share this entry point.
+        //
+        // In recents, `/` narrows the closed-session list in place. The mode
+        // stays on, so checkboxes, `a`, and `enter` keep working, and marks
+        // survive the query that hides their row.
+        //
+        // Outside recents it is the global search, which already spans
+        // actives and recents. Recents mode has nothing left to add there.
+        if !isRecentsMode {
+            markedSessionIds = []
+            restoreTreeModeAfterRecents()
+        }
         isSearching = true
         searchQuery = ""
         selectedIndex = 0
@@ -1038,6 +1529,44 @@ public final class SessionListViewModel: ObservableObject {
 
     public func cancelKill() {
         pendingKillSessionId = nil
+    }
+
+    // MARK: - Delete row
+
+    /// Ask to remove the selected row from the database entirely.
+    ///
+    /// Distinct from `requestKill`, which signals a live process. A terminal
+    /// closed hard never fires its end hook, so the row lingers looking alive
+    /// with nothing left to kill — `reapStaleSessions` only demotes it to
+    /// `.stale` and `gc` won't sweep it for 30 days. This is the escape hatch.
+    ///
+    /// Unlike kill there's no `isActive` or `pid` requirement: the whole point
+    /// is clearing rows whose process is already gone.
+    public func requestDelete() {
+        // Cloud rows are re-fetched from claude.ai on every poll, so deleting
+        // one locally would just resurrect it on the next refresh. Reuse the
+        // kill toast rather than pretending the action worked.
+        if case .remote = selectedRow {
+            showedCloudKillToast = true
+            return
+        }
+        guard let session = selectedSession else { return }
+        pendingDeleteSessionId = session.id
+    }
+
+    public func confirmDelete() {
+        guard let deleteId = pendingDeleteSessionId else { return }
+        pendingDeleteSessionId = nil
+        try? database.deleteSession(id: deleteId)
+        // Drop titling bookkeeping so a deleted id can't leak into either map
+        // and pin a slot in the single-in-flight budget forever.
+        titlingInFlight.remove(deleteId)
+        lastTitleAttemptAt.removeValue(forKey: deleteId)
+        refresh()
+    }
+
+    public func cancelDelete() {
+        pendingDeleteSessionId = nil
     }
 
     public func requestFork() {
@@ -1122,8 +1651,13 @@ public final class SessionListViewModel: ObservableObject {
         debounceTask?.cancel()
         recallSearchTask?.cancel()
 
+        // Recents is a restore view: every row maps to a closed session with a
+        // resume command. A recall hit is a transcript match, not a row, so it
+        // cannot be marked or reopened and has nothing to contribute. Skipping
+        // it also keeps typing instant, since recall embeds the query and may
+        // index transcripts first.
         let query = searchQuery
-        guard !query.isEmpty else {
+        guard !isRecentsMode, !query.isEmpty else {
             recallResults = []
             recallErrorMessage = nil
             isRecallSearching = false

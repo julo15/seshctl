@@ -119,9 +119,9 @@ public struct SessionListView: View {
 
             if viewModel.isSearching {
                 SearchBar(query: viewModel.searchQuery, isActive: !viewModel.isNavigatingSearch) {
-                    Text(viewModel.isNavigatingSearch
-                         ? "shift-tab to edit · esc to close"
-                         : "tab to navigate · esc to close")
+                    // Recents names its own verb: the reason to navigate there
+                    // is to mark rows, which only works out of typing mode.
+                    Text(searchHint)
                         .font(.footnote)
                         .foregroundStyle(.tertiary)
                 }
@@ -148,12 +148,24 @@ public struct SessionListView: View {
                 case .recentsOnly:
                     emptyStateView(
                         headline: "No active sessions",
-                        subtext: "Press / to find recent sessions."
+                        // Both keys, because recents only lists sessions that
+                        // can be reopened. History that can't is found via `/`.
+                        subtext: "Press c to reopen a closed session, / to search."
                     )
                 case .filteredOut:
                     emptyStateView(
                         headline: "No \(filterShortNoun(viewModel.sourceFilter)) sessions",
                         subtext: "Press r to change filter."
+                    )
+                case .noRecents:
+                    emptyStateView(
+                        headline: "No closed sessions",
+                        subtext: "Press c to go back."
+                    )
+                case .noRecentsMatch:
+                    emptyStateView(
+                        headline: "No matching sessions",
+                        subtext: "Every word has to match. ⌃u clears the query."
                     )
                 }
             } else if viewModel.isTreeMode && !viewModel.isSearching {
@@ -165,7 +177,11 @@ public struct SessionListView: View {
                 )
             } else {
                 let ordered = viewModel.orderedRows
-                let activeCount = viewModel.activeRows.count
+                // Recents mode renders closed rows only, so there is no active
+                // half to bucket by age and no boundary to label. Reading
+                // `activeRows.count` here would date-stamp the first N closed
+                // rows with the live sessions' buckets.
+                let activeCount = viewModel.isRecentsMode ? 0 : viewModel.activeRows.count
                 // Compute once per body pass — `hasMultipleAgentTypes`
                 // walks `orderedRows`; lifting it out of the per-row
                 // ViewBuilder avoids O(rows) walks per layout.
@@ -214,7 +230,9 @@ public struct SessionListView: View {
                                     .id(rowViewIdentity(for: row))
                             }
 
-                            if activeCount == 0 && !ordered.isEmpty {
+                            // Recents mode names itself in the panel header, so
+                            // repeating "Recent" above every row adds nothing.
+                            if activeCount == 0 && !ordered.isEmpty && !viewModel.isRecentsMode {
                                 sectionHeader("Recent")
                                     .padding(.top, -4) // adjust since ForEach won't insert it
                             }
@@ -331,14 +349,22 @@ public struct SessionListView: View {
                 if viewModel.pendingKillSessionId != nil {
                     Text("kill process? y/n")
                         .foregroundStyle(.red)
+                } else if viewModel.pendingDeleteSessionId != nil {
+                    Text("delete row? y/n")
+                        .foregroundStyle(.red)
                 } else if viewModel.pendingForkSessionId != nil {
                     Text("fork session? y/n")
                         .foregroundStyle(Color.accentColor)
                 } else if viewModel.pendingMarkAllRead {
                     Text("mark all as read? y/n")
                         .foregroundStyle(.orange)
+                } else if !viewModel.titlingInFlight.isEmpty {
+                    // Doubles as the confirmation that `t` did something — the
+                    // model call runs for several seconds with no other signal.
+                    Text("generating title\u{2026}")
+                        .foregroundStyle(.secondary)
                 } else {
-                    Text("enter focus · f fork · / search · ? help · q close")
+                    Text("enter focus · f fork · t retitle · d delete · / search · ? help · q close")
                 }
             }
             .font(.system(.footnote, design: .monospaced))
@@ -356,6 +382,20 @@ public struct SessionListView: View {
         case .localOnly: return "local only"
         case .remoteOnly: return "remote only"
         }
+    }
+
+    /// Hint line under the search field. Recents gets its own copy because
+    /// the point of leaving typing mode there is to mark rows for restore,
+    /// not to navigate.
+    private var searchHint: String {
+        if viewModel.isRecentsMode {
+            return viewModel.isNavigatingSearch
+                ? "x to mark · a for all · enter to reopen · shift-tab to edit"
+                : "tab to mark rows · esc to clear"
+        }
+        return viewModel.isNavigatingSearch
+            ? "shift-tab to edit · esc to close"
+            : "tab to navigate · esc to close"
     }
 
     /// Short noun for the active source filter, used in empty-state copy
@@ -399,15 +439,26 @@ public struct SessionListView: View {
             SessionRowView(
                 session: session,
                 hostApp: hostAppResolver.resolve(session: session),
-                isUnread: viewModel.unreadSessionIds.contains(session.id),
+                // No unread state in recents. Unread answers "has this said
+                // something since I last looked", which is meaningless for a
+                // session that has stopped. The bold text and accent bar would
+                // just compete with the restore checkbox.
+                isUnread: viewModel.isRecentsMode
+                    ? false
+                    : viewModel.unreadSessionIds.contains(session.id),
                 isBridged: viewModel.bridgedLocalIds.contains(session.id),
                 showCloudAffordances: connectionStore.hasClaudeConnection,
                 showAgentBadge: showAgentBadge,
                 awaySummary: viewModel.awaySummariesById[session.id] ?? viewModel.latestAssistantById[session.id],
+                model: viewModel.modelsById[session.id],
+                isTitling: viewModel.titlingInFlight.contains(session.id),
                 // List view has a Yesterday section header, so the per-row
                 // slot shows the more specific clock time for yesterday rows
                 // instead of repeating the day.
                 yesterdayStyle: .timeOfDay,
+                showMarkSlot: viewModel.isRecentsMode,
+                isMarked: viewModel.markedSessionIds.contains(session.id),
+                isMarkable: viewModel.isMarkable(session),
                 onDetail: onOpenDetail.map { handler in
                     {
                         viewModel.markSessionRead(session)

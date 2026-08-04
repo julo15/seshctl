@@ -163,6 +163,7 @@ Surfaces to touch when adding a new tool:
 - **`Sources/SeshctlUI/TerminalController.swift`** — per-tool resume binary + verb (or fall through to focus-only if there's no `<tool> <session>` CLI).
 - **`Sources/seshctl-cli/SeshctlCLI.swift`** — `--tool` help strings list the valid values.
 - **`hooks/<tool>/*.sh`** — script bundle invoked by the tool's hook system. Each script reads JSON from stdin and shells out to `seshctl-cli start/update/end`. Mirror `hooks/codex/` as the template. Use `--conversation-id <id>` as the upsert key when the tool's PID is unstable across hook events (Cursor's case — each hook is a fresh `/bin/zsh -c` subprocess).
+  - **No hook system?** Check for a plugin/extension API before concluding the tool can only be CLI-registered. `pi-extension/seshctl.ts` is the worked example: same four lifecycle reports, delivered through `pi.on(...)` instead of shell scripts, installed by `installPiExtension` / `removePiExtension` rather than `HookSpec`. Anything installed outside `~/.local/share/seshctl/` also needs removing in **both** `uninstall()` and `scripts/seshctl-uninstall.sh` — `testStandaloneScriptParity` enforces the shell copy stays byte-identical to `uninstallerScriptContents`.
 - **`Sources/SeshctlCore/FirstLaunchInstaller.swift`** — add a `HookSpec` (`<tool>ScriptNames` + `<tool>Entries(for:)`) and wire it into `install()` / `uninstall()` / `resolveHookSourceDirs(bundleURL:)`. Different tools have different hooks.json schemas (Claude/Codex share one; Cursor uses its own `{ "version": 1, "hooks": { ... } }` shape), so each tool needs its own inject/remove helpers.
 - **`Sources/SeshctlCore/Database.swift`** — if your tool's hook subprocess PID is unstable across events (Cursor 1.7+ has this property), you'll need conversation-id-keyed Database overloads. The trio in `Database.swift` — `findActiveSession(conversationId:tool:)`, `updateSession(conversationId:tool:...)`, `endSession(conversationId:tool:status:)` — mirrors the pid-keyed methods; mirror them again or extend them.
 - **`scripts/build-app-bundle.sh`** — copy `hooks/<tool>/` into `Contents/Resources/hooks/<tool>/` so the bundled `.app` ships with the scripts.
@@ -177,6 +178,39 @@ Surfaces to touch when adding a new tool:
 - The CLI and Database are tool-agnostic except for the `SessionTool` raw string. Don't branch on `tool` in `seshctl-cli` unless it's genuinely tool-specific (e.g. the Cursor lazy-create path in `Update`/`End` keyed on `--conversation-id`).
 - Exhaustive `switch`es over `SessionTool` are the safety net: never add `default:` cases.
 
+### Pi and Codex share a sessions directory — don't conflate them
+
+With `CODEX_HOME` pointed at `~/.agents` (and `~/.codex` symlinked there), **two unrelated transcript families live side by side in the same `sessions/` folder**:
+
+| Family | Path shape | Format | Parser |
+|---|---|---|---|
+| Codex | `sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl` | `session_meta` + `response_item` + `event_msg` | `parseCodex` |
+| Pi | `sessions/--<encoded-cwd>--/<ts>-<uuid>.jsonl` | `{"type":"session","version":3}` + `message` records | `parsePi` |
+
+Three traps, all of which have already caused a wrong diagnosis:
+
+- **`find ~/.codex …` returns nothing** — `find` doesn't follow symlinks, so it looks like Codex has no transcripts when it has hundreds.
+- **The `provider` field does not identify the writing tool.** Pi records `provider: "openai-codex"` when Codex is its *model provider*. Reading that as "Codex wrote this" is wrong.
+- **Prompt content doesn't identify it either.** Plenty of Codex transcripts discuss Pi.
+
+Identify by **path shape or record types**, never by directory or provider. Pi's older home is `~/.pi/agent/` with the identical layout; `~/.agents/bin/fd` being byte-identical to `~/.pi/agent/bin/fd` is what confirms the migration.
+
+**Pi has no hook system — it integrates via an extension instead.** `pi --help` exposes no hook flags, and across the whole npm package `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `SessionEnd` appear zero times while `SessionStart` appears only ever as `SessionStartEvent` (the extension event type). There is no `hooks.json`. What Pi has is a TypeScript *extension* API, so seshctl's Pi integration is `pi-extension/seshctl.ts` rather than a `hooks/pi/` script bundle.
+
+Verify claims about Pi against the whole `dist/` tree, not `dist/cli.js` — that file is a 681-byte shim and greps against it return 0 for everything, which reads exactly like "the feature doesn't exist."
+
+| Concern | Pi | Claude / Codex |
+|---|---|---|
+| Registration | `<agentDir>/extensions/seshctl.ts`, auto-discovered | `hooks.json` / `settings.json` entries |
+| Session start | `pi.on("session_start")` | `SessionStart` hook |
+| Prompt submitted | `pi.on("before_agent_start")` | `UserPromptSubmit` hook |
+| Turn finished | `pi.on("agent_settled")` | `Stop` hook |
+| Session ended | `pi.on("session_shutdown")` | `SessionEnd` hook |
+
+**Use `agent_settled`, not `agent_end`.** Pi's own docs say `agent_end` fires per agent run but Pi may still auto-retry, auto-compact and retry, or drain queued follow-ups afterwards; `agent_settled` is the event they point status integrations at. Reporting idle on `agent_end` flickers the row back to idle mid-work. `agent_settled` carries no payload, so the reply text is captured from `agent_end` and flushed on settle.
+
+**Agent-dir resolution** mirrors Pi's own: `PI_CODING_AGENT_DIR`, else `~/.pi/agent`. `Paths.piAgentDir` consults the environment variable ONLY when `homeRoot` is the real home — it describes *this* user's install, and honoring it under a temp `homeRoot` would let a test write into the user's live Pi extensions dir. The `~/.agents` fallback (gated on a `settings.json` being there) covers Pi's home migration for a GUI launch that inherits no shell environment. Note `~/.agents` is also `CODEX_HOME`, so the directory existing proves nothing on its own.
+
 ## Transcript-Derived Row Signals
 
 Three row signals are derived by scanning the live JSONL transcript on each ~2s refresh: `bridgedLocalIds` (via `TranscriptBridgeScanner` → `transcriptBridgeCache`), `awaySummariesById` (via `TranscriptAwaySummaryScanner` → `transcriptAwaySummaryCache`), and `latestAssistantById` (via `TranscriptLatestAssistantScanner` → `transcriptLatestAssistantCache`). All three live in `SessionListViewModel.refresh()`.
@@ -189,7 +223,100 @@ Three row signals are derived by scanning the live JSONL transcript on each ~2s 
 
 **Consumer-side collapse for the recap slot.** `awaySummariesById` and `latestAssistantById` both feed the row's `awaySummary:` slot via a single `??` expression at the row-construction sites in `SessionListView` and `SessionTreeView`: `viewModel.awaySummariesById[id] ?? viewModel.latestAssistantById[id]`. The display chain (`Session+Display.swift previewContent(awaySummary:)`) is unchanged. The two scanners are mutually exclusive in practice: `awaySummariesById[id]` is non-nil only when no user/assistant turn followed the recap, and `latestAssistantById[id]` is non-nil only when an assistant text turn is the most recent non-`away_summary` event. If both ever hold a value simultaneously (theoretical race), `away_summary` wins via `??`, preserving today's behavior.
 
+**`TranscriptModelScanner` is the one scanner that serves two tools.** It reads `message.model` from Claude `assistant` records and `payload.model` from Codex `turn_context` records, so its tool `switch` lives *inside* the scanner rather than in the `cachedModel(for:)` helper — the opposite of the Claude-only guards on its siblings. Two consequences: `refresh()` resolves transcript paths for `.claude` **and** `.codex` (the other three helpers guard on `.claude` internally and return before touching the filesystem, so the wider set is free), and a Codex session whose transcript records no turn context reports no model at all. Returning nil there is deliberate, since a guessed default would go stale the moment Codex changed it. Claude's `<synthetic>` pseudo-model (locally-generated interrupts and errors that never reached a model) is filtered out, otherwise it would surface verbatim in the row.
+
 **To add a new transcript-derived signal:** add a sibling pure-Foundation scanner in `SeshctlCore`, mirror `transcriptAwaySummaryCache` / `cachedAwaySummary(for:)` / `pruneTranscriptAwaySummaryCache(keepingPaths:)` on `SessionListViewModel`, plumb a new `@Published` map keyed by `session.id`, and consume by lookup from the row view. Don't branch on `tool` outside the cached helper — the Claude-only guard sits inside `cachedAwaySummary(for:)` / `cachedLatestAssistant(for:)` so non-Claude tools never hit the filesystem.
+
+## Session Titles
+
+Each session gets a frozen, chat-app-style title generated once from its opening exchange — `"Diversify repo color palette"` rather than whatever was said last. `SessionTitler` (`Sources/SeshctlCore/SessionTitler.swift`) owns the whole pipeline; `SessionListViewModel` owns the scheduling.
+
+**Why frozen.** The row already shows the live latest-assistant text via `TranscriptLatestAssistantScanner`. That answers "what is happening now" and is useless as an identity — a session's most recent message is as likely to be `yes do that` as anything descriptive. The title answers the other question, "what is this session", and must not move under the user's eye while they scan the list. `title IS NOT NULL` is the freeze guard; automatic titling never overwrites.
+
+**Two materials, and they must stay different.** `SessionTitler.Material.opening` feeds the first user prompt plus the first substantive assistant reply — used for automatic titling. `.latest` feeds the last 6 turns — used only for the user-invoked retitle (`t`). This asymmetry is the whole point of the retrigger: the reason to ask for a new title is that the session drifted, so re-reading the opening exchange would regenerate the same words. Don't collapse them.
+
+**`title_updated_at` exists for backoff, not display.** A failed generation leaves `title` NULL, so NULL alone can't distinguish "never attempted" from "attempted and failed 2 seconds ago". Without the timestamp a broken CLI (offline, out of quota, binary moved) would respawn a subprocess on every 2s refresh forever. `Database.setSessionTitle` therefore stamps the column **even when `title` is nil**.
+
+**Scheduling invariants** (`SessionListViewModel`):
+- At most **one** titling job in flight process-wide. A burst of new sessions trickles rather than forking a subprocess per row.
+- Off the MainActor — `SessionTitler.generate` blocks on a subprocess for ~5-7s.
+- Silent on every failure path. No title is a normal state, never an error surfaced to the user.
+- `nextTitlingCandidate` is a pure static function so the selection rules test without a database, subprocess, or clock.
+
+**CLI resolution can't use `env`.** A GUI app inherits a minimal PATH that does not contain `claude`. `SessionTitler.resolveClaudeCLI` walks explicit candidates, `~/.local/bin/claude` first (Claude Code's native installer location), mirroring `ExtensionInstaller.resolveEditorCLI`.
+
+**Escape stripping is not optional.** `claude -p` writes an OSC terminal-title sequence to stdout alongside the answer. `--output-format text` suppresses it in practice, but `normalize` strips OSC/CSI sequences anyway, along with the quoting and trailing punctuation models add despite being told not to, and enforces the 8-word cap rather than trusting the prompt.
+
+**Opt-in by default** (`AppearanceDefaults.sessionTitlesDefault == false`) because it spends the user's Claude quota. Every other Appearance toggle is purely local and defaults on; anything that quietly costs money doesn't.
+
+Claude Code and Codex only — `SessionListViewModel.titleableTools`. Cursor and Gemini write no transcript, so they're permanently untitleable rather than pending.
+
+**The titler's own subprocess must not become a row.** `claude -p` is an ordinary Claude Code run, so its `SessionStart` / `UserPromptSubmit` / `Stop` / `SessionEnd` hooks all fire and `seshctl-cli` records it. Each titling run left about three rows, all in the app's working directory (`/`), whose preview text was the title being generated for some *other* session. One real database held 83 such rows out of 251. `InternalSession` (`Sources/SeshctlCore/InternalSession.swift`) holds both defences:
+
+- **Write-time.** `SessionTitler.generate` merges `InternalSession.environmentMarker` (`SESHCTL_INTERNAL_SESSION=1`) into the subprocess environment through `ShellRunner.run(extraEnvironment:)`. Claude Code runs hooks as children of the CLI process, so the marker reaches every hook event of that run, including subagents. `Start` / `Update` / `End` in `seshctl-cli` return before opening the database when they see it. The read-only subcommands are deliberately left working, so `list` and `show` stay usable while debugging inside a marked process.
+
+- **Read-time.** `refresh()` drops rows whose `host_app_bundle_id` is `app.seshctl.Seshctl` as it loads `recentSessions`. This covers the rows written before the marker existed. The filter sits on `recentSessions` rather than on `recentLocalRows` so the global `/` search and `sessionsToRestore` inherit it. Nothing is deleted; those rows age out through the 30-day `gc`.
+
+`ShellRunner.run` merges `extraEnvironment` onto the inherited environment. Assigning `process.environment` outright would strip `PATH` and `HOME` from the child, which breaks every CLI launched this way.
+
+**Deleting a row is not killing a process.** `requestDelete` / `confirmDelete` / `cancelDelete` mirror the kill trio but carry their own `pendingDeleteSessionId`, so the two confirmations can never be mistaken for one another. Unlike kill there is no `isActive` or `pid` requirement — the whole point is clearing rows whose process is already gone.
+
+`reapStaleSessions` handles most ghosts, but its guard is `if let pid = session.pid, !isProcessAlive(pid)`. A session with no pid fails the binding and is never reaped; a session whose pid was recycled keeps testing alive. Both stay active-looking indefinitely, which is what `d` exists for.
+
+`confirmDelete` also clears the deleted id from `titlingInFlight` and `lastTitleAttemptAt`; leaving it in the former would permanently consume the single-in-flight titling budget.
+
+## Recents and Restore
+
+`c` swaps the seshboard from live sessions to closed ones the user can reopen. Not shift+`r`: `r` cycles the source filter, so a shift pairing would imply a relationship that does not exist. `space` or `x` marks a row, `a` marks all, `enter` reopens each marked session in its own terminal tab.
+
+**`x` is inert in recents, so it doubles as a mark key there.** `requestKill` guards on `session.isActive`, and a closed row has no process to signal.
+
+**Recents lists only rows that can be reopened.** `filteredRows` returns `recentLocalRows`, not `recentRows`. `recentLocalRows` drops three kinds of row: disconnected cloud sessions (they reopen in a browser, not a tab), Cursor rows (no shell resume command), and rows with no conversation id (nothing to pass to `--resume`). The last group is not rare: 40 of 169 closed rows in a real database. Rendering them with a refusing checkbox turned a quarter of the list into rows the user reads and skips. They stay reachable through `/` search, which is where `d` deletes them. `sourceFilter` is ignored here, since the view is local by definition and a remote-only filter would just empty it.
+
+**`enterRecentsMode` calls `refresh()`.** The 2-second poll is what demotes a hard-closed session to `.stale`. Without the explicit reload, a terminal quit moments earlier would not appear until the next tick.
+
+**Recents suspends tree mode without persisting the change.** `isTreeMode`'s `didSet` writes through to UserDefaults, so assigning `false` directly made one press of `c` destroy the user's saved grouping for good, across relaunch. `enterRecentsMode` stashes the value in `treeModeBeforeRecents` and writes through `setTreeModeWithoutPersisting`; every exit path (`exitRecentsMode`, `toggleViewMode`, `enterSearch`, `panelDidHide`) calls `restoreTreeModeAfterRecents`. `toggleViewMode` restores *before* toggling, so `v` flips the real preference rather than the parked `false`. `enterSearch` no longer restores when it is called from inside recents, since recents stays open (see below); the restore then happens on `exitRecentsMode`.
+
+### Searching inside recents
+
+`/` inside recents narrows the closed list in place instead of switching to the global search. `enterSearch` keeps `isRecentsMode` set when it is already on, so checkboxes, `a`, and `enter` keep working while the query is live. `filteredRows` still returns `recentLocalRows`, which reads `localRecentSessions`, which applies the query. Nothing else had to change to make the list filter.
+
+**Every word must match, but the words may match different fields.** `SessionListViewModel.matches(session:query:)` splits the query on whitespace, ORs the seven fields within a token, and ANDs the tokens across the row. The old single `contains` over the whole query needed the words adjacent in one field, so `sesh dedup` matched nothing. Tokenized, it finds a `seshctl` row titled "Session deduplication verification". This is what makes the view narrowable at all: `loc` alone left 46 of 100 rows in a real database. `matches(remote:query:)` applies the same rule to the three fields a cloud row carries, so one query cannot behave differently on the two halves of a global search. Both are `nonisolated static` so the rule tests without a view model, database, or MainActor hop.
+
+**Semantic recall is off in recents** (`triggerRecallSearch` guards on `!isRecentsMode`). A `RecallResult` is a transcript hit, not a row, so it cannot be marked or reopened. Joining it back to a closed session by conversation id would only reorder rows that `recentLocalRows` already shows. Skipping recall also keeps typing instant: it embeds the query and may index transcripts first. Global `/` search keeps recall, and that is the path for finding a session by meaning.
+
+**Marks are not filtered with the rows.** `markedSessionIds` outlives any query. `sessionsToRestore` resolves marks against `recentSessions`, not `markableRows`, because `markableRows` reads `orderedRows` and a query hides rows without unmarking them. Resolving against the visible list would silently drop every mark the query filtered out. `toggleMarkAll` is scoped to the visible rows in *both* directions: it unions them in, or subtracts them when they are all already marked. Assigning the visible set outright made `a` under one query undo `a` under the previous one. With no query every row is visible, which is the original behavior. Together these give the compose: narrow to `location`, `a`, clear, narrow to `elmozi`, `a`, `enter` reopens all of them.
+
+**Marking lives behind `tab`.** In search mode every letter goes into the query, so `x`, `a`, and space cannot mark. `handleSearchKey`'s navigation branch (`isNavigatingSearch`, entered with `tab`) accepts them alongside the existing `j` / `k` / `o`. Both view-model calls guard on `isRecentsMode`, so they no-op in a global search.
+
+**Leaving recents takes the query along.** `exitRecentsMode` and `toggleViewMode` call `exitSearch()` first. A query typed to narrow the closed list has no meaning once that list is gone. Escape therefore backs out one level at a time: clear the search, leave recents, close the panel.
+
+**`.noRecentsMatch` is a separate empty state from `.noRecents`.** The fix differs: clear the query rather than leave the view. Recents can show an empty state while searching at all, unlike the global search, because there are no recall rows underneath it to hide. `.fullyEmpty` still wins over both when the database holds no sessions.
+
+**Unread is suppressed in recents** (`SessionListView` passes `isUnread: false`). Unread means "has this said something since I last looked", which is meaningless once a session stops, and the bold treatment competes with the restore checkbox.
+
+**One row per conversation, enforced in two places.** Resuming starts a new process, so the session-start hook inserts a fresh row while the previous run's row waits out the 30-day `gc` window. Left alone, a conversation accumulates one row per resume — the live database held 217 rows for 133 conversations before this landed.
+
+- **Write-time:** `Database.collapseInactiveTwins` deletes the closed rows sharing `(conversation_id, tool)` and returns the newest one's `title`, which the new row inherits. Without the inheritance, resuming would silently discard a frozen title and make `SessionTitler` pay for it again.
+- **Query-time:** `Database.listRecentSessions` collapses by `(COALESCE(conversation_id, id), tool)` anyway, because rows written before the write-time fix are still on disk. This is what makes the view correct on the first launch after upgrade instead of a month later.
+
+**`collapseInactiveTwins` runs BEFORE the "end existing active rows" loop in both `startSession` variants.** Running it after would delete the row that same call just closed, breaking the documented "ended, not erased" contract that `startSession(conversationId:tool:)` has.
+
+**Only inactive rows are ever collapsed.** Two live rows can legitimately share a conversation id, because `claude --resume <id>` works against a conversation that is already running. Collapsing on the active side would erase a real session.
+
+**`listRecentSessions` excludes conversations that have a live row.** Offering to reopen a session already visible in the active list would open a second copy of it.
+
+**`listRecentSessions` is separate from `listSessions` on purpose.** `listSessions(limit: 50)` is one budget shared by live and closed rows, so a busy day starves history. Recents gets its own limit (`SessionListViewModel.recentSessionLimit`).
+
+**Restores are serialized, not fired together.** `TerminalController.resumeInTerminal` runs `open -b` and then, 300ms later, an AppleScript that adds a tab to the app's *front window*. Dispatching N of those at once makes them compete for a window that is still being created. `SessionAction.dispatchRestores` walks the list recursively with `restoreStagger` (0.6s) between tabs, carrying the failure list as a parameter so there is no shared mutable state. Failed commands are pooled and copied to the clipboard once at the end — copying each failure as it happens would leave only the last one.
+
+**A row can only be marked when it has a resume command.** `SessionListViewModel.isMarkable` delegates to `TerminalController.buildResumeCommand`, which returns nil for `.cursor` and for any row missing a conversation id. The row draws a dimmed `square.slash` rather than an empty checkbox, so "cannot be selected" doesn't read as "not selected yet".
+
+**Recents mode is not persisted and does not compose.** Entering it clears `isTreeMode`; `enterSearch`, `toggleViewMode`, and `panelDidHide` all clear it. Search already spans actives and recents, and tree mode groups live sessions by repo, so neither combination means anything. The panel opens on live sessions every time.
+
+**The list view must zero `activeCount` in recents mode** (`SessionListView`). It normally reads `viewModel.activeRows.count` to find the active/recent boundary for the age-bucket headers. In recents mode `orderedRows` holds closed rows only, so the unmodified read would stamp the first N of them with the live sessions' date buckets.
+
+**Only `conversationId` is ever displayed.** `session.id` is a local primary key with no meaning outside the database. The row shows `conversationId`'s first 8 characters (recents mode only, via `SessionRowView.shortConversationId`); the detail header shows it in full and selectable.
 
 ## Editor Integrations
 

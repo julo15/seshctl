@@ -67,6 +67,16 @@ private func makeFakeBundle(in parent: URL) throws -> URL {
     let bundleHooks = resources.appendingPathComponent("hooks")
     try FileManager.default.copyItem(at: repoHooks, to: bundleHooks)
 
+    // Pi ships as an extension, not a hooks/ bundle. Staging it here keeps the
+    // install path deterministic — otherwise resolvePiExtensionSource would
+    // fall through to the repo tree via the process's working directory.
+    let bundlePiDir = resources.appendingPathComponent("extensions/pi")
+    try FileManager.default.createDirectory(at: bundlePiDir, withIntermediateDirectories: true)
+    try FileManager.default.copyItem(
+        at: repoRoot().appendingPathComponent("pi-extension/seshctl.ts"),
+        to: bundlePiDir.appendingPathComponent("seshctl.ts")
+    )
+
     // Minimal Info.plist (only used by readBundleVersion → marker file).
     let plist: [String: Any] = [
         "CFBundleIdentifier": "app.seshctl.Seshctl.test",
@@ -828,6 +838,126 @@ struct FirstLaunchInstallerTests {
         }
         #expect(mtime > installedAt,
                 "bundleNewer should carry a mtime strictly after installedAt")
+    }
+
+    // MARK: 13b. Pi companion extension
+
+    /// Pi has no hook system, so its integration is a `.ts` file dropped into
+    /// Pi's auto-discovery directory rather than a `hooks/<tool>/` bundle.
+    @Test("Install writes the Pi companion extension into the agent dir")
+    func piExtensionInstalled() throws {
+        let temp = try makeTempHome()
+        defer { cleanup(temp) }
+        let bundle = try makeFakeBundle(in: temp)
+        let paths = FirstLaunchInstaller.Paths(homeRoot: temp)
+
+        try FirstLaunchInstaller.install(bundleURL: bundle, paths: paths)
+
+        let target = try #require(paths.piExtensionFiles.first)
+        #expect(target == temp.appendingPathComponent(".pi/agent/extensions/seshctl.ts").path)
+        let installed = try String(contentsOfFile: target, encoding: .utf8)
+        #expect(installed.contains("session_start"))
+        #expect(installed.contains("agent_settled"),
+                "status must flush on agent_settled, not agent_end")
+    }
+
+    @Test("Re-installing the Pi extension is idempotent")
+    func piExtensionInstallIsIdempotent() throws {
+        let temp = try makeTempHome()
+        defer { cleanup(temp) }
+        let bundle = try makeFakeBundle(in: temp)
+        let paths = FirstLaunchInstaller.Paths(homeRoot: temp)
+
+        try FirstLaunchInstaller.install(bundleURL: bundle, paths: paths)
+        try FirstLaunchInstaller.install(bundleURL: bundle, paths: paths)
+
+        let target = try #require(paths.piExtensionFiles.first)
+        let extDir = (target as NSString).deletingLastPathComponent
+        let entries = try FileManager.default.contentsOfDirectory(atPath: extDir)
+        #expect(entries == ["seshctl.ts"])
+    }
+
+    @Test("Uninstall removes seshctl's Pi extension from every home, sparing siblings")
+    func piExtensionUninstallLeavesSiblings() throws {
+        let temp = try makeTempHome()
+        defer { cleanup(temp) }
+        let bundle = try makeFakeBundle(in: temp)
+
+        // Make BOTH candidate homes look live, so install fans out to each.
+        for dir in [".pi/agent", ".agents"] {
+            let home = temp.appendingPathComponent(dir)
+            try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+            try "{}\n".write(
+                to: home.appendingPathComponent("settings.json"),
+                atomically: true, encoding: .utf8
+            )
+        }
+        let paths = FirstLaunchInstaller.Paths(homeRoot: temp)
+        #expect(paths.piExtensionFiles.count == 2)
+
+        try FirstLaunchInstaller.install(bundleURL: bundle, paths: paths)
+        for target in paths.piExtensionFiles {
+            #expect(FileManager.default.fileExists(atPath: target),
+                    "install should cover every candidate home; missed \(target)")
+        }
+
+        // The user's own extensions share those directories.
+        let siblings = paths.piExtensionFiles.map {
+            (($0 as NSString).deletingLastPathComponent as NSString)
+                .appendingPathComponent("notify-ready.ts")
+        }
+        for sibling in siblings {
+            try "export default function () {}\n".write(
+                toFile: sibling, atomically: true, encoding: .utf8
+            )
+        }
+
+        try FirstLaunchInstaller.uninstall(paths: paths)
+
+        for target in paths.piExtensionFiles {
+            #expect(!FileManager.default.fileExists(atPath: target))
+        }
+        for sibling in siblings {
+            #expect(FileManager.default.fileExists(atPath: sibling),
+                    "an unrelated Pi extension must survive uninstall")
+        }
+    }
+
+    /// Pi's home moved from `~/.pi/agent` to `~/.agents` and the migration
+    /// leaves the old tree behind, `settings.json` and all. A GUI launch can't
+    /// read `PI_CODING_AGENT_DIR` to settle it, so install covers every home
+    /// that looks live rather than guessing and silently not loading.
+    @Test("piAgentDirs covers every directory that looks like a Pi home")
+    func piAgentDirsCoverEveryCandidate() throws {
+        let temp = try makeTempHome()
+        defer { cleanup(temp) }
+        let paths = FirstLaunchInstaller.Paths(homeRoot: temp)
+        let standard = temp.appendingPathComponent(".pi/agent").path
+        let migrated = temp.appendingPathComponent(".agents").path
+
+        // Neither looks like a Pi home: fall back to Pi's documented default.
+        #expect(paths.piAgentDirs == [standard])
+
+        // A `settings.json` is what marks a Pi home. Bare directory existence
+        // proves nothing — CODEX_HOME also points at `~/.agents`.
+        let agents = temp.appendingPathComponent(".agents")
+        try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+        #expect(paths.piAgentDirs == [standard], "an empty ~/.agents is not a Pi home")
+
+        try "{}\n".write(
+            to: agents.appendingPathComponent("settings.json"),
+            atomically: true, encoding: .utf8
+        )
+        #expect(paths.piAgentDirs == [migrated])
+
+        // Both live — the ambiguous post-migration state. Cover both.
+        let pi = temp.appendingPathComponent(".pi/agent")
+        try FileManager.default.createDirectory(at: pi, withIntermediateDirectories: true)
+        try "{}\n".write(
+            to: pi.appendingPathComponent("settings.json"),
+            atomically: true, encoding: .utf8
+        )
+        #expect(paths.piAgentDirs == [standard, migrated])
     }
 
     // MARK: 15. Uninstall removes codex_hooks flag from config.toml

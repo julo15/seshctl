@@ -256,15 +256,18 @@ struct SessionAccessibilityLabelTests {
         HostAppInfo(bundleId: "test.bundle", name: name, icon: NSImage())
     }
 
-    @Test("Local — Ghostty + claude → \"Ghostty, Claude\"")
+    // The agent half of the label comes from `SessionTool.agentDisplayName`,
+    // the same property the row subtitle renders, so Claude reads "Claude Code"
+    // rather than a bare "Claude" that's ambiguous next to a claude.ai row.
+    @Test("Local — Ghostty + claude → \"Ghostty, Claude Code\"")
     func localGhosttyClaude() {
         let host = makeHostApp(name: "Ghostty")
-        #expect(Session.accessibilityLabel(hostApp: host, agent: .claude) == "Ghostty, Claude")
+        #expect(Session.accessibilityLabel(hostApp: host, agent: .claude) == "Ghostty, Claude Code")
     }
 
-    @Test("Remote — nil hostApp + claude → \"Globe, Claude\"")
+    @Test("Remote — nil hostApp + claude → \"Globe, Claude Code\"")
     func remoteNilClaude() {
-        #expect(Session.accessibilityLabel(hostApp: nil, agent: .claude) == "Globe, Claude")
+        #expect(Session.accessibilityLabel(hostApp: nil, agent: .claude) == "Globe, Claude Code")
     }
 
     @Test("Local — Terminal + codex → \"Terminal, Codex\"")
@@ -425,5 +428,38 @@ struct RemoteClaudeCodeSessionPreviewContentAwaySummaryTests {
     func whitespaceSummaryFallsThrough() {
         let r = makeRemoteSession(title: "Untouched title")
         #expect(r.previewContent(awaySummary: "   \n  ") == .reply("Untouched title"))
+    }
+}
+
+@Suite("Agent display name")
+struct AgentDisplayNameTests {
+    @Test("Every SessionTool has a non-empty, distinct display name")
+    func everyToolIsNamed() {
+        // CaseIterable-driven: adding a SessionTool case without naming it
+        // fails here rather than silently rendering an empty subtitle.
+        let names = SessionTool.allCases.map(\.agentDisplayName)
+        for name in names {
+            #expect(!name.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+        #expect(Set(names).count == SessionTool.allCases.count, "Agent names must be distinguishable from each other.")
+    }
+
+    @Test("Claude is spelled as the user knows the tool")
+    func claudeIsNamedClaudeCode() {
+        // "Claude" alone is ambiguous next to a claude.ai remote row; the whole
+        // point of the subtitle is telling agents apart at a glance.
+        #expect(SessionTool.claude.agentDisplayName == "Claude Code")
+        #expect(SessionTool.codex.agentDisplayName == "Codex")
+        #expect(SessionTool.cursor.agentDisplayName == "Cursor")
+        #expect(SessionTool.gemini.agentDisplayName == "Gemini")
+    }
+
+    @Test("Row accessibility label reuses the same agent name")
+    func accessibilityLabelSharesTheName() {
+        // One source of truth — the label and the subtitle must not drift.
+        for tool in SessionTool.allCases {
+            let label = Session.accessibilityLabel(hostApp: nil, agent: tool)
+            #expect(label == "Globe, \(tool.agentDisplayName)")
+        }
     }
 }

@@ -386,25 +386,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // u — mark as read (works for both local and remote rows)
         case (_, "u"):
             vm.markSelectedRowRead()
+        // t — regenerate the selected session's title from its latest turns.
+        // No confirm prompt: it overwrites a generated string, costs one short
+        // model call, and is itself the undo for a bad title.
+        case (_, "t"):
+            vm.retitleSelectedSession()
         // o — open detail view
         case (_, "o"):
             openDetailForSelected(vm: vm)
         // Enter, Return, or e
         case (36, _), (76, _), (_, "e"):
             executeSessionAction(vm: vm)
-        // x — kill session process
-        case (_, "x"):
+        // c — toggle recents: closed sessions the user can reopen.
+        // Deliberately not shift+r: `r` cycles the source filter, and a
+        // shift pairing would imply the two are related when they are not.
+        case (_, "c"):
             if vm.pendingKillSessionId == nil && !vm.pendingMarkAllRead && vm.pendingForkSessionId == nil {
+                vm.toggleRecentsMode()
+            }
+        // space — mark the selected row for restore (recents mode only)
+        case (49, _):
+            vm.toggleMarkForSelected()
+        // a — mark every restorable row, or clear the marks (recents mode only)
+        case (_, "a"):
+            if vm.pendingKillSessionId == nil && !vm.pendingMarkAllRead && vm.pendingForkSessionId == nil {
+                vm.toggleMarkAll()
+            }
+        // x — kill session process, or mark for restore in recents.
+        // A closed row has no process left to signal, so `x` is inert in
+        // recents. Reusing it there costs nothing and matches the reflex of
+        // reaching for `x` to pick items out of a list.
+        case (_, "x"):
+            if vm.isRecentsMode {
+                vm.toggleMarkForSelected()
+            } else if vm.pendingKillSessionId == nil && !vm.pendingMarkAllRead && vm.pendingForkSessionId == nil && vm.pendingDeleteSessionId == nil {
                 vm.requestKill()
+            }
+        // d — delete the row outright. For sessions whose terminal was closed
+        // hard: the end hook never fired, so the row lingers with no process
+        // left for `x` to signal.
+        case (_, "d"):
+            if vm.pendingKillSessionId == nil && !vm.pendingMarkAllRead && vm.pendingForkSessionId == nil && vm.pendingDeleteSessionId == nil {
+                vm.requestDelete()
             }
         // y — confirm kill, mark all read, or fork
         case (_, "y"):
             if vm.pendingKillSessionId != nil {
                 vm.confirmKill()
+            } else if vm.pendingDeleteSessionId != nil {
+                vm.confirmDelete()
             } else if vm.pendingMarkAllRead {
                 vm.confirmMarkAllRead()
             } else if let forkId = vm.pendingForkSessionId,
-                      let session = vm.sessions.first(where: { $0.id == forkId }) {
+                      let session = vm.session(withId: forkId) {
                 _ = vm.confirmFork()
                 SessionAction.execute(
                     target: .forkSession(session),
@@ -418,6 +452,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case (_, "n"):
             if vm.pendingKillSessionId != nil {
                 vm.cancelKill()
+            } else if vm.pendingDeleteSessionId != nil {
+                vm.cancelDelete()
             } else if vm.pendingMarkAllRead {
                 vm.cancelMarkAllRead()
             } else if vm.pendingForkSessionId != nil {
@@ -427,10 +463,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case (_, "q"), (53, _):
             if vm.pendingKillSessionId != nil {
                 vm.cancelKill()
+            } else if vm.pendingDeleteSessionId != nil {
+                vm.cancelDelete()
             } else if vm.pendingMarkAllRead {
                 vm.cancelMarkAllRead()
             } else if vm.pendingForkSessionId != nil {
                 vm.cancelFork()
+            } else if vm.isRecentsMode {
+                // Back out one level, matching how the same key cancels a
+                // pending confirmation before it closes the panel.
+                vm.exitRecentsMode()
             } else {
                 dismissPanel()
             }
@@ -621,6 +663,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     vm.moveSelectionUp()
                 } else if chars == "o" {
                     openDetailForSelected(vm: vm)
+                } else if chars == "x" || chars == " " {
+                    // Marking needs the same letters the query field consumes,
+                    // so it lives behind tab. Narrow, tab, mark, enter. Both
+                    // calls guard on recents mode, so they no-op elsewhere.
+                    vm.toggleMarkForSelected()
+                } else if chars == "a" {
+                    vm.toggleMarkAll()
                 }
             } else if let chars, !chars.isEmpty {
                 vm.appendSearchCharacter(chars)
@@ -641,7 +690,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func executeSessionAction(vm: SessionListViewModel) {
         let target: SessionActionTarget
-        if case .remote(let remote) = vm.selectedRow {
+        // Recents mode restores the marked set, or the selected row when
+        // nothing is marked. The branch does not test `selectedRow`: recents
+        // lists local rows only, and a search that narrows the list to nothing
+        // leaves no selection while the marks are still standing.
+        if vm.isRecentsMode {
+            let toRestore = vm.sessionsToRestore
+            guard !toRestore.isEmpty else { return }
+            vm.clearMarks()
+            target = .restoreSessions(toRestore)
+        } else if case .remote(let remote) = vm.selectedRow {
             // Enter on a remote row opens its claude.ai URL and stamps a local
             // read receipt. Mark-read goes through `markSelectedRowRead` (not
             // the `SessionAction.execute` `markRead` closure, which is

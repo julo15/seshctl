@@ -111,6 +111,13 @@ cp -R "${REPO_DIR}/hooks/claude" "${BUNDLE_DIR}/Contents/Resources/hooks/claude"
 cp -R "${REPO_DIR}/hooks/codex" "${BUNDLE_DIR}/Contents/Resources/hooks/codex"
 cp -R "${REPO_DIR}/hooks/cursor" "${BUNDLE_DIR}/Contents/Resources/hooks/cursor"
 
+# Pi has no hook system, so its integration is an extension rather than a
+# hooks/<tool>/ script bundle. FirstLaunchInstaller copies this into
+# <PI_CODING_AGENT_DIR|~/.pi/agent>/extensions/ where Pi auto-discovers it.
+mkdir -p "${BUNDLE_DIR}/Contents/Resources/extensions/pi"
+cp "${REPO_DIR}/pi-extension/seshctl.ts" \
+	"${BUNDLE_DIR}/Contents/Resources/extensions/pi/seshctl.ts"
+
 echo "==> Copying SeshctlRecall model resources ..."
 # EmbeddingService reads the CoreML model + tokenizer files from
 # Contents/Resources/Models/ at runtime. SwiftPM's `.copy("Models")` puts
