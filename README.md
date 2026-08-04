@@ -86,9 +86,36 @@ Accounts with Google-only sign-in: add an email/password or passkey on claude.ai
 | Tool | Hooks | Transcript | Notes |
 |---|---|---|---|
 | Claude Code | Full | Full | Bridged claude.ai sessions show as a single row with a cloud glyph |
-| Codex | Partial | Full | No `UserPromptSubmit` (no "In Progress" state); no `SessionEnd` (closes on `Stop` only) |
+| Codex | Full | Full | Hooks stay inert until you approve them once — see [Codex hook trust](#codex-hook-trust) |
 | Cursor (1.7+) | Full | None | Workspace focus works out of the box; chat-thread focus needs the bundled companion extension (auto-installed from the in-app **Editor Integrations** window) |
 | Gemini | None | None | CLI-only tracking via `seshctl-cli start --tool gemini` |
+
+#### Codex hook trust
+
+Codex gates hooks behind a one-time trust prompt. After seshctl installs (or upgrades) its hooks, the next `codex` launch shows **Hooks need review** and the hooks do **not** run until you accept:
+
+```
+Hooks need review
+1 hook is new or changed.
+Hooks can run outside the sandbox after you trust them.
+
+  Trust all and continue
+  Review hooks
+  Continue without trusting (hooks won't run)
+```
+
+Pick **Trust all and continue** (or review first). Until you do, Codex sessions won't appear in seshctl — everything else keeps working.
+
+This re-fires whenever the hook scripts change, because Codex tracks them as *"Modified since last trusted"*. seshctl rewrites its scripts on every install, so expect the prompt again after a seshctl upgrade that touches them.
+
+Codex also needs its `hooks` feature flag enabled in `~/.agents/config.toml` (or `$CODEX_HOME/config.toml`). seshctl writes it during install, so you shouldn't have to:
+
+```toml
+[features]
+hooks = true
+```
+
+This flag used to be called `codex_hooks`. Codex still honors that name but warns `[features].codex_hooks is deprecated` on every launch, so seshctl rewrites it to `hooks` when it finds it.
 
 ### Terminal apps
 
