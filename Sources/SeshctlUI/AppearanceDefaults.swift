@@ -36,6 +36,28 @@ public enum AppearanceDefaults {
     /// lets the user flip back to the two-column legacy for comparison.
     public static let stackedRowLayoutDefault = true
 
+    /// Key for the "Show agent name" toggle. When on, each row's subtitle leads
+    /// with the agent that owns the session ("Claude Code", "Codex", …).
+    ///
+    /// The corner badge already encodes the agent as a colored monogram, but it
+    /// is suppressed whenever every visible session shares one agent
+    /// (`SessionListViewModel.hasMultipleAgentTypes`) — so a list of only Claude
+    /// Code sessions shows no agent anywhere. The name is unconditional.
+    public static let showAgentNameKey = "seshctl.showAgentName"
+
+    /// Default — on. Naming the agent costs one short word per row and removes
+    /// the need to learn the badge's color/monogram legend.
+    public static let showAgentNameDefault = true
+
+    /// Key for the "Show model" toggle. When on, the row subtitle names the
+    /// model behind the session next to the agent name.
+    public static let showModelKey = "seshctl.showModel"
+
+    /// Default — on. Reading the model is a local transcript scan with no cost,
+    /// and it only renders for tools that actually record one (Claude Code
+    /// always, Codex when the session emits a `turn_context`).
+    public static let showModelDefault = true
+
     /// One-shot migration from the pre-release un-prefixed key
     /// (`"repoAccentBarEnabled"`) to `seshctl.repoAccentBarEnabled`.
     /// Run once at app launch so an author who toggled the setting during

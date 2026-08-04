@@ -10,7 +10,11 @@ public enum SessionStatus: String, Codable, DatabaseValueConvertible, Sendable {
     case stale
 }
 
-public enum SessionTool: String, Codable, DatabaseValueConvertible, Sendable {
+/// `CaseIterable` so per-tool registries (display name, badge spec) can be
+/// tested exhaustively — adding a case without naming it fails a test rather
+/// than silently rendering blank. AGENTS.md's "Adding an LLM Tool" checklist
+/// assumes this conformance.
+public enum SessionTool: String, Codable, DatabaseValueConvertible, Sendable, CaseIterable {
     case claude
     case gemini
     case codex
