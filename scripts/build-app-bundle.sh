@@ -48,6 +48,18 @@ echo "==> Copying Info.plist ..."
 # --entitlements at sign time. Only Info.plist ships inside the bundle.
 cp "${REPO_DIR}/Resources/Info.plist" "${BUNDLE_DIR}/Contents/Info.plist"
 
+# App icon. Info.plist's CFBundleIconFile names this file; without it the Dock
+# and Cmd+Tab switcher show a blank tile. The .icns is a committed artifact
+# generated from Resources/AppIcon.svg by scripts/make-icon.sh — regenerate it
+# when the SVG changes rather than editing the .icns.
+echo "==> Copying app icon ..."
+ICON_SRC="${REPO_DIR}/Resources/AppIcon.icns"
+if [[ ! -f "${ICON_SRC}" ]]; then
+	echo "ERROR: ${ICON_SRC} not found. Run scripts/make-icon.sh." >&2
+	exit 1
+fi
+cp "${ICON_SRC}" "${BUNDLE_DIR}/Contents/Resources/AppIcon.icns"
+
 # Embed Sparkle.framework. SwiftPM resolves Sparkle's binary xcframework and,
 # for the universal release build, drops a flattened Sparkle.framework right
 # alongside the SeshctlApp binary in PRODUCTS_DIR. We copy it to the standard
