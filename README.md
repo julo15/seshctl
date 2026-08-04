@@ -96,7 +96,7 @@ Accounts with Google-only sign-in: add an email/password or passkey on claude.ai
 |---|---|---|
 | Terminal.app | Full | TTY-based tab matching |
 | iTerm2 | Full | TTY-based tab matching, not extensively tested |
-| Ghostty | Full | Working-directory matching; resume via surface configuration |
+| Ghostty | Full | TTY-based surface matching — resolves split panes, not just tabs; resume via surface configuration |
 | Warp | Full | DB-assisted tab matching; resume via keystroke simulation. No split-pane support |
 | cmux | Full | Two-level focus (workspace + surface). Same-pane fork requires opt-in — see [cmux setup](#cmux-setup) |
 | VS Code | Full | Companion extension auto-installed from **Editor Integrations** |

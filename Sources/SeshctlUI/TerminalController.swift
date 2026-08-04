@@ -540,29 +540,55 @@ public enum TerminalController {
 
         case .ghostty:
             let escapedDir = escapeForAppleScript(directory)
-            // Try terminal ID first (exact match), then fall back to directory matching.
-            // The ID may be stale after resume (new tab gets a new ID), so both paths
-            // are always included in the script.
-            let idMatchBlock: String
+            // Match ladder, most precise first. Every rung above the last is
+            // wrapped in `try` so an older Ghostty whose scripting dictionary
+            // lacks `tty` / `focus` falls through to the next rung instead of
+            // aborting the whole script on the unknown term.
+            //
+            // 1. TTY — unique per surface, so it resolves both splits sharing a
+            //    tab and tabs sharing a working directory. Derived from the
+            //    session PID at focus time, so it self-heals across resume and
+            //    needs nothing recorded at session start.
+            // 2. Terminal ID — legacy rows written by the pre-TTY session-start
+            //    hook. Ages out as those sessions end; kept so upgrades don't
+            //    regress mid-session.
+            // 3. Working directory — last resort, and ambiguous whenever
+            //    several surfaces share a cwd, so it prefers the already
+            //    selected tab rather than jumping to an arbitrary match.
+            //
+            // Rungs 1-2 use `focus`, which targets the surface: it raises the
+            // window, selects the tab AND focuses the split. Rung 3's
+            // `select tab` + `activate window` only manages the first two.
+            var precisionBlocks: [String] = []
+            if let tty {
+                let escapedTty = escapeForAppleScript(tty)
+                precisionBlocks.append("""
+                        -- Exact TTY match: resolves splits within a tab
+                        try
+                            repeat with trm in terminals
+                                if tty of trm is "\(escapedTty)" then
+                                    focus trm
+                                    return
+                                end if
+                            end repeat
+                        end try
+                    """)
+            }
             if let windowId {
                 let escapedId = escapeForAppleScript(windowId)
-                idMatchBlock = """
-                        -- Try exact terminal ID match first
-                        repeat with w in windows
-                            repeat with t in tabs of w
-                                repeat with trm in terminals of t
-                                    if id of trm is "\(escapedId)" then
-                                        select tab t
-                                        activate window w
-                                        return
-                                    end if
-                                end repeat
+                precisionBlocks.append("""
+                        -- Exact terminal ID match (legacy rows)
+                        try
+                            repeat with trm in terminals
+                                if id of trm is "\(escapedId)" then
+                                    focus trm
+                                    return
+                                end if
                             end repeat
-                        end repeat
-                    """
-            } else {
-                idMatchBlock = ""
+                        end try
+                    """)
             }
+            let idMatchBlock = precisionBlocks.joined(separator: "\n")
             return """
                 tell application "Ghostty"
                 \(idMatchBlock)
