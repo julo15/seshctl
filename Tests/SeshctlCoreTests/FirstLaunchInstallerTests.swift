@@ -180,9 +180,10 @@ struct FirstLaunchInstallerTests {
             #expect(codexHooks?[event] != nil, "missing codex hook event: \(event)")
         }
 
-        // 8. ~/.agents/config.toml contains codex_hooks = true
+        // 8. ~/.agents/config.toml contains hooks = true
         let toml = try String(contentsOfFile: paths.codexConfigFile, encoding: .utf8)
-        #expect(toml.contains("codex_hooks = true"))
+        #expect(toml.contains("\nhooks = true"))
+        #expect(!toml.contains("codex_hooks"), "the deprecated spelling must not be written")
 
         // 9. Marker file exists, parses, contains expected fields.
         // `installedAt` is written as a Double (seconds since 1970) so the
@@ -478,13 +479,13 @@ struct FirstLaunchInstallerTests {
 
     // MARK: 9. ensureCodexConfigFlag handles the existing-[features]-section case
 
-    @Test("ensureCodexConfigFlag adds codex_hooks under existing [features] block")
+    @Test("ensureCodexConfigFlag adds hooks under existing [features] block")
     func ensureCodexConfigFlag_existingFeaturesSection() throws {
         let temp = try makeTempHome()
         defer { cleanup(temp) }
         let paths = FirstLaunchInstaller.Paths(homeRoot: temp)
 
-        // Pre-create config.toml with a [features] section but no codex_hooks line.
+        // Pre-create config.toml with a [features] section but no hooks line.
         let agentsDir = temp.appendingPathComponent(".agents")
         try FileManager.default.createDirectory(at: agentsDir, withIntermediateDirectories: true)
         let preexisting = "[features]\nother_flag = false\n"
@@ -497,7 +498,8 @@ struct FirstLaunchInstallerTests {
 
         let after = try String(contentsOfFile: paths.codexConfigFile, encoding: .utf8)
         #expect(after.contains("[features]"))
-        #expect(after.contains("codex_hooks = true"))
+        #expect(after.contains("\nhooks = true"))
+        #expect(!after.contains("codex_hooks"))
         #expect(after.contains("other_flag = false"))
 
         // Re-running should hit the "already set" branch.
@@ -523,8 +525,41 @@ struct FirstLaunchInstallerTests {
 
         let after = try String(contentsOfFile: paths.codexConfigFile, encoding: .utf8)
         #expect(after.contains("[features]"))
-        #expect(after.contains("codex_hooks = true"))
+        #expect(after.contains("\nhooks = true"))
+        #expect(!after.contains("codex_hooks"))
         #expect(after.contains("[other]"))
+    }
+
+    /// Codex renamed the flag to `hooks` and now prints
+    /// "`[features].codex_hooks` is deprecated" on every launch when it sees
+    /// the old one. Configs written by an older seshctl carry it, so install
+    /// rewrites in place rather than adding `hooks` beside it — otherwise the
+    /// warning persists forever and the same feature is set twice.
+    @Test("ensureCodexConfigFlag migrates the deprecated codex_hooks spelling")
+    func ensureCodexConfigFlag_migratesLegacySpelling() throws {
+        let temp = try makeTempHome()
+        defer { cleanup(temp) }
+        let paths = FirstLaunchInstaller.Paths(homeRoot: temp)
+
+        let agentsDir = temp.appendingPathComponent(".agents")
+        try FileManager.default.createDirectory(at: agentsDir, withIntermediateDirectories: true)
+        try "[features]\ncodex_hooks = true\nother_flag = false\n".write(
+            toFile: paths.codexConfigFile, atomically: true, encoding: .utf8
+        )
+
+        var actions: [FirstLaunchInstaller.Action] = []
+        try FirstLaunchInstaller.ensureCodexConfigFlag(paths: paths, actions: &actions)
+
+        let after = try String(contentsOfFile: paths.codexConfigFile, encoding: .utf8)
+        #expect(after.contains("\nhooks = true"))
+        #expect(!after.contains("codex_hooks"), "the deprecated line must be rewritten, not kept")
+        #expect(after.contains("other_flag = false"), "unrelated flags must survive")
+        #expect(actions.contains(.codexConfigUpdated))
+
+        // Now idempotent on the new spelling.
+        var actions2: [FirstLaunchInstaller.Action] = []
+        try FirstLaunchInstaller.ensureCodexConfigFlag(paths: paths, actions: &actions2)
+        #expect(actions2.contains(.codexConfigAlreadySet))
     }
 
     // MARK: 10. InstallError messages
@@ -830,19 +865,19 @@ struct FirstLaunchInstallerTests {
                 "bundleNewer should carry a mtime strictly after installedAt")
     }
 
-    // MARK: 15. Uninstall removes codex_hooks flag from config.toml
+    // MARK: 15. Uninstall removes the hooks flag from config.toml
 
-    @Test("Uninstall removes codex_hooks line and drops empty [features] header")
+    @Test("Uninstall removes the hooks line and drops empty [features] header")
     func testUninstall_removesCodexConfigFlag() throws {
         let temp = try makeTempHome()
         defer { cleanup(temp) }
         let bundle = try makeFakeBundle(in: temp)
         let paths = FirstLaunchInstaller.Paths(homeRoot: temp)
 
-        // Install seeds [features] / codex_hooks = true.
+        // Install seeds [features] / hooks = true.
         try FirstLaunchInstaller.install(bundleURL: bundle, paths: paths)
         let installed = try String(contentsOfFile: paths.codexConfigFile, encoding: .utf8)
-        #expect(installed.contains("codex_hooks = true"))
+        #expect(installed.contains("\nhooks = true"))
         #expect(installed.contains("[features]"))
 
         // Uninstall without delete-history; just check the codex flag.

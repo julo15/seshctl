@@ -5,7 +5,7 @@
 - **SwiftPM lock contention:** SwiftPM acquires a file lock on `.build/`. If a second `swift build` or `swift test` runs concurrently, it blocks indefinitely. Always use a **timeout of 120s** for builds and **30s** for test runs. If a build/test hangs or times out, immediately run `make kill-build` before retrying.
 - `make kill-build` — force-kills all stale SwiftPM processes
 - `make install` — canonical dev loop: build + sign + install `Seshctl.app` to `/Applications` and re-launch. AppDelegate's launch-time reconciler refreshes the CLI symlink, standalone uninstaller, and hook registrations automatically.
-- `make uninstall` — one-liner: runs `seshctl uninstall` against the installed CLI (CLI symlink + hook entries + standalone uninstaller + marker + `codex_hooks` flag). Drag `Seshctl.app` to Trash separately.
+- `make uninstall` — one-liner: runs `seshctl uninstall` against the installed CLI (CLI symlink + hook entries + standalone uninstaller + marker + Codex `hooks` flag). Drag `Seshctl.app` to Trash separately.
 - `make cert-setup` — one-time: generate the self-signed code-signing identity in the login keychain.
 - `make test` — run all tests
 
@@ -37,7 +37,7 @@ Seshctl ships as a self-signed `.app` bundle in a DMG. There is exactly one inst
 | `make install-vscode` | Build + install VS Code extension |
 | `make install-cursor` | Build + install Cursor extension (chat-thread focus + terminal-tab focus) |
 | `make cert-setup` | One-time: generate the self-signed cert in login keychain |
-| `make uninstall` | One-liner: invokes `seshctl uninstall` (CLI symlink + hooks + standalone uninstaller + marker + `codex_hooks` flag) |
+| `make uninstall` | One-liner: invokes `seshctl uninstall` (CLI symlink + hooks + standalone uninstaller + marker + Codex `hooks` flag) |
 
 **Phase 2 (Sparkle auto-updates) is implemented.** See `Sparkle Auto-Updates` section below for the runtime, key, and release-flow details. The plan is `.agents/plans/2026-05-20-2300-sparkle-auto-updates.md`.
 
@@ -176,6 +176,16 @@ Surfaces to touch when adding a new tool:
 - All hook event names, JSON shapes, and script paths live in `FirstLaunchInstaller` and `hooks/<tool>/` — never hardcode them in the CLI or app code.
 - The CLI and Database are tool-agnostic except for the `SessionTool` raw string. Don't branch on `tool` in `seshctl-cli` unless it's genuinely tool-specific (e.g. the Cursor lazy-create path in `Update`/`End` keyed on `--conversation-id`).
 - Exhaustive `switch`es over `SessionTool` are the safety net: never add `default:` cases.
+
+### Codex gates hooks behind a trust prompt
+
+Codex (verified against codex-cli 0.145.0) will not run a hook until the user has trusted it. On the next launch after seshctl installs or changes its hooks, Codex shows a **Hooks need review** screen — `Trust all and continue` / `Review hooks` / `Continue without trusting (hooks won't run)` — and until the user accepts, Codex sessions silently never reach seshctl. There is a `--dangerously-bypass-hook-trust` flag; don't reach for it on the user's behalf.
+
+Trust is content-sensitive: Codex distinguishes `New hook - review required` from `Modified since last trusted - review required`. `writeHookScripts` rewrites every deployed script on every install, so **any change to `hookGuardBlock` re-triggers the prompt for every Codex user**, not just changes to `hooks/codex/*.sh`. Budget for that when touching the guard.
+
+Codex's hooks feature flag is `[features] hooks` in `~/.agents/config.toml`, written by `ensureCodexConfigFlag`. It was renamed from `codex_hooks`; the old spelling still works but makes Codex print `[features].codex_hooks is deprecated` on every launch, so install rewrites it in place and uninstall strips either. `FirstLaunchInstaller.codexHooksFlag` / `codexHooksLegacyFlag` are the single source of truth for both spellings.
+
+Codex's event set is PreToolUse, PermissionRequest, PostToolUse, PreCompact, PostCompact, SessionStart, SessionEnd, SubagentStart, SubagentStop, Stop, UserPromptSubmit. seshctl registers SessionStart, UserPromptSubmit, Stop, and SessionEnd. `SessionEnd` arrived later than the others — before it existed, Codex rows depended on `Stop` plus stale-PID reaping and left ghosts whenever a terminal was closed hard.
 
 ## Transcript-Derived Row Signals
 
