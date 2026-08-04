@@ -306,7 +306,7 @@ public final class SessionListViewModel: ObservableObject {
             // helpers each guard on `.claude` internally and return before
             // touching the filesystem, so they're unaffected by the wider set.
             var resolvedPathsBySessionId: [String: String] = [:]
-            for session in sessions where session.tool == .claude || session.tool == .codex {
+            for session in sessions where TranscriptParser.parsesTranscripts(session.tool) {
                 if let path = TranscriptParser.resolveExistingTranscript(for: session)?.path {
                     resolvedPathsBySessionId[session.id] = path
                 }
@@ -959,7 +959,7 @@ public final class SessionListViewModel: ObservableObject {
     /// Tools whose transcripts we can parse well enough to title from. Cursor
     /// and Gemini write no transcript at all (see the README compatibility
     /// table), so they're permanently untitleable rather than merely pending.
-    static let titleableTools: Set<SessionTool> = [.claude, .codex]
+    static let titleableTools: Set<SessionTool> = [.claude, .codex, .pi]
 
     /// Pick the next session to title, or nil when there's nothing to do.
     ///

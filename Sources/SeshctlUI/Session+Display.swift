@@ -210,6 +210,7 @@ public extension SessionTool {
         case .codex:  return "Codex"
         case .gemini: return "Gemini"
         case .cursor: return "Cursor"
+        case .pi:     return "Pi"
         }
     }
 }

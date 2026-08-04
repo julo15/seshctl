@@ -423,6 +423,10 @@ final actor RecallStack {
             return "claude --resume \(entry.sessionID)"
         case .codex:
             return "codex --resume \(entry.sessionID)"
+        case .pi:
+            // `--session` takes a full path or a partial UUID; the session id
+            // is the UUID Pi embeds in the transcript filename.
+            return "pi --session \(entry.sessionID)"
         case .gemini:
             return "gemini"
         case .cursor:

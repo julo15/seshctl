@@ -163,6 +163,7 @@ Surfaces to touch when adding a new tool:
 - **`Sources/SeshctlUI/TerminalController.swift`** — per-tool resume binary + verb (or fall through to focus-only if there's no `<tool> <session>` CLI).
 - **`Sources/seshctl-cli/SeshctlCLI.swift`** — `--tool` help strings list the valid values.
 - **`hooks/<tool>/*.sh`** — script bundle invoked by the tool's hook system. Each script reads JSON from stdin and shells out to `seshctl-cli start/update/end`. Mirror `hooks/codex/` as the template. Use `--conversation-id <id>` as the upsert key when the tool's PID is unstable across hook events (Cursor's case — each hook is a fresh `/bin/zsh -c` subprocess).
+  - **No hook system?** Check for a plugin/extension API before concluding the tool can only be CLI-registered. `pi-extension/seshctl.ts` is the worked example: same four lifecycle reports, delivered through `pi.on(...)` instead of shell scripts, installed by `installPiExtension` / `removePiExtension` rather than `HookSpec`. Anything installed outside `~/.local/share/seshctl/` also needs removing in **both** `uninstall()` and `scripts/seshctl-uninstall.sh` — `testStandaloneScriptParity` enforces the shell copy stays byte-identical to `uninstallerScriptContents`.
 - **`Sources/SeshctlCore/FirstLaunchInstaller.swift`** — add a `HookSpec` (`<tool>ScriptNames` + `<tool>Entries(for:)`) and wire it into `install()` / `uninstall()` / `resolveHookSourceDirs(bundleURL:)`. Different tools have different hooks.json schemas (Claude/Codex share one; Cursor uses its own `{ "version": 1, "hooks": { ... } }` shape), so each tool needs its own inject/remove helpers.
 - **`Sources/SeshctlCore/Database.swift`** — if your tool's hook subprocess PID is unstable across events (Cursor 1.7+ has this property), you'll need conversation-id-keyed Database overloads. The trio in `Database.swift` — `findActiveSession(conversationId:tool:)`, `updateSession(conversationId:tool:...)`, `endSession(conversationId:tool:status:)` — mirrors the pid-keyed methods; mirror them again or extend them.
 - **`scripts/build-app-bundle.sh`** — copy `hooks/<tool>/` into `Contents/Resources/hooks/<tool>/` so the bundled `.app` ships with the scripts.
@@ -176,6 +177,39 @@ Surfaces to touch when adding a new tool:
 - All hook event names, JSON shapes, and script paths live in `FirstLaunchInstaller` and `hooks/<tool>/` — never hardcode them in the CLI or app code.
 - The CLI and Database are tool-agnostic except for the `SessionTool` raw string. Don't branch on `tool` in `seshctl-cli` unless it's genuinely tool-specific (e.g. the Cursor lazy-create path in `Update`/`End` keyed on `--conversation-id`).
 - Exhaustive `switch`es over `SessionTool` are the safety net: never add `default:` cases.
+
+### Pi and Codex share a sessions directory — don't conflate them
+
+With `CODEX_HOME` pointed at `~/.agents` (and `~/.codex` symlinked there), **two unrelated transcript families live side by side in the same `sessions/` folder**:
+
+| Family | Path shape | Format | Parser |
+|---|---|---|---|
+| Codex | `sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl` | `session_meta` + `response_item` + `event_msg` | `parseCodex` |
+| Pi | `sessions/--<encoded-cwd>--/<ts>-<uuid>.jsonl` | `{"type":"session","version":3}` + `message` records | `parsePi` |
+
+Three traps, all of which have already caused a wrong diagnosis:
+
+- **`find ~/.codex …` returns nothing** — `find` doesn't follow symlinks, so it looks like Codex has no transcripts when it has hundreds.
+- **The `provider` field does not identify the writing tool.** Pi records `provider: "openai-codex"` when Codex is its *model provider*. Reading that as "Codex wrote this" is wrong.
+- **Prompt content doesn't identify it either.** Plenty of Codex transcripts discuss Pi.
+
+Identify by **path shape or record types**, never by directory or provider. Pi's older home is `~/.pi/agent/` with the identical layout; `~/.agents/bin/fd` being byte-identical to `~/.pi/agent/bin/fd` is what confirms the migration.
+
+**Pi has no hook system — it integrates via an extension instead.** `pi --help` exposes no hook flags, and across the whole npm package `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `SessionEnd` appear zero times while `SessionStart` appears only ever as `SessionStartEvent` (the extension event type). There is no `hooks.json`. What Pi has is a TypeScript *extension* API, so seshctl's Pi integration is `pi-extension/seshctl.ts` rather than a `hooks/pi/` script bundle.
+
+Verify claims about Pi against the whole `dist/` tree, not `dist/cli.js` — that file is a 681-byte shim and greps against it return 0 for everything, which reads exactly like "the feature doesn't exist."
+
+| Concern | Pi | Claude / Codex |
+|---|---|---|
+| Registration | `<agentDir>/extensions/seshctl.ts`, auto-discovered | `hooks.json` / `settings.json` entries |
+| Session start | `pi.on("session_start")` | `SessionStart` hook |
+| Prompt submitted | `pi.on("before_agent_start")` | `UserPromptSubmit` hook |
+| Turn finished | `pi.on("agent_settled")` | `Stop` hook |
+| Session ended | `pi.on("session_shutdown")` | `SessionEnd` hook |
+
+**Use `agent_settled`, not `agent_end`.** Pi's own docs say `agent_end` fires per agent run but Pi may still auto-retry, auto-compact and retry, or drain queued follow-ups afterwards; `agent_settled` is the event they point status integrations at. Reporting idle on `agent_end` flickers the row back to idle mid-work. `agent_settled` carries no payload, so the reply text is captured from `agent_end` and flushed on settle.
+
+**Agent-dir resolution** mirrors Pi's own: `PI_CODING_AGENT_DIR`, else `~/.pi/agent`. `Paths.piAgentDir` consults the environment variable ONLY when `homeRoot` is the real home — it describes *this* user's install, and honoring it under a temp `homeRoot` would let a test write into the user's live Pi extensions dir. The `~/.agents` fallback (gated on a `settings.json` being there) covers Pi's home migration for a GUI launch that inherits no shell environment. Note `~/.agents` is also `CODEX_HOME`, so the directory existing proves nothing on its own.
 
 ## Transcript-Derived Row Signals
 

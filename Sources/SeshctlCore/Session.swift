@@ -19,6 +19,7 @@ public enum SessionTool: String, Codable, DatabaseValueConvertible, Sendable, Ca
     case gemini
     case codex
     case cursor
+    case pi
 }
 
 public struct Session: Codable, Sendable, FetchableRecord, PersistableRecord, Identifiable, Equatable {

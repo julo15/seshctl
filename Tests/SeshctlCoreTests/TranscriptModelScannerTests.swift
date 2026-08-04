@@ -57,6 +57,38 @@ struct TranscriptModelScannerTests {
         #expect(TranscriptModelScanner.extractModel(transcript: transcript, tool: .codex) == nil)
     }
 
+    // MARK: - Pi
+
+    @Test("Reads modelId from a Pi model_change record")
+    func readsPiModel() {
+        let transcript = [
+            #"{"type":"session","version":3,"id":"abc","cwd":"/tmp"}"#,
+            #"{"type":"model_change","timestamp":"2026-06-08T09:26:04Z","provider":"openai-codex","modelId":"gpt-5.5"}"#,
+        ].joined(separator: "\n")
+        // `provider: openai-codex` means Codex is Pi's *model provider* — it
+        // does not make this a Codex transcript. See AGENTS.md.
+        #expect(TranscriptModelScanner.extractModel(transcript: transcript, tool: .pi) == "gpt-5.5")
+    }
+
+    @Test("Takes the latest Pi model when the session switches provider")
+    func takesLatestPiModel() {
+        let transcript = [
+            #"{"type":"model_change","provider":"github-copilot","modelId":"grok-code-fast-1"}"#,
+            #"{"type":"model_change","provider":"openai-codex","modelId":"gpt-5.5"}"#,
+        ].joined(separator: "\n")
+        #expect(TranscriptModelScanner.extractModel(transcript: transcript, tool: .pi) == "gpt-5.5")
+    }
+
+    @Test("Codex and Pi record shapes do not cross over")
+    func formatsDoNotCrossOver() {
+        // The two families share one sessions/ folder, so each arm must ignore
+        // the other's records rather than half-reading them.
+        let pi = #"{"type":"model_change","provider":"openai-codex","modelId":"gpt-5.5"}"#
+        let codex = #"{"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}"#
+        #expect(TranscriptModelScanner.extractModel(transcript: pi, tool: .codex) == nil)
+        #expect(TranscriptModelScanner.extractModel(transcript: codex, tool: .pi) == nil)
+    }
+
     // MARK: - Tools without transcripts
 
     @Test("Tools that write no transcript never report a model")

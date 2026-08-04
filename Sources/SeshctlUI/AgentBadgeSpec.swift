@@ -41,12 +41,13 @@ public struct AgentBadgeSpec: Equatable {
 extension AgentBadgeSpec {
     /// Resolves the badge spec for a local session's agent kind. Today's
     /// mapping: Claude → orange Claude mark, Codex → green `X`,
-    /// Gemini → blue `G`, Cursor → purple `C`.
+    /// Gemini → blue `G`, Cursor → purple `C`, Pi → teal `π`.
     public static func forAgent(_ tool: SessionTool) -> AgentBadgeSpec {
         switch tool {
         case .claude: return AgentBadgeSpec(glyph: .claudeMark, color: .orange)
         case .codex:  return AgentBadgeSpec(glyph: .letter("X"), color: .green)
         case .gemini: return AgentBadgeSpec(glyph: .letter("G"), color: .blue)
+        case .pi:     return AgentBadgeSpec(glyph: .letter("π"), color: .teal)
         case .cursor: return AgentBadgeSpec(glyph: .letter("C"), color: .purple)
         }
     }

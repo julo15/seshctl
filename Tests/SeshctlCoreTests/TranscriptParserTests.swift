@@ -716,3 +716,170 @@ struct TranscriptParserTests {
         #expect(dict["command"] as? String == "ls")
     }
 }
+
+/// Pi writes `<home>/sessions/--<encoded-cwd>--/<ts>_<uuid>.jsonl`, where
+/// `<home>` is `~/.agents` on current versions and `~/.pi/agent` on older ones.
+/// These fixtures mirror the real on-disk shape: a `session` header line, then
+/// `message` records whose `message.content` blocks are `text` / `thinking` /
+/// `toolCall`.
+///
+/// Note this format lives *beside* Codex's in the same `sessions/` folder when
+/// `CODEX_HOME` points at `~/.agents` — Codex's `rollout-*.jsonl` files use the
+/// unrelated `response_item` shape that `parseCodex` handles. The two are told
+/// apart by path shape, not by directory or by the `provider` field (Pi records
+/// `provider: "openai-codex"` when Codex is merely its model provider).
+@Suite("TranscriptParser — Pi")
+struct TranscriptParserPiTests {
+
+    private func parse(_ lines: [String]) throws -> [ConversationTurn] {
+        let data = Data(lines.joined(separator: "\n").utf8)
+        return try TranscriptParser.parsePi(data: data)
+    }
+
+    private let sessionHeader = #"{"type":"session","version":3,"id":"019ea68d","timestamp":"2026-06-08T09:26:04.018Z","cwd":"/tmp/repo"}"#
+
+    private func message(role: String, content: String, at timestamp: String) -> String {
+        #"{"type":"message","id":"a1","parentId":"b1","timestamp":"\#(timestamp)","message":{"role":"\#(role)","content":\#(content)}}"#
+    }
+
+    @Test("Parses a user turn from a Pi message record")
+    func parsesUserTurn() throws {
+        let turns = try parse([
+            sessionHeader,
+            message(role: "user", content: #"[{"type":"text","text":"can skills be lazy loaded?"}]"#, at: "2026-06-08T09:26:47.549Z"),
+        ])
+        #expect(turns.count == 1)
+        guard case .userMessage(let text, _) = turns[0] else {
+            Issue.record("expected userMessage, got \(turns[0])")
+            return
+        }
+        #expect(text == "can skills be lazy loaded?")
+    }
+
+    @Test("Parses assistant text and toolCall blocks into one turn")
+    func parsesAssistantTurn() throws {
+        let content = #"""
+        [{"type":"text","text":"Checking the repo state."},{"type":"toolCall","id":"call_1|fc_1","name":"bash","arguments":{"command":"git status --short","timeout":30}}]
+        """#
+        let turns = try parse([
+            sessionHeader,
+            message(role: "assistant", content: content, at: "2026-06-08T09:26:50.000Z"),
+        ])
+        #expect(turns.count == 1)
+        guard case .assistantMessage(let text, let toolCalls, _) = turns[0] else {
+            Issue.record("expected assistantMessage, got \(turns[0])")
+            return
+        }
+        #expect(text == "Checking the repo state.")
+        #expect(toolCalls.count == 1)
+        #expect(toolCalls[0].toolName == "bash")
+        // v3 names the payload `arguments`; legacy used `input`.
+        let json = try #require(toolCalls[0].inputJSON)
+        #expect(json.contains("git status --short"))
+    }
+
+    @Test("Drops thinking blocks from assistant turns")
+    func dropsThinking() throws {
+        let content = #"""
+        [{"type":"thinking","thinking":"The user wants X, so I should Y.","thinkingSignature":"sig"},{"type":"text","text":"Done."}]
+        """#
+        let turns = try parse([
+            sessionHeader,
+            message(role: "assistant", content: content, at: "2026-06-08T09:27:00.000Z"),
+        ])
+        #expect(turns.count == 1)
+        guard case .assistantMessage(let text, _, _) = turns[0] else {
+            Issue.record("expected assistantMessage, got \(turns[0])")
+            return
+        }
+        #expect(text == "Done.")
+        #expect(!text.contains("The user wants X"))
+    }
+
+    @Test("Emits no turn for a thinking-only assistant message")
+    func thinkingOnlyProducesNoTurn() throws {
+        let content = #"[{"type":"thinking","thinking":"Still reasoning.","thinkingSignature":"sig"}]"#
+        let turns = try parse([
+            sessionHeader,
+            message(role: "assistant", content: content, at: "2026-06-08T09:27:05.000Z"),
+        ])
+        #expect(turns.isEmpty)
+    }
+
+    @Test("Skips toolResult-role records")
+    func skipsToolResults() throws {
+        let turns = try parse([
+            sessionHeader,
+            message(role: "toolResult", content: #"[{"type":"text","text":"origin\tgit@github.com:foo/bar.git (fetch)"}]"#, at: "2026-06-08T09:27:10.000Z"),
+        ])
+        #expect(turns.isEmpty)
+    }
+
+    @Test("Filters injected skill context out of user turns")
+    func filtersInjectedContext() throws {
+        let injected = #"[{"type":"text","text":"<skill name=\"tom-review\" location=\"/Users/x/.agents/skills/tom-review/SKILL.md\">"},{"type":"text","text":"well, do we need to add tests?"}]"#
+        let turns = try parse([
+            sessionHeader,
+            message(role: "user", content: injected, at: "2026-06-08T09:27:20.000Z"),
+        ])
+        #expect(turns.count == 1)
+        guard case .userMessage(let text, _) = turns[0] else {
+            Issue.record("expected userMessage, got \(turns[0])")
+            return
+        }
+        #expect(text == "well, do we need to add tests?")
+    }
+
+    @Test("Ignores the session header and unknown record types")
+    func ignoresNonMessageRecords() throws {
+        let turns = try parse([
+            sessionHeader,
+            #"{"type":"model_change","timestamp":"2026-06-08T09:26:10.000Z","model":"gpt-5"}"#,
+            #"{"type":"thinking_level_change","timestamp":"2026-06-08T09:26:11.000Z","level":"high"}"#,
+        ])
+        #expect(turns.isEmpty)
+    }
+
+    @Test("Orders Pi turns chronologically")
+    func ordersChronologically() throws {
+        let turns = try parse([
+            sessionHeader,
+            message(role: "assistant", content: #"[{"type":"text","text":"second"}]"#, at: "2026-06-08T09:30:00.000Z"),
+            message(role: "user", content: #"[{"type":"text","text":"first"}]"#, at: "2026-06-08T09:20:00.000Z"),
+        ])
+        #expect(turns.count == 2)
+        guard case .userMessage(let firstText, _) = turns[0] else {
+            Issue.record("expected userMessage first, got \(turns[0])")
+            return
+        }
+        #expect(firstText == "first")
+    }
+
+    @Test("Codex response_item records are not Pi turns")
+    func codexFormatIsNotParsedAsPi() throws {
+        // Guards the split: these two formats can share one sessions/ folder,
+        // so each parser must ignore the other's records rather than
+        // half-reading them.
+        let codex = #"{"type":"response_item","timestamp":"2026-06-08T09:26:47.549Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"codex prompt"}]}}"#
+        #expect(try parse([codex]).isEmpty)
+
+        let viaCodex = try TranscriptParser.parseCodex(data: Data(codex.utf8))
+        #expect(viaCodex.count == 1)
+    }
+
+    @Test("parsesTranscripts marks exactly the tools with a parser")
+    func parsesTranscriptsMatchesDispatch() {
+        for tool in SessionTool.allCases {
+            let turns = (try? TranscriptParser.parse(data: Data(), tool: tool)) ?? []
+            #expect(turns.isEmpty)  // empty input always yields nothing
+            // The flag must agree with the dispatch arm, or callers that skip
+            // on it will silently drop a tool that does have a parser.
+            switch tool {
+            case .claude, .codex, .pi:
+                #expect(TranscriptParser.parsesTranscripts(tool))
+            case .gemini, .cursor:
+                #expect(!TranscriptParser.parsesTranscripts(tool))
+            }
+        }
+    }
+}

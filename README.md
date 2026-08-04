@@ -107,7 +107,27 @@ Accounts with Google-only sign-in: add an email/password or passkey on claude.ai
 | Claude Code | Full | Full | Bridged claude.ai sessions show as a single row with a cloud glyph |
 | Codex | Partial | Full | No `UserPromptSubmit` (no "In Progress" state); no `SessionEnd` (closes on `Stop` only) |
 | Cursor (1.7+) | Full | None | Workspace focus works out of the box; chat-thread focus needs the bundled companion extension (auto-installed from the in-app **Editor Integrations** window) |
+| Pi | Extension | Full | Pi has no hook system; the bundled companion extension registers sessions instead — see [Pi setup](#pi-setup) |
 | Gemini | None | None | CLI-only tracking via `seshctl-cli start --tool gemini` |
+
+#### Pi setup
+
+Pi has no hook system — it has a TypeScript extension API instead — so seshctl ships a companion extension rather than shell hooks. Install drops it at:
+
+```
+$PI_CODING_AGENT_DIR/extensions/seshctl.ts     # or ~/.pi/agent/extensions/seshctl.ts
+```
+
+Pi auto-discovers everything in that directory, so there's nothing to enable. Restart Pi and its sessions show up with the same working/idle states as Claude Code and Codex.
+
+If you set `PI_CODING_AGENT_DIR` (common after Pi's home moved to `~/.agents`), note that seshctl launched from the Dock inherits no shell environment. It falls back to `~/.agents` when that directory holds a `settings.json` and `~/.pi/agent` doesn't exist. If you keep Pi somewhere else entirely, copy the file yourself:
+
+```sh
+cp /Applications/Seshctl.app/Contents/Resources/extensions/pi/seshctl.ts \
+   "$PI_CODING_AGENT_DIR/extensions/seshctl.ts"
+```
+
+Uninstall removes only `seshctl.ts` — your other extensions in that folder are left alone.
 
 ### Terminal apps
 

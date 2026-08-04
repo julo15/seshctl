@@ -152,6 +152,26 @@ uninstall_editor_extension() {
     fi
 }
 
+# Pi has no hook system, so seshctl integrates via an extension file dropped
+# into Pi's auto-discovery directory. Remove only our own file — the user's
+# other extensions live in the same folder.
+# Install writes to every candidate Pi home (the ~/.pi/agent -> ~/.agents
+# migration leaves both looking live), so removal sweeps all of them.
+echo "==> Removing Pi companion extension"
+pi_removed=0
+for pi_dir in "${PI_CODING_AGENT_DIR:-}" "$HOME/.pi/agent" "$HOME/.agents"; do
+    [ -n "$pi_dir" ] || continue
+    pi_extension="$pi_dir/extensions/seshctl.ts"
+    if [ -f "$pi_extension" ]; then
+        rm -f "$pi_extension"
+        echo "  removed $pi_extension"
+        pi_removed=1
+    fi
+done
+if [ "$pi_removed" -eq 0 ]; then
+    echo "  no Pi extension found, skipping"
+fi
+
 echo "==> Uninstalling Seshctl extension from editors"
 uninstall_editor_extension "VS Code" "/Applications/Visual Studio Code.app" "code"
 uninstall_editor_extension "VS Code Insiders" "/Applications/Visual Studio Code - Insiders.app" "code-insiders"

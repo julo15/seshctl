@@ -49,6 +49,13 @@ public enum TranscriptModelScanner {
                 guard let payload = obj["payload"] as? [String: Any] else { return nil }
                 return payload["model"] as? String
             }
+        case .pi:
+            // Pi emits `model_change` whenever the provider or model switches,
+            // including once at session start.
+            return scan(transcript) { obj in
+                guard obj["type"] as? String == "model_change" else { return nil }
+                return obj["modelId"] as? String
+            }
         case .gemini, .cursor:
             return nil
         }

@@ -42,7 +42,7 @@ struct Start: ParsableCommand {
         abstract: "Start a new session."
     )
 
-    @Option(help: "Tool name (claude, gemini, codex, cursor).")
+    @Option(help: "Tool name (claude, gemini, codex, cursor, pi).")
     var tool: SessionTool
 
     @Option(help: "Working directory.")
@@ -215,7 +215,7 @@ struct Update: ParsableCommand {
     @Option(help: "CLI process PID.")
     var pid: Int?
 
-    @Option(help: "Tool name (claude, gemini, codex, cursor).")
+    @Option(help: "Tool name (claude, gemini, codex, cursor, pi).")
     var tool: SessionTool
 
     @Option(help: "User's message/prompt.")
@@ -295,7 +295,7 @@ struct End: ParsableCommand {
     @Option(help: "CLI process PID.")
     var pid: Int?
 
-    @Option(help: "Tool name (claude, gemini, codex, cursor).")
+    @Option(help: "Tool name (claude, gemini, codex, cursor, pi).")
     var tool: SessionTool
 
     @Option(name: .long, help: "Conversation/session ID.")

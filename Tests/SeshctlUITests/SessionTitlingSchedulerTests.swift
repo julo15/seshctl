@@ -109,9 +109,11 @@ struct SessionTitlingSchedulerTests {
         #expect(pick([session(tool: .gemini), session(id: "s2", title: "Named")]) == nil)
     }
 
-    @Test("Claude and Codex are the titleable tools")
+    @Test("Claude, Codex and Pi are the titleable tools")
     func titleableToolSet() {
-        #expect(SessionListViewModel.titleableTools == [.claude, .codex])
+        // The tools that write a parseable transcript. Pi has no hooks, but its
+        // transcripts parse, so a CLI-registered Pi session can be titled.
+        #expect(SessionListViewModel.titleableTools == [.claude, .codex, .pi])
         // Guards the README compatibility claim: no transcript, no title.
         for tool in SessionTool.allCases where !SessionListViewModel.titleableTools.contains(tool) {
             #expect(pick([session(tool: tool)]) == nil)

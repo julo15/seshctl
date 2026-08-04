@@ -208,6 +208,19 @@ public enum TranscriptParser {
         return turns
     }
 
+    /// Whether `parse(data:tool:)` can return turns for this tool at all.
+    ///
+    /// The inverse of the `.gemini, .cursor` arm below. Callers that walk every
+    /// session looking for transcript-derived signals use this to skip the ones
+    /// that write nothing, instead of each maintaining its own tool list that
+    /// silently rots when a tool is added.
+    public static func parsesTranscripts(_ tool: SessionTool) -> Bool {
+        switch tool {
+        case .claude, .codex, .pi: return true
+        case .gemini, .cursor: return false
+        }
+    }
+
     /// Dispatch parsing based on the session's tool type.
     public static func parse(data: Data, tool: SessionTool) throws -> [ConversationTurn] {
         switch tool {
@@ -215,12 +228,28 @@ public enum TranscriptParser {
             return try parse(data: data)
         case .codex:
             return try parseCodex(data: data)
+        case .pi:
+            return try parsePi(data: data)
         case .gemini, .cursor:
             return []
         }
     }
 
     /// Parse Codex JSONL transcript data into conversation turns.
+    ///
+    /// Codex writes `<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl`:
+    /// a `session_meta` header followed by `response_item` envelopes wrapping
+    /// `input_text` / `output_text` / `tool_use` blocks, plus `event_msg`
+    /// records.
+    ///
+    /// **Don't confuse this with Pi.** Both tools can share one home directory
+    /// — with `CODEX_HOME` pointed at `~/.agents`, Pi's session tree sits
+    /// beside Codex's `rollout-*` files in the same `sessions/` folder, in a
+    /// completely different format. `parsePi` handles that one. Telling them
+    /// apart by directory or by a `provider` field fails: Pi records
+    /// `provider: "openai-codex"` when Codex is its *model provider*, which
+    /// says nothing about which tool wrote the file. Go by path shape
+    /// (`rollout-*` vs `--<cwd>--/<ts>_<id>`) or record types.
     public static func parseCodex(data: Data) throws -> [ConversationTurn] {
         guard let text = String(data: data, encoding: .utf8) else { return [] }
         let lines = text.components(separatedBy: .newlines).filter { !$0.isEmpty }
@@ -248,15 +277,8 @@ public enum TranscriptParser {
                     if role == "user" {
                         let textParts = content.compactMap { block -> String? in
                             guard (block["type"] as? String) == "input_text",
-                                  let text = block["text"] as? String else { return nil }
-                            // Skip Codex system context injected into user messages
-                            if text.hasPrefix("# AGENTS.md instructions")
-                                || text.hasPrefix("<environment_context>")
-                                || text.hasPrefix("<INSTRUCTIONS>")
-                                || text.hasPrefix("<permissions instructions>")
-                                || text.hasPrefix("<skills_instructions>") {
-                                return nil
-                            }
+                                  let text = block["text"] as? String,
+                                  !isInjectedAgentContext(text) else { return nil }
                             return text
                         }
                         let joined = textParts.joined(separator: "\n")
@@ -307,6 +329,118 @@ public enum TranscriptParser {
 
         turns.sort { $0.timestamp < $1.timestamp }
         return turns
+    }
+
+    /// Parse a Pi JSONL transcript into conversation turns.
+    ///
+    /// Pi writes `<home>/sessions/--<encoded-cwd>--/<ts>_<uuid>.jsonl`, where
+    /// `<home>` is `~/.agents` on current versions and `~/.pi/agent` on older
+    /// ones. The format is a `{"type":"session","version":3,…}` header followed
+    /// by `{"type":"message","message":{"role":…,"content":[…]}}` records, with
+    /// `model_change` / `thinking_level_change` interleaved. Roles are
+    /// `user` / `assistant` / `toolResult`; content blocks are `text`,
+    /// `thinking`, and `toolCall`.
+    ///
+    /// Shares `isInjectedAgentContext` with `parseCodex` but nothing else —
+    /// see that function's note on why the two must not be conflated.
+    public static func parsePi(data: Data) throws -> [ConversationTurn] {
+        guard let text = String(data: data, encoding: .utf8) else { return [] }
+
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        var turns: [ConversationTurn] = []
+        for line in text.components(separatedBy: .newlines) where !line.isEmpty {
+            guard let lineData = line.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                  json["type"] as? String == "message",
+                  let message = json["message"] as? [String: Any]
+            else { continue }
+
+            let timestamp = parseTimestamp(json["timestamp"], formatter: isoFormatter) ?? Date.distantPast
+            if let turn = parsePiMessage(message, timestamp: timestamp) {
+                turns.append(turn)
+            }
+        }
+
+        turns.sort { $0.timestamp < $1.timestamp }
+        return turns
+    }
+
+    /// Convert one Pi `message` record into a turn, or nil when it carries
+    /// nothing displayable.
+    ///
+    /// - `user` — `text` blocks, minus the context Codex injects into the
+    ///   user role (see `isInjectedAgentContext`).
+    /// - `assistant` — `text` blocks become the body, `toolCall` blocks become
+    ///   `ToolCallSummary`. `thinking` blocks are dropped: the detail view has
+    ///   no reasoning affordance, and reasoning text would otherwise dominate
+    ///   the turn (72 thinking blocks against 28 text blocks in a sampled
+    ///   transcript).
+    /// - `toolResult` — dropped, matching the legacy path, which likewise
+    ///   emits no turn for tool output.
+    static func parsePiMessage(_ message: [String: Any], timestamp: Date) -> ConversationTurn? {
+        guard let role = message["role"] as? String,
+              let content = message["content"] as? [[String: Any]] else { return nil }
+
+        switch role {
+        case "user":
+            let textParts = content.compactMap { block -> String? in
+                guard (block["type"] as? String) == "text",
+                      let text = block["text"] as? String,
+                      !isInjectedAgentContext(text) else { return nil }
+                return text
+            }
+            let joined = textParts.joined(separator: "\n")
+            return joined.isEmpty ? nil : .userMessage(text: joined, timestamp: timestamp)
+
+        case "assistant":
+            var textParts: [String] = []
+            var toolCalls: [ToolCallSummary] = []
+            for block in content {
+                switch block["type"] as? String {
+                case "text":
+                    if let text = block["text"] as? String, !text.isEmpty {
+                        textParts.append(text)
+                    }
+                case "toolCall":
+                    if let name = block["name"] as? String {
+                        toolCalls.append(ToolCallSummary(
+                            toolName: name,
+                            inputJSON: serializeToolInput(block["arguments"])
+                        ))
+                    }
+                default:
+                    break
+                }
+            }
+            let text = textParts.joined(separator: "\n")
+            guard !text.isEmpty || !toolCalls.isEmpty else { return nil }
+            return .assistantMessage(text: text, toolCalls: toolCalls, timestamp: timestamp)
+
+        default:
+            return nil
+        }
+    }
+
+    /// True when a user-role text block is context the agent injected rather
+    /// than something the human typed.
+    ///
+    /// Shared by `parseCodex` and `parsePi` — the two formats differ, but both
+    /// tools splice the same kinds of preamble into the user role. The
+    /// `<skill …>` entries and the trailing "References are relative to …"
+    /// line come from Pi; the rest predate it.
+    static func isInjectedAgentContext(_ text: String) -> Bool {
+        let prefixes = [
+            "# AGENTS.md instructions",
+            "<environment_context>",
+            "<INSTRUCTIONS>",
+            "<permissions instructions>",
+            "<skills_instructions>",
+            "<skill name=",
+            "References are relative to ",
+        ]
+        return prefixes.contains { text.hasPrefix($0) }
     }
 
     // MARK: - Private helpers
