@@ -47,6 +47,7 @@ Press **Cmd+Shift+S** to toggle the session panel.
 - **f** — fork the selected Claude session into a new branched session in a new tab (then **y** to confirm, **n** to cancel)
 - **o** — open session detail view
 - **x** — kill session process (then **y** to confirm, **n** to cancel)
+- **t** — regenerate the selected session's title from its latest messages
 - **u** — mark the selected session as read
 - **U** — mark all sessions as read (then **y** to confirm, **n** to cancel)
 - **r** — cycle the source filter: all → local only → cloud only → all
@@ -55,6 +56,21 @@ Press **Cmd+Shift+S** to toggle the session panel.
 - **/** — search/filter sessions
 - **?** — open the keyboard help popover
 - **q** or **Esc** — dismiss the panel
+
+### Session titles
+
+Off by default. When enabled under **⋯ → Appearance**, each session gets a short title generated once from its opening exchange and then left alone — the way Claude.ai and ChatGPT name a thread:
+
+```
+seshctl
+Claude Code · main
+Diversify repo color palette
+968 tests pass. Both installed — no failures outside…
+```
+
+The title answers "what is this session"; the preview line below it still answers "what did it just say". The title is frozen on purpose — a live-updating label would read `yes do that` half the time. Press **t** on a row to regenerate it from the *latest* messages, which is what you want when a session has drifted from what it started as.
+
+Titling shells out to `claude -p` with Haiku, so it uses your Claude quota — roughly one short call per session, plus one per **t**. That's why it's opt-in rather than on by default. It works for Claude Code and Codex; Cursor and Gemini have no transcript to read.
 
 ### Session detail
 
