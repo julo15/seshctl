@@ -29,6 +29,9 @@ public struct SessionRowView: View {
     /// `Session.previewContent(awaySummary:)`. Sourced from
     /// `SessionListViewModel.awaySummariesById`.
     var awaySummary: String? = nil
+    /// Display-ready model name for this session, e.g. `"Opus 5"`. Nil when the
+    /// transcript records none. Sourced from `SessionListViewModel.modelsById`.
+    var model: String? = nil
     /// True while a title is being generated for this session. Drives the
     /// "Titling…" placeholder — the model call takes several seconds, and
     /// without it pressing `t` looks like a no-op.
@@ -43,9 +46,12 @@ public struct SessionRowView: View {
 
     @AppStorage(AppearanceDefaults.repoAccentBarKey) private var repoAccentBarEnabled: Bool = AppearanceDefaults.repoAccentBarDefault
     @AppStorage(AppearanceDefaults.stackedRowLayoutKey) private var stackedRowLayoutEnabled: Bool = AppearanceDefaults.stackedRowLayoutDefault
+    @AppStorage(AppearanceDefaults.showAgentNameKey) private var showAgentName: Bool = AppearanceDefaults.showAgentNameDefault
+    @AppStorage(AppearanceDefaults.showModelKey) private var showModel: Bool = AppearanceDefaults.showModelDefault
+
     @AppStorage(AppearanceDefaults.sessionTitlesKey) private var sessionTitlesEnabled: Bool = AppearanceDefaults.sessionTitlesDefault
 
-    public init(session: Session, hostApp: HostAppInfo, isUnread: Bool = false, isBridged: Bool = false, showCloudAffordances: Bool = false, showAgentBadge: Bool = true, awaySummary: String? = nil, isTitling: Bool = false, yesterdayStyle: SessionAgeDisplay.YesterdayStyle = .date, onDetail: (() -> Void)? = nil) {
+    public init(session: Session, hostApp: HostAppInfo, isUnread: Bool = false, isBridged: Bool = false, showCloudAffordances: Bool = false, showAgentBadge: Bool = true, awaySummary: String? = nil, model: String? = nil, isTitling: Bool = false, yesterdayStyle: SessionAgeDisplay.YesterdayStyle = .date, onDetail: (() -> Void)? = nil) {
         self.session = session
         self.hostApp = hostApp
         self.isUnread = isUnread
@@ -53,6 +59,7 @@ public struct SessionRowView: View {
         self.showCloudAffordances = showCloudAffordances
         self.showAgentBadge = showAgentBadge
         self.awaySummary = awaySummary
+        self.model = model
         self.isTitling = isTitling
         self.yesterdayStyle = yesterdayStyle
         self.onDetail = onDetail
@@ -175,6 +182,32 @@ public struct SessionRowView: View {
     @ViewBuilder
     private func subtitleRow(stacked: Bool) -> some View {
         HStack(spacing: 4) {
+            if showAgentName {
+                // Tinted with the agent's badge color so the name and the
+                // corner badge read as the same signal rather than two
+                // competing ones.
+                Text(session.tool.agentDisplayName)
+                    .font(.system(size: SenderColumnLayout.subtitleSize(isUnread: isUnread, stacked: stacked), weight: .medium))
+                    .foregroundStyle(AgentBadgeSpec.forAgent(session.tool).color)
+                    .lineLimit(1)
+                    .fixedSize()
+                // Model rides directly after the agent that's running it, in
+                // the agent's tint but at normal weight so it reads as a
+                // qualifier rather than a second heading. Absent whenever the
+                // transcript records no model — Codex only writes one when the
+                // session switches, and Cursor/Gemini write no transcript.
+                if showModel, let model {
+                    Text(model)
+                        .font(.system(size: SenderColumnLayout.subtitleSize(isUnread: isUnread, stacked: stacked)))
+                        .foregroundStyle(AgentBadgeSpec.forAgent(session.tool).color.opacity(0.75))
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+                Text("·")
+                    .font(.system(size: SenderColumnLayout.subtitleSize(isUnread: isUnread, stacked: stacked)))
+                    .foregroundStyle(.tertiary)
+            }
+
             if showCloudAffordances {
                 Image(systemName: "laptopcomputer")
                     .font(.footnote)

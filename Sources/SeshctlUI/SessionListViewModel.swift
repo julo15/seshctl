@@ -69,6 +69,15 @@ public final class SessionListViewModel: ObservableObject {
     /// Pruned by `pruneTranscriptLatestAssistantCache(keepingPaths:)` on each
     /// refresh.
     private var transcriptLatestAssistantCache: [String: (mtime: Date, text: String?)] = [:]
+    /// Per-transcript cache: `path → (mtime, model)`. Mirrors
+    /// `transcriptAwaySummaryCache` for the model the session is running.
+    /// Pruned by `pruneTranscriptModelCache(keepingPaths:)` on each refresh.
+    private var transcriptModelCache: [String: (mtime: Date, model: String?)] = [:]
+    /// Display-ready model name per session id, e.g. `"Opus 5"`, `"GPT-5.5"`.
+    /// Absent for sessions whose transcript records no model — Codex only
+    /// writes one when the session switches models, and Cursor/Gemini write no
+    /// transcript at all.
+    @Published public private(set) var modelsById: [String: String] = [:]
     @Published public private(set) var recallResults: [RecallResult] = []
     @Published public private(set) var isRecallSearching: Bool = false
     @Published public private(set) var recallIndexingDone: Int?
@@ -346,8 +355,17 @@ public final class SessionListViewModel: ObservableObject {
                 }
             }
             latestAssistantById = latest
+            var models: [String: String] = [:]
+            for session in sessions {
+                guard let path = resolvedPathsBySessionId[session.id] else { continue }
+                if let raw = cachedModel(for: session, transcriptPath: path) {
+                    models[session.id] = TranscriptModelScanner.displayName(for: raw)
+                }
+            }
+            modelsById = models
             pruneTranscriptLatestAssistantCache(keepingPaths: livePaths)
             pruneTranscriptBridgeCache(keepingPaths: livePaths)
+            pruneTranscriptModelCache(keepingPaths: livePaths)
             // At most one background titling job per cycle. No-ops unless the
             // user opted in — it spends Claude quota.
             scheduleTitlingIfNeeded(resolvedPaths: resolvedPathsBySessionId)
@@ -890,6 +908,32 @@ public final class SessionListViewModel: ObservableObject {
             transcriptAwaySummaryCache[path] = (mtime, summary)
         }
         return summary
+    }
+
+    /// Scan the session's transcript for the model in effect, re-using a
+    /// previous result when the transcript's mtime hasn't advanced. Mirrors
+    /// `cachedAwaySummary(for:transcriptPath:)`.
+    ///
+    /// Unlike its siblings this serves two tools — `TranscriptModelScanner`
+    /// reads `message.model` for Claude and `payload.model` for Codex — so the
+    /// tool guard lives inside the scanner rather than here.
+    fileprivate func cachedModel(for session: Session, transcriptPath path: String) -> String? {
+        let mtime = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+        if let mtime, let cached = transcriptModelCache[path], cached.mtime == mtime {
+            return cached.model
+        }
+        let model = TranscriptModelScanner.extractModel(transcriptPath: path, tool: session.tool)
+        if let mtime {
+            transcriptModelCache[path] = (mtime, model)
+        }
+        return model
+    }
+
+    /// Drop cache entries for transcripts whose owning session is no longer in
+    /// the live list. Mirrors `pruneTranscriptAwaySummaryCache`.
+    fileprivate func pruneTranscriptModelCache(keepingPaths paths: [String]) {
+        let live = Set(paths)
+        transcriptModelCache = transcriptModelCache.filter { live.contains($0.key) }
     }
 
     /// Scan the session's transcript for the latest in-progress assistant

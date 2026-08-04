@@ -197,6 +197,23 @@ extension Session {
     }
 }
 
+public extension SessionTool {
+    /// Human-readable agent name for the row's subtitle and the row
+    /// accessibility label. Single source of truth — `AgentBadgeSpec.forAgent`
+    /// owns the glyph and color for the same agent, this owns the words.
+    ///
+    /// Spelled as the user knows the tool ("Claude Code", not "Claude"), since
+    /// the whole point of surfacing it is telling two agents apart at a glance.
+    var agentDisplayName: String {
+        switch self {
+        case .claude: return "Claude Code"
+        case .codex:  return "Codex"
+        case .gemini: return "Gemini"
+        case .cursor: return "Cursor"
+        }
+    }
+}
+
 // MARK: - Sender / preview / status-hint / accessibility helpers
 //
 // These are the centralized display computations used by the row UI redesign
@@ -314,19 +331,10 @@ extension Session {
     /// - Pass a `HostAppInfo` (or `.unknown`) for **local** rows — the
     ///   `name` field is read directly.
     ///
-    /// Output shape: `"<host>, <agent>"` — e.g. `"Ghostty, Claude"`,
+    /// Output shape: `"<host>, <agent>"` — e.g. `"Ghostty, Claude Code"`,
     /// `"Globe, Codex"`.
     static func accessibilityLabel(hostApp: HostAppInfo?, agent: SessionTool) -> String {
-        let hostPart = hostApp?.name ?? "Globe"
-        let agentPart: String = {
-            switch agent {
-            case .claude: return "Claude"
-            case .codex:  return "Codex"
-            case .gemini: return "Gemini"
-            case .cursor: return "Cursor"
-            }
-        }()
-        return "\(hostPart), \(agentPart)"
+        "\(hostApp?.name ?? "Globe"), \(agent.agentDisplayName)"
     }
 
     /// Returns the body of `text` with leading and trailing whitespace

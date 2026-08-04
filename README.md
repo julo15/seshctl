@@ -57,6 +57,9 @@ Press **Cmd+Shift+S** to toggle the session panel.
 - **?** — open the keyboard help popover
 - **q** or **Esc** — dismiss the panel
 
+**Show agent name** (**⋯ → Appearance**, on by default) names the agent behind each session — Claude Code, Codex, Cursor, Gemini — in the row subtitle. The corner badge encodes the same thing as a colored monogram, but it's suppressed when every visible session shares one agent, so a list of only Claude Code sessions would otherwise show no agent at all.
+
+**Show model** (Appearance, on by default) adds the model next to the agent — `Claude Code Opus 5`, `Codex GPT-5.5`. It's read from the transcript, so it appears only where one is recorded: always for Claude Code, and for Codex once the session records a turn context. Cursor and Gemini write no transcript, so they never show one.
 ### Session titles
 
 Off by default. When enabled under **⋯ → Appearance**, each session gets a short title generated once from its opening exchange and then left alone — the way Claude.ai and ChatGPT name a thread:
