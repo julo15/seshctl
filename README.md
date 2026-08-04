@@ -56,6 +56,19 @@ Press **Cmd+Shift+S** to toggle the session panel.
 - **?** — open the keyboard help popover
 - **q** or **Esc** — dismiss the panel
 
+### Keeping the panel open
+
+By default the panel behaves like Spotlight: it floats above everything and dismisses itself as soon as you focus another window. Two settings under **⋯ → Appearance** change that:
+
+| Setting | Effect |
+|---|---|
+| **Keep panel open** | The panel stops dismissing when it loses focus, so you can park it on a spare monitor as an always-on dashboard. **Cmd+Shift+S** then brings it forward when it doesn't have focus, and hides it only when it does. |
+| **Always in front** | Holds the open panel above every other window. Off lets other windows cover it, like an ordinary window. Only applies with **Keep panel open** on — a transient panel is always in front. |
+
+Drag the panel's edges to resize it. Position and size are both remembered, including which display, so it reopens where and how you left it rather than centered on whichever screen is currently active.
+
+Seshctl now appears in the Dock and in Cmd+Tab. Switching to it shows the panel, since the app owns no ordinary window.
+
 ### Session detail
 
 - **j / k** or **Arrow keys** — scroll line by line

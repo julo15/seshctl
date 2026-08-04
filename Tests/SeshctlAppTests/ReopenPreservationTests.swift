@@ -42,4 +42,20 @@ final class ReopenPreservationTests: XCTestCase {
             AppDelegate.shouldPreserveDetail(lastCloseAt: closedAt, now: now, window: window)
         )
     }
+
+    // MARK: - Auto-dismiss after acting on a session
+
+    func test_transientPanelDismissesAfterAction() {
+        XCTAssertTrue(
+            AppDelegate.shouldAutoDismissAfterAction(keepOpen: false),
+            "Picking a session in Spotlight mode means \"take me there\" — the panel gets out of the way."
+        )
+    }
+
+    func test_pinnedPanelSurvivesAction() {
+        XCTAssertFalse(
+            AppDelegate.shouldAutoDismissAfterAction(keepOpen: true),
+            "A dashboard that vanishes every time you jump to a session isn't a dashboard."
+        )
+    }
 }

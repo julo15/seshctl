@@ -36,6 +36,33 @@ public enum AppearanceDefaults {
     /// lets the user flip back to the two-column legacy for comparison.
     public static let stackedRowLayoutDefault = true
 
+    /// Key for the "Keep panel open" toggle. When on, the session panel stops
+    /// behaving like a Spotlight overlay: it no longer dismisses itself when it
+    /// loses key focus, and it drops from `.floating` to `.normal` window level
+    /// so other windows can sit above it. Intended for parking the panel on a
+    /// spare monitor as a always-visible dashboard.
+    ///
+    /// Panel *position* is persisted independently of this toggle (see
+    /// `FloatingPanel.frameAutosaveName`) — a panel the user has moved is
+    /// restored where they left it in either mode.
+    public static let keepPanelOpenKey = "seshctl.keepPanelOpen"
+
+    /// Default — off, preserving the Spotlight-style transient panel that the
+    /// hotkey UX is built around.
+    public static let keepPanelOpenDefault = false
+
+    /// Key for the "Always in front" toggle. Only meaningful alongside
+    /// `keepPanelOpenKey`: it decides whether a pinned panel keeps the
+    /// `.floating` level (above every other window, like the transient panel)
+    /// or drops to `.normal` so other windows can cover it. A *transient* panel
+    /// is always `.floating` — an overlay that other windows could hide would
+    /// be useless — so this setting has no effect while keep-open is off.
+    public static let panelAlwaysInFrontKey = "seshctl.panelAlwaysInFront"
+
+    /// Default — off. A pinned panel parked on a spare monitor behaves like an
+    /// ordinary window unless the user explicitly asks for always-on-top.
+    public static let panelAlwaysInFrontDefault = false
+
     /// One-shot migration from the pre-release un-prefixed key
     /// (`"repoAccentBarEnabled"`) to `seshctl.repoAccentBarEnabled`.
     /// Run once at app launch so an author who toggled the setting during
