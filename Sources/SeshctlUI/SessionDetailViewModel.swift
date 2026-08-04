@@ -62,6 +62,18 @@ public final class SessionDetailViewModel: ObservableObject {
         session?.gitBranch
     }
 
+    /// The agent's own conversation id, which is what every `--resume` form
+    /// takes. Shown in full in the detail header so the user can read or copy
+    /// it; the row shows only the first 8 characters.
+    ///
+    /// Falls back to the recall result's session id when the detail view was
+    /// opened from a search hit that matched no live session.
+    public var conversationId: String? {
+        if let id = session?.conversationId, !id.isEmpty { return id }
+        if let id = recallResult?.sessionId, !id.isEmpty { return id }
+        return nil
+    }
+
     /// Git repo name for this session, if any. No production caller after
     /// the detail-header repo-accent change — kept as a passthrough so
     /// `SessionDetailViewModelTests` can assert on it and so future header

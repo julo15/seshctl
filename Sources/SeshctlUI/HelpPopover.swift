@@ -47,6 +47,17 @@ public struct HelpPopover: View {
             section("View") {
                 row("v", "toggle list / tree")
                 row("r", "cycle source filter")
+                row("c", "toggle recents (closed sessions)")
+            }
+
+            Divider()
+
+            section("Recents") {
+                row("space  x", "mark row for restore")
+                row("a", "mark all · clear marks")
+                row("enter", "reopen marked rows in new tabs")
+                row("/", "narrow the list (every word must match)")
+                row("tab", "leave typing, then mark with x / a")
             }
 
             Divider()

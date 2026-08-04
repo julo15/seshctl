@@ -251,9 +251,11 @@ Each session gets a frozen, chat-app-style title generated once from its opening
 
 Claude Code and Codex only — `SessionListViewModel.titleableTools`. Cursor and Gemini write no transcript, so they're permanently untitleable rather than pending.
 
-**The titler's own subprocess must not become a row.** `claude -p` is an ordinary Claude Code run, so its `SessionStart` / `UserPromptSubmit` / `Stop` / `SessionEnd` hooks all fire and `seshctl-cli` records it. Each titling run left about three rows, all in the app's working directory (`/`), whose preview text was the title being generated for some *other* session. One real database held 83 such rows out of 251. `InternalSession` (`Sources/SeshctlCore/InternalSession.swift`) holds the defence:
+**The titler's own subprocess must not become a row.** `claude -p` is an ordinary Claude Code run, so its `SessionStart` / `UserPromptSubmit` / `Stop` / `SessionEnd` hooks all fire and `seshctl-cli` records it. Each titling run left about three rows, all in the app's working directory (`/`), whose preview text was the title being generated for some *other* session. One real database held 83 such rows out of 251. `InternalSession` (`Sources/SeshctlCore/InternalSession.swift`) holds both defences:
 
 - **Write-time.** `SessionTitler.generate` merges `InternalSession.environmentMarker` (`SESHCTL_INTERNAL_SESSION=1`) into the subprocess environment through `ShellRunner.run(extraEnvironment:)`. Claude Code runs hooks as children of the CLI process, so the marker reaches every hook event of that run, including subagents. `Start` / `Update` / `End` in `seshctl-cli` return before opening the database when they see it. The read-only subcommands are deliberately left working, so `list` and `show` stay usable while debugging inside a marked process.
+
+- **Read-time.** `refresh()` drops rows whose `host_app_bundle_id` is `app.seshctl.Seshctl` as it loads `recentSessions`. This covers the rows written before the marker existed. The filter sits on `recentSessions` rather than on `recentLocalRows` so the global `/` search and `sessionsToRestore` inherit it. Nothing is deleted; those rows age out through the 30-day `gc`.
 
 `ShellRunner.run` merges `extraEnvironment` onto the inherited environment. Assigning `process.environment` outright would strip `PATH` and `HOME` from the child, which breaks every CLI launched this way.
 
@@ -262,6 +264,59 @@ Claude Code and Codex only — `SessionListViewModel.titleableTools`. Cursor and
 `reapStaleSessions` handles most ghosts, but its guard is `if let pid = session.pid, !isProcessAlive(pid)`. A session with no pid fails the binding and is never reaped; a session whose pid was recycled keeps testing alive. Both stay active-looking indefinitely, which is what `d` exists for.
 
 `confirmDelete` also clears the deleted id from `titlingInFlight` and `lastTitleAttemptAt`; leaving it in the former would permanently consume the single-in-flight titling budget.
+
+## Recents and Restore
+
+`c` swaps the seshboard from live sessions to closed ones the user can reopen. Not shift+`r`: `r` cycles the source filter, so a shift pairing would imply a relationship that does not exist. `space` or `x` marks a row, `a` marks all, `enter` reopens each marked session in its own terminal tab.
+
+**`x` is inert in recents, so it doubles as a mark key there.** `requestKill` guards on `session.isActive`, and a closed row has no process to signal.
+
+**Recents lists only rows that can be reopened.** `filteredRows` returns `recentLocalRows`, not `recentRows`. `recentLocalRows` drops three kinds of row: disconnected cloud sessions (they reopen in a browser, not a tab), Cursor rows (no shell resume command), and rows with no conversation id (nothing to pass to `--resume`). The last group is not rare: 40 of 169 closed rows in a real database. Rendering them with a refusing checkbox turned a quarter of the list into rows the user reads and skips. They stay reachable through `/` search, which is where `d` deletes them. `sourceFilter` is ignored here, since the view is local by definition and a remote-only filter would just empty it.
+
+**`enterRecentsMode` calls `refresh()`.** The 2-second poll is what demotes a hard-closed session to `.stale`. Without the explicit reload, a terminal quit moments earlier would not appear until the next tick.
+
+**Recents suspends tree mode without persisting the change.** `isTreeMode`'s `didSet` writes through to UserDefaults, so assigning `false` directly made one press of `c` destroy the user's saved grouping for good, across relaunch. `enterRecentsMode` stashes the value in `treeModeBeforeRecents` and writes through `setTreeModeWithoutPersisting`; every exit path (`exitRecentsMode`, `toggleViewMode`, `enterSearch`, `panelDidHide`) calls `restoreTreeModeAfterRecents`. `toggleViewMode` restores *before* toggling, so `v` flips the real preference rather than the parked `false`. `enterSearch` no longer restores when it is called from inside recents, since recents stays open (see below); the restore then happens on `exitRecentsMode`.
+
+### Searching inside recents
+
+`/` inside recents narrows the closed list in place instead of switching to the global search. `enterSearch` keeps `isRecentsMode` set when it is already on, so checkboxes, `a`, and `enter` keep working while the query is live. `filteredRows` still returns `recentLocalRows`, which reads `localRecentSessions`, which applies the query. Nothing else had to change to make the list filter.
+
+**Every word must match, but the words may match different fields.** `SessionListViewModel.matches(session:query:)` splits the query on whitespace, ORs the seven fields within a token, and ANDs the tokens across the row. The old single `contains` over the whole query needed the words adjacent in one field, so `sesh dedup` matched nothing. Tokenized, it finds a `seshctl` row titled "Session deduplication verification". This is what makes the view narrowable at all: `loc` alone left 46 of 100 rows in a real database. `matches(remote:query:)` applies the same rule to the three fields a cloud row carries, so one query cannot behave differently on the two halves of a global search. Both are `nonisolated static` so the rule tests without a view model, database, or MainActor hop.
+
+**Semantic recall is off in recents** (`triggerRecallSearch` guards on `!isRecentsMode`). A `RecallResult` is a transcript hit, not a row, so it cannot be marked or reopened. Joining it back to a closed session by conversation id would only reorder rows that `recentLocalRows` already shows. Skipping recall also keeps typing instant: it embeds the query and may index transcripts first. Global `/` search keeps recall, and that is the path for finding a session by meaning.
+
+**Marks are not filtered with the rows.** `markedSessionIds` outlives any query. `sessionsToRestore` resolves marks against `recentSessions`, not `markableRows`, because `markableRows` reads `orderedRows` and a query hides rows without unmarking them. Resolving against the visible list would silently drop every mark the query filtered out. `toggleMarkAll` is scoped to the visible rows in *both* directions: it unions them in, or subtracts them when they are all already marked. Assigning the visible set outright made `a` under one query undo `a` under the previous one. With no query every row is visible, which is the original behavior. Together these give the compose: narrow to `location`, `a`, clear, narrow to `elmozi`, `a`, `enter` reopens all of them.
+
+**Marking lives behind `tab`.** In search mode every letter goes into the query, so `x`, `a`, and space cannot mark. `handleSearchKey`'s navigation branch (`isNavigatingSearch`, entered with `tab`) accepts them alongside the existing `j` / `k` / `o`. Both view-model calls guard on `isRecentsMode`, so they no-op in a global search.
+
+**Leaving recents takes the query along.** `exitRecentsMode` and `toggleViewMode` call `exitSearch()` first. A query typed to narrow the closed list has no meaning once that list is gone. Escape therefore backs out one level at a time: clear the search, leave recents, close the panel.
+
+**`.noRecentsMatch` is a separate empty state from `.noRecents`.** The fix differs: clear the query rather than leave the view. Recents can show an empty state while searching at all, unlike the global search, because there are no recall rows underneath it to hide. `.fullyEmpty` still wins over both when the database holds no sessions.
+
+**Unread is suppressed in recents** (`SessionListView` passes `isUnread: false`). Unread means "has this said something since I last looked", which is meaningless once a session stops, and the bold treatment competes with the restore checkbox.
+
+**One row per conversation, enforced in two places.** Resuming starts a new process, so the session-start hook inserts a fresh row while the previous run's row waits out the 30-day `gc` window. Left alone, a conversation accumulates one row per resume — the live database held 217 rows for 133 conversations before this landed.
+
+- **Write-time:** `Database.collapseInactiveTwins` deletes the closed rows sharing `(conversation_id, tool)` and returns the newest one's `title`, which the new row inherits. Without the inheritance, resuming would silently discard a frozen title and make `SessionTitler` pay for it again.
+- **Query-time:** `Database.listRecentSessions` collapses by `(COALESCE(conversation_id, id), tool)` anyway, because rows written before the write-time fix are still on disk. This is what makes the view correct on the first launch after upgrade instead of a month later.
+
+**`collapseInactiveTwins` runs BEFORE the "end existing active rows" loop in both `startSession` variants.** Running it after would delete the row that same call just closed, breaking the documented "ended, not erased" contract that `startSession(conversationId:tool:)` has.
+
+**Only inactive rows are ever collapsed.** Two live rows can legitimately share a conversation id, because `claude --resume <id>` works against a conversation that is already running. Collapsing on the active side would erase a real session.
+
+**`listRecentSessions` excludes conversations that have a live row.** Offering to reopen a session already visible in the active list would open a second copy of it.
+
+**`listRecentSessions` is separate from `listSessions` on purpose.** `listSessions(limit: 50)` is one budget shared by live and closed rows, so a busy day starves history. Recents gets its own limit (`SessionListViewModel.recentSessionLimit`).
+
+**Restores are serialized, not fired together.** `TerminalController.resumeInTerminal` runs `open -b` and then, 300ms later, an AppleScript that adds a tab to the app's *front window*. Dispatching N of those at once makes them compete for a window that is still being created. `SessionAction.dispatchRestores` walks the list recursively with `restoreStagger` (0.6s) between tabs, carrying the failure list as a parameter so there is no shared mutable state. Failed commands are pooled and copied to the clipboard once at the end — copying each failure as it happens would leave only the last one.
+
+**A row can only be marked when it has a resume command.** `SessionListViewModel.isMarkable` delegates to `TerminalController.buildResumeCommand`, which returns nil for `.cursor` and for any row missing a conversation id. The row draws a dimmed `square.slash` rather than an empty checkbox, so "cannot be selected" doesn't read as "not selected yet".
+
+**Recents mode is not persisted and does not compose.** Entering it clears `isTreeMode`; `enterSearch`, `toggleViewMode`, and `panelDidHide` all clear it. Search already spans actives and recents, and tree mode groups live sessions by repo, so neither combination means anything. The panel opens on live sessions every time.
+
+**The list view must zero `activeCount` in recents mode** (`SessionListView`). It normally reads `viewModel.activeRows.count` to find the active/recent boundary for the age-bucket headers. In recents mode `orderedRows` holds closed rows only, so the unmodified read would stamp the first N of them with the live sessions' date buckets.
+
+**Only `conversationId` is ever displayed.** `session.id` is a local primary key with no meaning outside the database. The row shows `conversationId`'s first 8 characters (recents mode only, via `SessionRowView.shortConversationId`); the detail header shows it in full and selectable.
 
 ## Editor Integrations
 

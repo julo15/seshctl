@@ -32,6 +32,16 @@ public struct SessionDetailView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                // The resume id, in full. Selectable so it can be copied
+                // straight into a `--resume` command.
+                if let conversationId = viewModel.conversationId {
+                    Text(conversationId)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                        .help("Session id")
+                }
                 Text(viewModel.toolName)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)

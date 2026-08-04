@@ -52,6 +52,10 @@ Press **Cmd+Shift+S** to toggle the session panel.
 - **u** — mark the selected session as read
 - **U** — mark all sessions as read (then **y** to confirm, **n** to cancel)
 - **r** — cycle the source filter: all → local only → cloud only → all
+- **c** — toggle recents: closed sessions you can reopen
+- **space** or **x** — in recents, mark the selected row to reopen
+- **a** — in recents, mark every visible row (press again to clear)
+- **/** then **tab** — in recents, narrow the list, then mark rows in it
 - **v** — toggle list/tree view
 - **h / l** — in tree mode, jump to previous/next group
 - **/** — search/filter sessions
@@ -85,7 +89,32 @@ Most ghosts are cleaned up automatically: each poll marks active sessions whose 
 - The session has no PID recorded, so the liveness check never runs on it.
 - The PID was recycled by an unrelated process, so the dead session keeps testing alive.
 
-Already-ended rows aren't in the default list at all. Press **/** to search, then **d**.
+Already-ended rows aren't in the default list at all. Press **c** for recents, or **/** to search, then **d**.
+### Reopening closed sessions
+
+Quit your terminal with several agents running and every one of those rows goes stale. Press **c** to see them.
+
+Recents lists your closed local sessions, newest first, one row per conversation, with the first 8 characters of the resume id. Cloud sessions are left out: those reopen in a browser, not a tab. Press **space** or **x** to mark a row, or **a** to mark all of them. Press **enter** and each marked session reopens in its own terminal tab, using `claude --resume <id>`, `codex resume <id>`, or `pi --session <id>`. With nothing marked, **enter** reopens the selected row on its own.
+
+Tabs open one at a time rather than all at once, because the terminal needs a moment to finish creating each window before the next one is asked for.
+
+Everything listed can be reopened. Rows that can't are left out: Cursor chats have no shell resume command, and some older rows were recorded without a conversation id. Find those with **/** if you want to clear them with **d**. If a reopen fails (the directory is gone, the terminal won't script), the commands land on your clipboard instead.
+
+A conversation that is running again is left out of recents entirely. Its old row describes the previous run of a session already visible in the live list.
+
+Pressing **c** reloads first, so a session you closed a moment ago is already there. Unread markers are suppressed in recents, since "has this said something since I last looked" means nothing for a session that has stopped. Your list/tree setting is remembered: recents is flat while it is open, and **c** again puts your grouping back.
+
+#### Narrowing the list
+
+Press **/** inside recents to filter it. Every word you type has to match, but each word may match a different part of the row: its repo, title, branch, directory, tool, or last message. So `sesh dedup` finds the `seshctl` session titled "Session deduplication verification". One word is often not enough on its own, since a busy repo can own half the list.
+
+Typing sends letters to the query, so press **tab** to mark rows. **x** or **space** marks the selected one, **a** marks everything the query left visible, **enter** reopens them.
+
+Marks outlive the query. Search `location`, press **a**, clear the query, search `elmozi`, press **a**, and **enter** reopens both sets. A row that scrolls out of view because it stopped matching keeps its mark.
+
+This filter reads the session rows only, not your transcripts. To search what was actually said, use **/** from the live list instead: that runs a semantic search over your history and lists the matches under a "Semantic" heading.
+
+**Esc** backs out one step at a time: clear the query, leave recents, close the panel.
 
 ### Session detail
 

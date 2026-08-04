@@ -263,6 +263,41 @@ public struct SeshctlDatabase: Sendable {
         || Column("status") == SessionStatus.working.rawValue
         || Column("status") == SessionStatus.waiting.rawValue
 
+    /// Delete the closed rows that share this conversation, then hand back the
+    /// title the newest of them carried.
+    ///
+    /// Resuming a conversation starts a fresh process, so the session-start
+    /// hook inserts a new row while the previous run's row survives until the
+    /// 30-day gc sweep. Left alone, one conversation accumulates a row per
+    /// resume: the live database showed 217 rows for 133 conversations, and 17
+    /// of the 50 rows the panel loads were dead twins.
+    ///
+    /// Only inactive rows are removed. Two *live* rows can legitimately share a
+    /// conversation id, because `claude --resume <id>` works against a
+    /// conversation that is already running, so collapsing on the active side
+    /// would erase a real session.
+    ///
+    /// The returned title is what stops a resume from discarding the frozen
+    /// thread title the old row had already generated. See `SessionTitler`.
+    private static func collapseInactiveTwins(
+        _ db: GRDB.Database,
+        conversationId: String,
+        tool: SessionTool
+    ) throws -> String? {
+        let twins = try Session
+            .filter(Column("conversation_id") == conversationId)
+            .filter(Column("tool") == tool.rawValue)
+            .filter(!Self.activeStatusFilter)
+            .order(Column("updated_at").desc)
+            .fetchAll(db)
+        guard !twins.isEmpty else { return nil }
+        let inheritedTitle = twins.compactMap(\.title).first
+        for twin in twins {
+            try twin.delete(db)
+        }
+        return inheritedTitle
+    }
+
     // MARK: - Session Operations
 
     /// Find the active session for a given pid+tool.
@@ -297,6 +332,16 @@ public struct SeshctlDatabase: Sendable {
                 .filter(Self.activeStatusFilter)
                 .fetchAll(db)
 
+            // Drop this conversation's already-closed rows and carry their
+            // title over. Runs BEFORE the loop below, so a row that this same
+            // call closes is left alone and keeps its documented
+            // "ended, not erased" behaviour.
+            var inheritedTitle: String?
+            if let conversationId, !conversationId.isEmpty {
+                inheritedTitle = try Self.collapseInactiveTwins(
+                    db, conversationId: conversationId, tool: tool)
+            }
+
             let now = Date()
             for var session in existing {
                 session.status = .completed
@@ -324,7 +369,9 @@ public struct SeshctlDatabase: Sendable {
                 launchArgs: launchArgs,
                 startedAt: now,
                 updatedAt: now,
-                lastReadAt: now
+                lastReadAt: now,
+                title: inheritedTitle,
+                titleUpdatedAt: inheritedTitle == nil ? nil : now
             )
             try session.insert(db)
             return session
@@ -492,6 +539,12 @@ public struct SeshctlDatabase: Sendable {
                 .filter(Self.activeStatusFilter)
                 .fetchAll(db)
 
+            // Drop this conversation's already-closed rows and carry their
+            // title over. Runs BEFORE the loop below for the same reason as
+            // the pid-keyed variant.
+            let inheritedTitle = try Self.collapseInactiveTwins(
+                db, conversationId: conversationId, tool: tool)
+
             let now = Date()
             for var session in existing {
                 session.status = .completed
@@ -519,7 +572,9 @@ public struct SeshctlDatabase: Sendable {
                 launchArgs: launchArgs,
                 startedAt: now,
                 updatedAt: now,
-                lastReadAt: now
+                lastReadAt: now,
+                title: inheritedTitle,
+                titleUpdatedAt: inheritedTitle == nil ? nil : now
             )
             try session.insert(db)
             return session
@@ -651,6 +706,58 @@ public struct SeshctlDatabase: Sendable {
                 query = query.filter(Column("tool") == tool.rawValue)
             }
             return try query.limit(limit).fetchAll(db)
+        }
+    }
+
+    /// List closed sessions, newest first, one row per conversation.
+    ///
+    /// Backs the recents view, where the user picks sessions to reopen. It is
+    /// deliberately separate from `listSessions` for two reasons.
+    ///
+    /// First, the budget. `listSessions(limit: 50)` is shared by active and
+    /// closed rows, so a busy day of live sessions leaves almost no room for
+    /// history. Recents needs its own limit.
+    ///
+    /// Second, the dedup. `collapseInactiveTwins` keeps new duplicates out, but
+    /// rows written before it existed are still on disk until the 30-day gc
+    /// sweep clears them. Collapsing here means the view is correct on the
+    /// first launch after upgrade rather than a month later.
+    ///
+    /// A row with no conversation id partitions on its own primary key, so it
+    /// always survives. Those rows carry no resume target, so they cannot be
+    /// duplicates of anything.
+    ///
+    /// A conversation that is running again is excluded outright. Its closed
+    /// row describes the previous run of a session the user can already see in
+    /// the live list, so offering to reopen it would open a second copy of
+    /// something already on screen.
+    public func listRecentSessions(limit: Int = 100) throws -> [Session] {
+        let activeStatuses = [
+            SessionStatus.idle.rawValue,
+            SessionStatus.working.rawValue,
+            SessionStatus.waiting.rawValue,
+        ]
+        return try dbPool.read { db in
+            try Session.fetchAll(db, sql: """
+                SELECT * FROM (
+                    SELECT *, ROW_NUMBER() OVER (
+                        PARTITION BY COALESCE(conversation_id, id), tool
+                        ORDER BY updated_at DESC
+                    ) AS twin_rank
+                    FROM sessions
+                    WHERE status NOT IN (?, ?, ?)
+                      AND NOT EXISTS (
+                          SELECT 1 FROM sessions AS live
+                          WHERE live.conversation_id IS NOT NULL
+                            AND live.conversation_id = sessions.conversation_id
+                            AND live.tool = sessions.tool
+                            AND live.status IN (?, ?, ?)
+                      )
+                )
+                WHERE twin_rank = 1
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """, arguments: StatementArguments(activeStatuses + activeStatuses + [limit]))
         }
     }
 
