@@ -337,8 +337,13 @@ public struct SessionListView: View {
                 } else if viewModel.pendingMarkAllRead {
                     Text("mark all as read? y/n")
                         .foregroundStyle(.orange)
+                } else if !viewModel.titlingInFlight.isEmpty {
+                    // Doubles as the confirmation that `t` did something — the
+                    // model call runs for several seconds with no other signal.
+                    Text("generating title\u{2026}")
+                        .foregroundStyle(.secondary)
                 } else {
-                    Text("enter focus · f fork · / search · ? help · q close")
+                    Text("enter focus · f fork · t retitle · / search · ? help · q close")
                 }
             }
             .font(.system(.footnote, design: .monospaced))
@@ -404,6 +409,8 @@ public struct SessionListView: View {
                 showCloudAffordances: connectionStore.hasClaudeConnection,
                 showAgentBadge: showAgentBadge,
                 awaySummary: viewModel.awaySummariesById[session.id] ?? viewModel.latestAssistantById[session.id],
+                model: viewModel.modelsById[session.id],
+                isTitling: viewModel.titlingInFlight.contains(session.id),
                 // List view has a Yesterday section header, so the per-row
                 // slot shows the more specific clock time for yesterday rows
                 // instead of repeating the day.

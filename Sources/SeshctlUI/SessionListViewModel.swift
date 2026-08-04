@@ -69,6 +69,15 @@ public final class SessionListViewModel: ObservableObject {
     /// Pruned by `pruneTranscriptLatestAssistantCache(keepingPaths:)` on each
     /// refresh.
     private var transcriptLatestAssistantCache: [String: (mtime: Date, text: String?)] = [:]
+    /// Per-transcript cache: `path → (mtime, model)`. Mirrors
+    /// `transcriptAwaySummaryCache` for the model the session is running.
+    /// Pruned by `pruneTranscriptModelCache(keepingPaths:)` on each refresh.
+    private var transcriptModelCache: [String: (mtime: Date, model: String?)] = [:]
+    /// Display-ready model name per session id, e.g. `"Opus 5"`, `"GPT-5.5"`.
+    /// Absent for sessions whose transcript records no model — Codex only
+    /// writes one when the session switches models, and Cursor/Gemini write no
+    /// transcript at all.
+    @Published public private(set) var modelsById: [String: String] = [:]
     @Published public private(set) var recallResults: [RecallResult] = []
     @Published public private(set) var isRecallSearching: Bool = false
     @Published public private(set) var recallIndexingDone: Int?
@@ -88,6 +97,21 @@ public final class SessionListViewModel: ObservableObject {
     /// cloud row selected. The view observes this, renders a toast, then
     /// calls `acknowledgeCloudKillToast()` to reset.
     @Published public private(set) var showedCloudKillToast: Bool = false
+
+    /// Sessions currently being titled. Titling shells out to `claude -p`
+    /// (~5-7s), so it must never run twice for the same session, and the
+    /// scheduler keeps at most one in flight overall — a burst of new sessions
+    /// should trickle rather than fork a subprocess per row.
+    /// Published so the row can show that a title is being generated. Without
+    /// it a `t` press looks like nothing happened for the ~5-7s the model call
+    /// takes.
+    @Published public private(set) var titlingInFlight: Set<String> = []
+    /// Last titling attempt per session, successful or not. A failed attempt
+    /// leaves `title` nil, so without this the scheduler would retry the same
+    /// session every 2s forever when the CLI is broken or out of quota.
+    private var lastTitleAttemptAt: [String: Date] = [:]
+    /// How long to wait before retrying a session whose titling failed.
+    static let titleRetryBackoff: TimeInterval = 600
 
     private let database: SeshctlDatabase
     private let refreshInterval: TimeInterval
@@ -277,8 +301,12 @@ public final class SessionListViewModel: ObservableObject {
             // possible `~/.claude/projects/` glob walk) would run up to 4×
             // per session every 2 seconds. Non-Claude tools are skipped —
             // the scanners would early-out on them anyway.
+            // Codex is included because the model scanner and the titler both
+            // read its transcript. The bridge / away-summary / latest-assistant
+            // helpers each guard on `.claude` internally and return before
+            // touching the filesystem, so they're unaffected by the wider set.
             var resolvedPathsBySessionId: [String: String] = [:]
-            for session in sessions where session.tool == .claude {
+            for session in sessions where TranscriptParser.parsesTranscripts(session.tool) {
                 if let path = TranscriptParser.resolveExistingTranscript(for: session)?.path {
                     resolvedPathsBySessionId[session.id] = path
                 }
@@ -327,8 +355,20 @@ public final class SessionListViewModel: ObservableObject {
                 }
             }
             latestAssistantById = latest
+            var models: [String: String] = [:]
+            for session in sessions {
+                guard let path = resolvedPathsBySessionId[session.id] else { continue }
+                if let raw = cachedModel(for: session, transcriptPath: path) {
+                    models[session.id] = TranscriptModelScanner.displayName(for: raw)
+                }
+            }
+            modelsById = models
             pruneTranscriptLatestAssistantCache(keepingPaths: livePaths)
             pruneTranscriptBridgeCache(keepingPaths: livePaths)
+            pruneTranscriptModelCache(keepingPaths: livePaths)
+            // At most one background titling job per cycle. No-ops unless the
+            // user opted in — it spends Claude quota.
+            scheduleTitlingIfNeeded(resolvedPaths: resolvedPathsBySessionId)
             // Re-pin `selectedIndex` to the previously-selected row's new
             // position. If the row vanished (closed + filtered out of
             // `orderedRows`), clamp `selectedIndex` to the new array bounds
@@ -870,6 +910,32 @@ public final class SessionListViewModel: ObservableObject {
         return summary
     }
 
+    /// Scan the session's transcript for the model in effect, re-using a
+    /// previous result when the transcript's mtime hasn't advanced. Mirrors
+    /// `cachedAwaySummary(for:transcriptPath:)`.
+    ///
+    /// Unlike its siblings this serves two tools — `TranscriptModelScanner`
+    /// reads `message.model` for Claude and `payload.model` for Codex — so the
+    /// tool guard lives inside the scanner rather than here.
+    fileprivate func cachedModel(for session: Session, transcriptPath path: String) -> String? {
+        let mtime = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+        if let mtime, let cached = transcriptModelCache[path], cached.mtime == mtime {
+            return cached.model
+        }
+        let model = TranscriptModelScanner.extractModel(transcriptPath: path, tool: session.tool)
+        if let mtime {
+            transcriptModelCache[path] = (mtime, model)
+        }
+        return model
+    }
+
+    /// Drop cache entries for transcripts whose owning session is no longer in
+    /// the live list. Mirrors `pruneTranscriptAwaySummaryCache`.
+    fileprivate func pruneTranscriptModelCache(keepingPaths paths: [String]) {
+        let live = Set(paths)
+        transcriptModelCache = transcriptModelCache.filter { live.contains($0.key) }
+    }
+
     /// Scan the session's transcript for the latest in-progress assistant
     /// text, re-using a previous result when the transcript's mtime hasn't
     /// advanced. Mirrors `cachedAwaySummary(for:transcriptPath:)`.
@@ -886,6 +952,126 @@ public final class SessionListViewModel: ObservableObject {
             transcriptLatestAssistantCache[path] = (mtime, text)
         }
         return text
+    }
+
+    // MARK: - Session titling
+
+    /// Tools whose transcripts we can parse well enough to title from. Cursor
+    /// and Gemini write no transcript at all (see the README compatibility
+    /// table), so they're permanently untitleable rather than merely pending.
+    static let titleableTools: Set<SessionTool> = [.claude, .codex, .pi]
+
+    /// Pick the next session to title, or nil when there's nothing to do.
+    ///
+    /// Pure so the selection rules can be tested without a database, a
+    /// subprocess, or a clock. Ordering follows `sessions`, which is
+    /// recency-sorted, so the session the user most likely just started gets
+    /// titled first.
+    static func nextTitlingCandidate(
+        sessions: [Session],
+        lastAttemptAt: [String: Date],
+        inFlight: Set<String>,
+        now: Date,
+        backoff: TimeInterval = titleRetryBackoff
+    ) -> Session? {
+        sessions.first { session in
+            guard titleableTools.contains(session.tool) else { return false }
+            // Frozen: a title is written once and never recomputed. Only an
+            // explicit user retitle overwrites it.
+            guard session.title == nil else { return false }
+            guard session.isActive else { return false }
+            guard !inFlight.contains(session.id) else { return false }
+            guard let attempted = lastAttemptAt[session.id] else { return true }
+            return now.timeIntervalSince(attempted) >= backoff
+        }
+    }
+
+    /// Kick off at most one background titling job per refresh.
+    ///
+    /// Runs off the main actor because `SessionTitler.generate` blocks on a
+    /// subprocess for several seconds; inline it would freeze the panel. Every
+    /// failure path is silent — no title is a normal state, not an error worth
+    /// showing.
+    fileprivate func scheduleTitlingIfNeeded(resolvedPaths: [String: String]) {
+        let enabled = UserDefaults.standard.object(forKey: AppearanceDefaults.sessionTitlesKey) as? Bool
+            ?? AppearanceDefaults.sessionTitlesDefault
+        guard enabled else { return }
+        guard titlingInFlight.isEmpty else { return }
+        guard let cli = SessionTitler.resolveClaudeCLI() else { return }
+        guard let session = Self.nextTitlingCandidate(
+            sessions: sessions,
+            lastAttemptAt: lastTitleAttemptAt,
+            inFlight: titlingInFlight,
+            now: Date()
+        ) else { return }
+        // Claude paths are pre-resolved for this refresh cycle; Codex isn't in
+        // that map, so fall back to the hook-supplied path.
+        guard let path = resolvedPaths[session.id]
+            ?? session.transcriptPath.flatMap({ FileManager.default.fileExists(atPath: $0) ? $0 : nil })
+        else { return }
+
+        titlingInFlight.insert(session.id)
+        lastTitleAttemptAt[session.id] = Date()
+        runTitling(sessionId: session.id, tool: session.tool, transcriptPath: path, cli: cli, material: .opening)
+    }
+
+    /// Shared body for automatic and user-requested titling.
+    private func runTitling(
+        sessionId: String,
+        tool: SessionTool,
+        transcriptPath: String,
+        cli: URL,
+        material: SessionTitler.Material
+    ) {
+        let database = self.database
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let title: String? = {
+                guard let data = try? Data(contentsOf: URL(fileURLWithPath: transcriptPath)),
+                      let turns = try? TranscriptParser.parse(data: data, tool: tool)
+                else { return nil }
+                // Automatic titling waits for a complete exchange; an explicit
+                // retitle does not, because the user asked for it now.
+                if material == .opening, !SessionTitler.hasCompleteFirstExchange(turns: turns) {
+                    return nil
+                }
+                guard let excerpt = SessionTitler.excerpt(turns: turns, material: material) else { return nil }
+                return SessionTitler.generate(excerpt: excerpt, cli: cli)
+            }()
+
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.titlingInFlight.remove(sessionId)
+                // Persist even a nil title: the stamped `title_updated_at` is
+                // what the backoff reads so a broken CLI isn't retried on every
+                // refresh.
+                try? database.setSessionTitle(id: sessionId, title: title, at: Date())
+                if title != nil { self.refresh() }
+            }
+        }
+    }
+
+    /// Regenerate the selected session's title from its *latest* turns,
+    /// overwriting whatever is there. Bound to `t` in the list view.
+    ///
+    /// Deliberately reads different material than automatic titling: the only
+    /// reason to ask for a retitle is that the session drifted from its opening
+    /// exchange, so re-reading that exchange would reproduce the same words.
+    public func retitleSelectedSession() {
+        // Gated on the same setting as automatic titling: with titles off the
+        // row doesn't render one, so generating it would spend a model call on
+        // something the user can't see.
+        let enabled = UserDefaults.standard.object(forKey: AppearanceDefaults.sessionTitlesKey) as? Bool
+            ?? AppearanceDefaults.sessionTitlesDefault
+        guard enabled else { return }
+        guard let session = selectedSession else { return }
+        guard Self.titleableTools.contains(session.tool) else { return }
+        guard !titlingInFlight.contains(session.id) else { return }
+        guard let cli = SessionTitler.resolveClaudeCLI() else { return }
+        guard let path = TranscriptParser.resolveExistingTranscript(for: session)?.path else { return }
+
+        titlingInFlight.insert(session.id)
+        lastTitleAttemptAt[session.id] = Date()
+        runTitling(sessionId: session.id, tool: session.tool, transcriptPath: path, cli: cli, material: .latest)
     }
 
     /// Drop cache entries for transcripts whose owning session is no longer

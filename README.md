@@ -47,6 +47,7 @@ Press **Cmd+Shift+S** to toggle the session panel.
 - **f** — fork the selected Claude session into a new branched session in a new tab (then **y** to confirm, **n** to cancel)
 - **o** — open session detail view
 - **x** — kill session process (then **y** to confirm, **n** to cancel)
+- **t** — regenerate the selected session's title from its latest messages
 - **u** — mark the selected session as read
 - **U** — mark all sessions as read (then **y** to confirm, **n** to cancel)
 - **r** — cycle the source filter: all → local only → cloud only → all
@@ -55,6 +56,24 @@ Press **Cmd+Shift+S** to toggle the session panel.
 - **/** — search/filter sessions
 - **?** — open the keyboard help popover
 - **q** or **Esc** — dismiss the panel
+
+**Show agent name** (**⋯ → Appearance**, on by default) names the agent behind each session — Claude Code, Codex, Cursor, Gemini — in the row subtitle. The corner badge encodes the same thing as a colored monogram, but it's suppressed when every visible session shares one agent, so a list of only Claude Code sessions would otherwise show no agent at all.
+
+**Show model** (Appearance, on by default) adds the model next to the agent — `Claude Code Opus 5`, `Codex GPT-5.5`. It's read from the transcript, so it appears only where one is recorded: always for Claude Code, and for Codex once the session records a turn context. Cursor and Gemini write no transcript, so they never show one.
+### Session titles
+
+Off by default. When enabled under **⋯ → Appearance**, each session gets a short title generated once from its opening exchange and then left alone — the way Claude.ai and ChatGPT name a thread:
+
+```
+seshctl
+Claude Code · main
+Diversify repo color palette
+968 tests pass. Both installed — no failures outside…
+```
+
+The title answers "what is this session"; the preview line below it still answers "what did it just say". The title is frozen on purpose — a live-updating label would read `yes do that` half the time. Press **t** on a row to regenerate it from the *latest* messages, which is what you want when a session has drifted from what it started as.
+
+Titling shells out to `claude -p` with Haiku, so it uses your Claude quota — roughly one short call per session, plus one per **t**. That's why it's opt-in rather than on by default. It works for Claude Code and Codex; Cursor and Gemini have no transcript to read.
 
 ### Session detail
 
@@ -88,7 +107,27 @@ Accounts with Google-only sign-in: add an email/password or passkey on claude.ai
 | Claude Code | Full | Full | Bridged claude.ai sessions show as a single row with a cloud glyph |
 | Codex | Partial | Full | No `UserPromptSubmit` (no "In Progress" state); no `SessionEnd` (closes on `Stop` only) |
 | Cursor (1.7+) | Full | None | Workspace focus works out of the box; chat-thread focus needs the bundled companion extension (auto-installed from the in-app **Editor Integrations** window) |
+| Pi | Extension | Full | Pi has no hook system; the bundled companion extension registers sessions instead — see [Pi setup](#pi-setup) |
 | Gemini | None | None | CLI-only tracking via `seshctl-cli start --tool gemini` |
+
+#### Pi setup
+
+Pi has no hook system — it has a TypeScript extension API instead — so seshctl ships a companion extension rather than shell hooks. Install drops it at:
+
+```
+$PI_CODING_AGENT_DIR/extensions/seshctl.ts     # or ~/.pi/agent/extensions/seshctl.ts
+```
+
+Pi auto-discovers everything in that directory, so there's nothing to enable. Restart Pi and its sessions show up with the same working/idle states as Claude Code and Codex.
+
+If you set `PI_CODING_AGENT_DIR` (common after Pi's home moved to `~/.agents`), note that seshctl launched from the Dock inherits no shell environment. It falls back to `~/.agents` when that directory holds a `settings.json` and `~/.pi/agent` doesn't exist. If you keep Pi somewhere else entirely, copy the file yourself:
+
+```sh
+cp /Applications/Seshctl.app/Contents/Resources/extensions/pi/seshctl.ts \
+   "$PI_CODING_AGENT_DIR/extensions/seshctl.ts"
+```
+
+Uninstall removes only `seshctl.ts` — your other extensions in that folder are left alone.
 
 ### Terminal apps
 

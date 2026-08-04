@@ -22,10 +22,23 @@ public enum ShellRunner {
     /// is terminated after `timeout` seconds; SIGTERM is given 0.5s to flush
     /// before we give up. Returns nil if the executable couldn't launch or the
     /// timeout fired (partial output is discarded in both cases).
-    public static func run(path: String, args: [String], timeout: TimeInterval) -> Result? {
+    ///
+    /// `extraEnvironment` is merged *onto* the inherited environment rather
+    /// than replacing it. Assigning `process.environment` outright would strip
+    /// `PATH` and `HOME` from the child, which breaks every CLI we launch.
+    public static func run(
+        path: String,
+        args: [String],
+        timeout: TimeInterval,
+        extraEnvironment: [String: String]? = nil
+    ) -> Result? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = args
+        if let extraEnvironment {
+            process.environment = ProcessInfo.processInfo.environment
+                .merging(extraEnvironment) { _, added in added }
+        }
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
         process.standardOutput = stdoutPipe

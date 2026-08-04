@@ -15,6 +15,10 @@ public struct SettingsPopover: View {
     @AppStorage(AppearanceDefaults.showStatusBarIconKey) private var showStatusBarIcon: Bool = AppearanceDefaults.showStatusBarIconDefault
     @AppStorage(AppearanceDefaults.stackedRowLayoutKey) private var stackedRowLayoutEnabled: Bool = AppearanceDefaults.stackedRowLayoutDefault
 
+    @AppStorage(AppearanceDefaults.showAgentNameKey) private var showAgentName: Bool = AppearanceDefaults.showAgentNameDefault
+    @AppStorage(AppearanceDefaults.showModelKey) private var showModel: Bool = AppearanceDefaults.showModelDefault
+    @AppStorage(AppearanceDefaults.sessionTitlesKey) private var sessionTitles: Bool = AppearanceDefaults.sessionTitlesDefault
+
     /// Optional callbacks for the bottom-of-popover Application section.
     /// Supplied by `AppDelegate` so the popover can offer the same uninstall
     /// flow as the menu bar item and a plain Quit action. When either is nil
@@ -91,6 +95,34 @@ public struct SettingsPopover: View {
                     .controlSize(.small)
                     .padding(.top, 4)
                 Text("Stacks the repo name, branch, and chat preview vertically so the preview spans the full row width. Off uses the legacy two-column layout with the sender on the left and preview on the right.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Toggle("Show agent name", isOn: $showAgentName)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .padding(.top, 4)
+                Text("Names the agent that owns each session — Claude Code, Codex, Cursor, Gemini — in the row subtitle. The corner badge encodes the same thing as a colored monogram, but it's hidden when every session shares one agent.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Toggle("Show model", isOn: $showModel)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .padding(.top, 4)
+                    .disabled(!showAgentName)
+                Text("Names the model next to the agent — Opus 5, GPT-5.5. Read from the transcript, so it only appears where one is recorded: always for Claude Code, and for Codex once the session records a turn context. Needs \u{201C}Show agent name\u{201D} on.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .opacity(showAgentName ? 1 : 0.5)
+                Toggle("Session titles", isOn: $sessionTitles)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .padding(.top, 4)
+                Text("Names each session once from its opening exchange, the way a chat app titles a thread, and then leaves it alone. Press T on a row to retitle it from the latest messages. Runs `claude -p` with Haiku, so it uses your Claude quota — roughly one short call per session. Claude Code and Codex only; Cursor and Gemini write no transcript to read.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

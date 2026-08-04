@@ -239,6 +239,20 @@ public struct SeshctlDatabase: Sendable {
                 columns: ["agent"])
         }
 
+        // Frozen, chat-app-style thread title for a session — "Rebalance the
+        // repo accent palette" rather than the volatile latest message.
+        //
+        // `title_updated_at` is what makes retry backoff survive a relaunch:
+        // a NULL title alone can't distinguish "never attempted" from
+        // "generation failed a moment ago", which would let a broken titler
+        // spin on every refresh.
+        migrator.registerMigration("v15_add_session_title") { db in
+            try db.alter(table: "sessions") { t in
+                t.add(column: "title", .text)
+                t.add(column: "title_updated_at", .datetime)
+            }
+        }
+
         try migrator.migrate(dbPool)
     }
 
@@ -653,6 +667,20 @@ public struct SeshctlDatabase: Sendable {
             try db.execute(
                 sql: "UPDATE sessions SET last_read_at = ? WHERE id = ?",
                 arguments: [Date(), id]
+            )
+        }
+    }
+
+    /// Write a session's frozen thread title. See `SessionTitler`.
+    ///
+    /// `title_updated_at` is stamped even when `title` is nil, which is how a
+    /// failed generation records "attempted at T" — `SessionListViewModel`
+    /// reads it to back off instead of retrying on every 2s refresh.
+    public func setSessionTitle(id: String, title: String?, at date: Date = Date()) throws {
+        try dbPool.write { db in
+            try db.execute(
+                sql: "UPDATE sessions SET title = ?, title_updated_at = ? WHERE id = ?",
+                arguments: [title, date, id]
             )
         }
     }

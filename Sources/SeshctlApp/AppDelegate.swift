@@ -386,6 +386,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // u — mark as read (works for both local and remote rows)
         case (_, "u"):
             vm.markSelectedRowRead()
+        // t — regenerate the selected session's title from its latest turns.
+        // No confirm prompt: it overwrites a generated string, costs one short
+        // model call, and is itself the undo for a bad title.
+        case (_, "t"):
+            vm.retitleSelectedSession()
         // o — open detail view
         case (_, "o"):
             openDetailForSelected(vm: vm)
