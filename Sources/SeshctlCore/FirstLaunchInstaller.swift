@@ -1242,13 +1242,27 @@ public enum FirstLaunchInstaller {
 extension FirstLaunchInstaller {
     /// Sentinel string that marks a hook script as having had the defensive
     /// guard block prepended. Used for idempotent re-injection.
-    static let hookGuardSentinel = "# seshctl-defensive-guard-v1"
+    static let hookGuardSentinel = "# seshctl-defensive-guard-v2"
 
     /// Defensive guard prepended to every deployed hook script.
     ///
-    /// If `seshctl-cli` isn't on PATH (bundle deleted), the hook no-ops. After
-    /// 5 consecutive misses, it self-cleans by invoking `seshctl-uninstall`.
-    /// If the binary IS on PATH the miss counter is reset.
+    /// If `seshctl-cli` isn't on PATH the hook no-ops. It self-cleans by
+    /// invoking `seshctl-uninstall`, but only when all three hold:
+    ///
+    ///   1. at least 5 misses have accumulated,
+    ///   2. the miss streak has spanned 24h, and
+    ///   3. no app bundle is on disk (marker path or `/Applications`).
+    ///
+    /// Count alone is not enough. `~/.local/bin/seshctl-cli` symlinks into the
+    /// bundle, so every reinstall — `make install`, a Sparkle update — unlinks
+    /// the target and any hook firing in that window records a miss. v1 gated
+    /// on count alone and a run of `make install` cycles was enough to make the
+    /// hooks uninstall a perfectly healthy seshctl out from under the user.
+    /// Conditions 2 and 3 are what distinguish "user trashed the app" (the case
+    /// this exists for) from "app is being replaced right now".
+    ///
+    /// A legacy v1 miss file carries no `firstMissEpoch`, so the first v2 run
+    /// stamps it to now and the 24h clock starts fresh — never retroactively.
     ///
     /// Note: this guard uses `rm -f` on its OWN tracking file — that's fine,
     /// the `trash` rule from AGENTS.md is for the assistant's actions, not for
@@ -1259,16 +1273,33 @@ extension FirstLaunchInstaller {
             SESHCTL_STATE="$HOME/Library/Application Support/Seshctl"
             MISS_FILE="$SESHCTL_STATE/hook-misses.json"
             mkdir -p "$SESHCTL_STATE" 2>/dev/null || true
+            seshctl_now=$(date -u +%s)
+            seshctl_misses=0
+            seshctl_first="$seshctl_now"
             if command -v jq >/dev/null 2>&1 && [ -f "$MISS_FILE" ]; then
-                misses=$(jq -r '.misses // 0' "$MISS_FILE" 2>/dev/null || echo 0)
-            else
-                misses=0
+                seshctl_misses=$(jq -r '.misses // 0' "$MISS_FILE" 2>/dev/null || echo 0)
+                seshctl_first=$(jq -r '.firstMissEpoch // empty' "$MISS_FILE" 2>/dev/null || echo "")
+                case "$seshctl_first" in ''|*[!0-9]*) seshctl_first="$seshctl_now" ;; esac
             fi
-            misses=$((misses + 1))
+            seshctl_misses=$((seshctl_misses + 1))
             if command -v jq >/dev/null 2>&1; then
-                printf '{"misses":%d,"lastMiss":"%s"}' "$misses" "$(date -u +%FT%TZ)" > "$MISS_FILE" 2>/dev/null || true
+                printf '{"misses":%d,"firstMissEpoch":%d,"lastMiss":"%s"}' "$seshctl_misses" "$seshctl_first" "$(date -u +%FT%TZ)" > "$MISS_FILE" 2>/dev/null || true
             fi
-            if [ "$misses" -ge 5 ] && [ -x "$HOME/.local/bin/seshctl-uninstall" ]; then
+            # A dangling CLI symlink means "app deleted" OR "app mid-reinstall".
+            # Only the first should self-clean, so require the streak to span a
+            # day and the bundle to be genuinely absent. The marker is
+            # authoritative about where the bundle lives; /Applications is only
+            # consulted when there is no marker to ask, which also keeps this
+            # from reading outside $HOME when one is present.
+            seshctl_bundle=""
+            if command -v jq >/dev/null 2>&1 && [ -f "$SESHCTL_STATE/installed-v1.json" ]; then
+                seshctl_bundle=$(jq -r '.bundlePath // empty' "$SESHCTL_STATE/installed-v1.json" 2>/dev/null || echo "")
+            fi
+            [ -n "$seshctl_bundle" ] || seshctl_bundle="/Applications/Seshctl.app"
+            seshctl_gone=1
+            [ -d "$seshctl_bundle" ] && seshctl_gone=0
+            seshctl_age=$((seshctl_now - seshctl_first))
+            if [ "$seshctl_misses" -ge 5 ] && [ "$seshctl_age" -ge 86400 ] && [ "$seshctl_gone" -eq 1 ] && [ -x "$HOME/.local/bin/seshctl-uninstall" ]; then
                 "$HOME/.local/bin/seshctl-uninstall" >/dev/null 2>&1 || true
             fi
             exit 0
@@ -1334,6 +1365,12 @@ extension FirstLaunchInstaller {
         # deployed hooks dir prefix (~/.local/share/seshctl/hooks/) — same anchored
         # matcher used by the Swift installer. Anchoring keeps us from stripping
         # user-defined hooks that mention "seshctl" elsewhere in their command.
+        #
+        # An event whose array empties out is dropped with `select`, NOT `|= empty`.
+        # jq's `|= empty` sets the key to null rather than deleting it, and Claude Code
+        # then refuses the file with `hooks.SessionStart must be an array of matchers;
+        # received null` on every launch. The `. // []` coercion additionally cleans up
+        # nulls left behind by earlier versions of this script.
         strip_seshctl_hooks() {
             local file="$1"
             [ -f "$file" ] || return 0
@@ -1344,10 +1381,10 @@ extension FirstLaunchInstaller {
                 if jq --arg prefix "$HOOK_PREFIX" '
                     if .hooks then
                         .hooks |= with_entries(
-                            .value |= map(select(
+                            .value |= ((. // []) | map(select(
                                 (.hooks // []) | map(.command // "") | map(startswith($prefix)) | any | not
-                            ))
-                            | .value |= (if length == 0 then empty else . end)
+                            )))
+                            | select((.value | length) > 0)
                         )
                         | (if (.hooks | length) == 0 then del(.hooks) else . end)
                     else . end
