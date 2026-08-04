@@ -671,6 +671,23 @@ public struct SeshctlDatabase: Sendable {
         }
     }
 
+    /// Delete a single session row outright.
+    ///
+    /// Exists because a hard-closed terminal never fires its end hook, so the
+    /// row survives as a live-looking ghost. `reapStaleSessions` demotes it to
+    /// `.stale` and `gc` only sweeps rows older than 30 days, which leaves the
+    /// user staring at a session they know is dead with no way to clear it —
+    /// killing the process can't help, the process is already gone.
+    ///
+    /// Returns true when a row was actually removed, false when the id had
+    /// already vanished (double press, or a concurrent gc).
+    @discardableResult
+    public func deleteSession(id: String) throws -> Bool {
+        try dbPool.write { db in
+            try Session.filter(Column("id") == id).deleteAll(db) > 0
+        }
+    }
+
     /// Write a session's frozen thread title. See `SessionTitler`.
     ///
     /// `title_updated_at` is stamped even when `title` is nil, which is how a

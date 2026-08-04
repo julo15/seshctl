@@ -15,6 +15,10 @@ public final class SessionListViewModel: ObservableObject {
     @Published public var searchQuery: String = ""
     @Published public var isNavigatingSearch: Bool = false
     @Published public var pendingKillSessionId: String?
+    /// Row awaiting delete confirmation. Separate from `pendingKillSessionId`
+    /// so the two prompts can't be mistaken for one another — one signals a
+    /// live process, the other erases a row whose process is already gone.
+    @Published public var pendingDeleteSessionId: String?
     @Published public var pendingForkSessionId: String?
     @Published public var pendingMarkAllRead: Bool = false
     @Published public var showingHelp: Bool = false
@@ -1180,6 +1184,44 @@ public final class SessionListViewModel: ObservableObject {
 
     public func cancelKill() {
         pendingKillSessionId = nil
+    }
+
+    // MARK: - Delete row
+
+    /// Ask to remove the selected row from the database entirely.
+    ///
+    /// Distinct from `requestKill`, which signals a live process. A terminal
+    /// closed hard never fires its end hook, so the row lingers looking alive
+    /// with nothing left to kill — `reapStaleSessions` only demotes it to
+    /// `.stale` and `gc` won't sweep it for 30 days. This is the escape hatch.
+    ///
+    /// Unlike kill there's no `isActive` or `pid` requirement: the whole point
+    /// is clearing rows whose process is already gone.
+    public func requestDelete() {
+        // Cloud rows are re-fetched from claude.ai on every poll, so deleting
+        // one locally would just resurrect it on the next refresh. Reuse the
+        // kill toast rather than pretending the action worked.
+        if case .remote = selectedRow {
+            showedCloudKillToast = true
+            return
+        }
+        guard let session = selectedSession else { return }
+        pendingDeleteSessionId = session.id
+    }
+
+    public func confirmDelete() {
+        guard let deleteId = pendingDeleteSessionId else { return }
+        pendingDeleteSessionId = nil
+        try? database.deleteSession(id: deleteId)
+        // Drop titling bookkeeping so a deleted id can't leak into either map
+        // and pin a slot in the single-in-flight budget forever.
+        titlingInFlight.remove(deleteId)
+        lastTitleAttemptAt.removeValue(forKey: deleteId)
+        refresh()
+    }
+
+    public func cancelDelete() {
+        pendingDeleteSessionId = nil
     }
 
     public func requestFork() {

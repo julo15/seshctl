@@ -337,13 +337,16 @@ public struct SessionListView: View {
                 } else if viewModel.pendingMarkAllRead {
                     Text("mark all as read? y/n")
                         .foregroundStyle(.orange)
+                } else if viewModel.pendingDeleteSessionId != nil {
+                    Text("delete row? y/n")
+                        .foregroundStyle(.red)
                 } else if !viewModel.titlingInFlight.isEmpty {
                     // Doubles as the confirmation that `t` did something — the
                     // model call runs for several seconds with no other signal.
                     Text("generating title\u{2026}")
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("enter focus · f fork · t retitle · / search · ? help · q close")
+                    Text("enter focus · f fork · t retitle · d delete · / search · ? help · q close")
                 }
             }
             .font(.system(.footnote, design: .monospaced))

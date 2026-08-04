@@ -29,6 +29,7 @@ public struct HelpPopover: View {
                 row("u  U", "mark read · mark all read")
                 row("t", "regenerate title from latest messages")
                 row("x", "kill process")
+                row("d", "delete row (then y to confirm)")
                 row("y  n", "confirm · cancel")
             }
 

@@ -221,6 +221,12 @@ Claude Code and Codex only — `SessionListViewModel.titleableTools`. Cursor and
 
 `ShellRunner.run` merges `extraEnvironment` onto the inherited environment. Assigning `process.environment` outright would strip `PATH` and `HOME` from the child, which breaks every CLI launched this way.
 
+**Deleting a row is not killing a process.** `requestDelete` / `confirmDelete` / `cancelDelete` mirror the kill trio but carry their own `pendingDeleteSessionId`, so the two confirmations can never be mistaken for one another. Unlike kill there is no `isActive` or `pid` requirement — the whole point is clearing rows whose process is already gone.
+
+`reapStaleSessions` handles most ghosts, but its guard is `if let pid = session.pid, !isProcessAlive(pid)`. A session with no pid fails the binding and is never reaped; a session whose pid was recycled keeps testing alive. Both stay active-looking indefinitely, which is what `d` exists for.
+
+`confirmDelete` also clears the deleted id from `titlingInFlight` and `lastTitleAttemptAt`; leaving it in the former would permanently consume the single-in-flight titling budget.
+
 ## Editor Integrations
 
 Seshctl ships a companion VS Code / Cursor extension pre-built inside the app bundle, so DMG users can install it from an in-app onboarding pane without a source checkout. Source-checkout devs can still use `make install-vscode` / `make install-cursor` for fast iteration on the extension itself.
