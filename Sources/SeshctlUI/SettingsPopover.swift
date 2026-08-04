@@ -15,6 +15,9 @@ public struct SettingsPopover: View {
     @AppStorage(AppearanceDefaults.showStatusBarIconKey) private var showStatusBarIcon: Bool = AppearanceDefaults.showStatusBarIconDefault
     @AppStorage(AppearanceDefaults.stackedRowLayoutKey) private var stackedRowLayoutEnabled: Bool = AppearanceDefaults.stackedRowLayoutDefault
 
+    @AppStorage(AppearanceDefaults.keepPanelOpenKey) private var keepPanelOpen: Bool = AppearanceDefaults.keepPanelOpenDefault
+    @AppStorage(AppearanceDefaults.panelAlwaysInFrontKey) private var panelAlwaysInFront: Bool = AppearanceDefaults.panelAlwaysInFrontDefault
+
     /// Optional callbacks for the bottom-of-popover Application section.
     /// Supplied by `AppDelegate` so the popover can offer the same uninstall
     /// flow as the menu bar item and a plain Quit action. When either is nil
@@ -94,6 +97,26 @@ public struct SettingsPopover: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                Toggle("Keep panel open", isOn: $keepPanelOpen)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .padding(.top, 4)
+                Text("Keeps the panel visible when you focus another window instead of dismissing it. Park it on a spare monitor as an always-on dashboard. The panel remembers its position and size either way, and can be resized by dragging its edges.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Toggle("Always in front", isOn: $panelAlwaysInFront)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .padding(.top, 4)
+                    .disabled(!keepPanelOpen)
+                Text("Keeps the open panel above every other window. Off lets other windows cover it, like an ordinary window. A panel that isn't kept open is always in front.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .opacity(keepPanelOpen ? 1 : 0.5)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)

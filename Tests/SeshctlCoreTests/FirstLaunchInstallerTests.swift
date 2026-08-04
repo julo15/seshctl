@@ -381,12 +381,16 @@ struct FirstLaunchInstallerTests {
             }
         }
 
-        // LSUIElement should be a Bool == true.
+        // LSUIElement should be a Bool == false: Seshctl runs under the regular
+        // activation policy so it has a Dock icon and a Cmd+Tab entry. It owns
+        // no ordinary window, so `AppDelegate.applicationDidBecomeActive` shows
+        // the floating panel on activation — flipping this key back to true
+        // without removing that hook leaves the app unreachable from Cmd+Tab.
         let uiElement = dict["LSUIElement"]
         if let b = uiElement as? Bool {
-            #expect(b == true, "LSUIElement should be true")
+            #expect(b == false, "LSUIElement should be false")
         } else if let n = uiElement as? NSNumber {
-            #expect(n.boolValue == true, "LSUIElement should be true")
+            #expect(n.boolValue == false, "LSUIElement should be false")
         } else {
             Issue.record("LSUIElement missing or not a Bool")
         }

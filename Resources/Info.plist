@@ -20,8 +20,14 @@
 	<string>6.0</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
+	<!-- Regular activation policy: Seshctl gets a Dock icon and a Cmd+Tab
+	     entry. It has no ordinary window — the session list lives in a
+	     non-activating floating panel — so AppDelegate treats app activation
+	     as the request to show that panel. Flipping this back to <true/>
+	     restores the pure menu-bar-agent behavior and makes the app
+	     unreachable from Cmd+Tab. -->
 	<key>LSUIElement</key>
-	<true/>
+	<false/>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 Julian Lo. All rights reserved.</string>
 	<key>NSAppleEventsUsageDescription</key>
