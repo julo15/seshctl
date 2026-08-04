@@ -15,6 +15,9 @@ public struct SettingsPopover: View {
     @AppStorage(AppearanceDefaults.showStatusBarIconKey) private var showStatusBarIcon: Bool = AppearanceDefaults.showStatusBarIconDefault
     @AppStorage(AppearanceDefaults.stackedRowLayoutKey) private var stackedRowLayoutEnabled: Bool = AppearanceDefaults.stackedRowLayoutDefault
 
+    @AppStorage(AppearanceDefaults.showAgentNameKey) private var showAgentName: Bool = AppearanceDefaults.showAgentNameDefault
+    @AppStorage(AppearanceDefaults.showModelKey) private var showModel: Bool = AppearanceDefaults.showModelDefault
+
     /// Optional callbacks for the bottom-of-popover Application section.
     /// Supplied by `AppDelegate` so the popover can offer the same uninstall
     /// flow as the menu bar item and a plain Quit action. When either is nil
@@ -94,6 +97,26 @@ public struct SettingsPopover: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                Toggle("Show agent name", isOn: $showAgentName)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .padding(.top, 4)
+                Text("Names the agent that owns each session — Claude Code, Codex, Cursor, Gemini — in the row subtitle. The corner badge encodes the same thing as a colored monogram, but it's hidden when every session shares one agent.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Toggle("Show model", isOn: $showModel)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .padding(.top, 4)
+                    .disabled(!showAgentName)
+                Text("Names the model next to the agent — Opus 5, GPT-5.5. Read from the transcript, so it only appears where one is recorded: always for Claude Code, and for Codex once the session records a turn context. Needs \u{201C}Show agent name\u{201D} on.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .opacity(showAgentName ? 1 : 0.5)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
