@@ -36,6 +36,16 @@ public enum AppearanceDefaults {
     /// lets the user flip back to the two-column legacy for comparison.
     public static let stackedRowLayoutDefault = true
 
+    /// Key for the "Session titles" toggle. When on, each session gets a
+    /// frozen chat-app-style title generated once from its opening exchange,
+    /// shown above the message preview. See `SessionTitler`.
+    public static let sessionTitlesKey = "seshctl.sessionTitles"
+
+    /// Default — off. Titling shells out to `claude -p` and spends the user's
+    /// Claude quota (one short Haiku call per session). Anything that quietly
+    /// costs money stays opt-in, unlike the purely local display toggles above.
+    public static let sessionTitlesDefault = false
+
     /// One-shot migration from the pre-release un-prefixed key
     /// (`"repoAccentBarEnabled"`) to `seshctl.repoAccentBarEnabled`.
     /// Run once at app launch so an author who toggled the setting during

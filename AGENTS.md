@@ -191,6 +191,42 @@ Three row signals are derived by scanning the live JSONL transcript on each ~2s 
 
 **To add a new transcript-derived signal:** add a sibling pure-Foundation scanner in `SeshctlCore`, mirror `transcriptAwaySummaryCache` / `cachedAwaySummary(for:)` / `pruneTranscriptAwaySummaryCache(keepingPaths:)` on `SessionListViewModel`, plumb a new `@Published` map keyed by `session.id`, and consume by lookup from the row view. Don't branch on `tool` outside the cached helper — the Claude-only guard sits inside `cachedAwaySummary(for:)` / `cachedLatestAssistant(for:)` so non-Claude tools never hit the filesystem.
 
+## Session Titles
+
+Each session gets a frozen, chat-app-style title generated once from its opening exchange — `"Diversify repo color palette"` rather than whatever was said last. `SessionTitler` (`Sources/SeshctlCore/SessionTitler.swift`) owns the whole pipeline; `SessionListViewModel` owns the scheduling.
+
+**Why frozen.** The row already shows the live latest-assistant text via `TranscriptLatestAssistantScanner`. That answers "what is happening now" and is useless as an identity — a session's most recent message is as likely to be `yes do that` as anything descriptive. The title answers the other question, "what is this session", and must not move under the user's eye while they scan the list. `title IS NOT NULL` is the freeze guard; automatic titling never overwrites.
+
+**Two materials, and they must stay different.** `SessionTitler.Material.opening` feeds the first user prompt plus the first substantive assistant reply — used for automatic titling. `.latest` feeds the last 6 turns — used only for the user-invoked retitle (`t`). This asymmetry is the whole point of the retrigger: the reason to ask for a new title is that the session drifted, so re-reading the opening exchange would regenerate the same words. Don't collapse them.
+
+**`title_updated_at` exists for backoff, not display.** A failed generation leaves `title` NULL, so NULL alone can't distinguish "never attempted" from "attempted and failed 2 seconds ago". Without the timestamp a broken CLI (offline, out of quota, binary moved) would respawn a subprocess on every 2s refresh forever. `Database.setSessionTitle` therefore stamps the column **even when `title` is nil**.
+
+**Scheduling invariants** (`SessionListViewModel`):
+- At most **one** titling job in flight process-wide. A burst of new sessions trickles rather than forking a subprocess per row.
+- Off the MainActor — `SessionTitler.generate` blocks on a subprocess for ~5-7s.
+- Silent on every failure path. No title is a normal state, never an error surfaced to the user.
+- `nextTitlingCandidate` is a pure static function so the selection rules test without a database, subprocess, or clock.
+
+**CLI resolution can't use `env`.** A GUI app inherits a minimal PATH that does not contain `claude`. `SessionTitler.resolveClaudeCLI` walks explicit candidates, `~/.local/bin/claude` first (Claude Code's native installer location), mirroring `ExtensionInstaller.resolveEditorCLI`.
+
+**Escape stripping is not optional.** `claude -p` writes an OSC terminal-title sequence to stdout alongside the answer. `--output-format text` suppresses it in practice, but `normalize` strips OSC/CSI sequences anyway, along with the quoting and trailing punctuation models add despite being told not to, and enforces the 8-word cap rather than trusting the prompt.
+
+**Opt-in by default** (`AppearanceDefaults.sessionTitlesDefault == false`) because it spends the user's Claude quota. Every other Appearance toggle is purely local and defaults on; anything that quietly costs money doesn't.
+
+Claude Code and Codex only — `SessionListViewModel.titleableTools`. Cursor and Gemini write no transcript, so they're permanently untitleable rather than pending.
+
+**The titler's own subprocess must not become a row.** `claude -p` is an ordinary Claude Code run, so its `SessionStart` / `UserPromptSubmit` / `Stop` / `SessionEnd` hooks all fire and `seshctl-cli` records it. Each titling run left about three rows, all in the app's working directory (`/`), whose preview text was the title being generated for some *other* session. One real database held 83 such rows out of 251. `InternalSession` (`Sources/SeshctlCore/InternalSession.swift`) holds the defence:
+
+- **Write-time.** `SessionTitler.generate` merges `InternalSession.environmentMarker` (`SESHCTL_INTERNAL_SESSION=1`) into the subprocess environment through `ShellRunner.run(extraEnvironment:)`. Claude Code runs hooks as children of the CLI process, so the marker reaches every hook event of that run, including subagents. `Start` / `Update` / `End` in `seshctl-cli` return before opening the database when they see it. The read-only subcommands are deliberately left working, so `list` and `show` stay usable while debugging inside a marked process.
+
+`ShellRunner.run` merges `extraEnvironment` onto the inherited environment. Assigning `process.environment` outright would strip `PATH` and `HOME` from the child, which breaks every CLI launched this way.
+
+**Deleting a row is not killing a process.** `requestDelete` / `confirmDelete` / `cancelDelete` mirror the kill trio but carry their own `pendingDeleteSessionId`, so the two confirmations can never be mistaken for one another. Unlike kill there is no `isActive` or `pid` requirement — the whole point is clearing rows whose process is already gone.
+
+`reapStaleSessions` handles most ghosts, but its guard is `if let pid = session.pid, !isProcessAlive(pid)`. A session with no pid fails the binding and is never reaped; a session whose pid was recycled keeps testing alive. Both stay active-looking indefinitely, which is what `d` exists for.
+
+`confirmDelete` also clears the deleted id from `titlingInFlight` and `lastTitleAttemptAt`; leaving it in the former would permanently consume the single-in-flight titling budget.
+
 ## Editor Integrations
 
 Seshctl ships a companion VS Code / Cursor extension pre-built inside the app bundle, so DMG users can install it from an in-app onboarding pane without a source checkout. Source-checkout devs can still use `make install-vscode` / `make install-cursor` for fast iteration on the extension itself.

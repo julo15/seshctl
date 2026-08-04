@@ -26,6 +26,17 @@ extension SessionStatus: ExpressibleByArgument {}
 
 // MARK: - Start
 
+/// True when this hook fired inside an LLM subprocess Seshctl started itself.
+///
+/// `SessionTitler` runs `claude -p` to name a session. That run has the same
+/// hooks as any other, so `start` / `update` / `end` all fire for it. Recording
+/// them filled the seshboard with rows whose preview text was the title being
+/// generated for some other session. The lifecycle commands return without
+/// touching the database; the read-only commands stay usable for debugging.
+func isInternalSession() -> Bool {
+    InternalSession.isMarked()
+}
+
 struct Start: ParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Start a new session."
@@ -59,6 +70,8 @@ struct Start: ParsableCommand {
     var windowId: String?
 
     func run() throws {
+        guard !isInternalSession() else { return }
+
         // Require exactly one matcher. Ambiguous when both are set (which is
         // the matcher? which is the value to write?). Mirrors the Update/End
         // validation pattern.
@@ -233,6 +246,8 @@ struct Update: ParsableCommand {
     var skipGit = false
 
     func run() throws {
+        guard !isInternalSession() else { return }
+
         // Require exactly one matcher. Ambiguous when both are set (which is
         // the matcher? which is the value to write?).
         switch (pid, conversationId) {
@@ -296,6 +311,8 @@ struct End: ParsableCommand {
     var hostAppName: String?
 
     func run() throws {
+        guard !isInternalSession() else { return }
+
         // Require exactly one matcher.
         switch (pid, conversationId) {
         case (nil, nil):

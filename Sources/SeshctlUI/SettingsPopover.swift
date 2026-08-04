@@ -15,6 +15,8 @@ public struct SettingsPopover: View {
     @AppStorage(AppearanceDefaults.showStatusBarIconKey) private var showStatusBarIcon: Bool = AppearanceDefaults.showStatusBarIconDefault
     @AppStorage(AppearanceDefaults.stackedRowLayoutKey) private var stackedRowLayoutEnabled: Bool = AppearanceDefaults.stackedRowLayoutDefault
 
+    @AppStorage(AppearanceDefaults.sessionTitlesKey) private var sessionTitles: Bool = AppearanceDefaults.sessionTitlesDefault
+
     /// Optional callbacks for the bottom-of-popover Application section.
     /// Supplied by `AppDelegate` so the popover can offer the same uninstall
     /// flow as the menu bar item and a plain Quit action. When either is nil
@@ -91,6 +93,15 @@ public struct SettingsPopover: View {
                     .controlSize(.small)
                     .padding(.top, 4)
                 Text("Stacks the repo name, branch, and chat preview vertically so the preview spans the full row width. Off uses the legacy two-column layout with the sender on the left and preview on the right.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Toggle("Session titles", isOn: $sessionTitles)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .padding(.top, 4)
+                Text("Names each session once from its opening exchange, the way a chat app titles a thread, and then leaves it alone. Press T on a row to retitle it from the latest messages. Runs `claude -p` with Haiku, so it uses your Claude quota — roughly one short call per session. Claude Code and Codex only; Cursor and Gemini write no transcript to read.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

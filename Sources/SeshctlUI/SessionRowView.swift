@@ -29,6 +29,10 @@ public struct SessionRowView: View {
     /// `Session.previewContent(awaySummary:)`. Sourced from
     /// `SessionListViewModel.awaySummariesById`.
     var awaySummary: String? = nil
+    /// True while a title is being generated for this session. Drives the
+    /// "Titling…" placeholder — the model call takes several seconds, and
+    /// without it pressing `t` looks like a no-op.
+    var isTitling: Bool = false
     /// How yesterday-bucket timestamps render in the row's age slot — see
     /// `SessionAgeDisplay.YesterdayStyle`. Driven by the parent view: the
     /// time-sorted inbox passes `.timeOfDay`, the repo-grouped tree view
@@ -39,8 +43,9 @@ public struct SessionRowView: View {
 
     @AppStorage(AppearanceDefaults.repoAccentBarKey) private var repoAccentBarEnabled: Bool = AppearanceDefaults.repoAccentBarDefault
     @AppStorage(AppearanceDefaults.stackedRowLayoutKey) private var stackedRowLayoutEnabled: Bool = AppearanceDefaults.stackedRowLayoutDefault
+    @AppStorage(AppearanceDefaults.sessionTitlesKey) private var sessionTitlesEnabled: Bool = AppearanceDefaults.sessionTitlesDefault
 
-    public init(session: Session, hostApp: HostAppInfo, isUnread: Bool = false, isBridged: Bool = false, showCloudAffordances: Bool = false, showAgentBadge: Bool = true, awaySummary: String? = nil, yesterdayStyle: SessionAgeDisplay.YesterdayStyle = .date, onDetail: (() -> Void)? = nil) {
+    public init(session: Session, hostApp: HostAppInfo, isUnread: Bool = false, isBridged: Bool = false, showCloudAffordances: Bool = false, showAgentBadge: Bool = true, awaySummary: String? = nil, isTitling: Bool = false, yesterdayStyle: SessionAgeDisplay.YesterdayStyle = .date, onDetail: (() -> Void)? = nil) {
         self.session = session
         self.hostApp = hostApp
         self.isUnread = isUnread
@@ -48,6 +53,7 @@ public struct SessionRowView: View {
         self.showCloudAffordances = showCloudAffordances
         self.showAgentBadge = showAgentBadge
         self.awaySummary = awaySummary
+        self.isTitling = isTitling
         self.yesterdayStyle = yesterdayStyle
         self.onDetail = onDetail
     }
@@ -122,6 +128,8 @@ public struct SessionRowView: View {
             subtitleRow(stacked: true)
                 .fontWeight(isUnread ? .bold : .regular)
 
+            titleView
+
             previewView
                 .padding(.top, 6)
                 .opacity(isUnread ? 1.0 : 0.85)
@@ -151,6 +159,7 @@ public struct SessionRowView: View {
                 }
 
                 subtitleRow(stacked: false)
+                titleView
             }
             .fontWeight(isUnread ? .bold : .regular)
             .frame(width: SenderColumnLayout.width, alignment: .leading)
@@ -196,6 +205,40 @@ public struct SessionRowView: View {
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+            }
+        }
+    }
+
+    /// Frozen thread title, rendered between the branch subtitle and the live
+    /// message preview.
+    ///
+    /// The two lines answer different questions and both earn their space: the
+    /// title says *what this session is* and never changes, the preview says
+    /// *what it just said*. Styled a step below the sender and a step above the
+    /// subtitle so the eye lands on repo → title → preview.
+    ///
+    /// Renders nothing when the feature is off or the session has no title yet
+    /// — a placeholder would make every untitled row look broken while the
+    /// background titler works through the list.
+    @ViewBuilder
+    private var titleView: some View {
+        if sessionTitlesEnabled {
+            if isTitling {
+                // Only shown while a generation is actually running, so it
+                // never becomes the resting state of an untitled row.
+                Text("Titling\u{2026}")
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(.tertiary)
+                    .italic()
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if let title = session.title, !title.isEmpty {
+                Text(title)
+                    .font(.system(size: 13, weight: isUnread ? .semibold : .regular))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }

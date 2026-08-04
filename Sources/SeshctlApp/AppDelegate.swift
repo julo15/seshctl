@@ -386,6 +386,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // u — mark as read (works for both local and remote rows)
         case (_, "u"):
             vm.markSelectedRowRead()
+        // t — regenerate the selected session's title from its latest turns.
+        // No confirm prompt: it overwrites a generated string, costs one short
+        // model call, and is itself the undo for a bad title.
+        case (_, "t"):
+            vm.retitleSelectedSession()
         // o — open detail view
         case (_, "o"):
             openDetailForSelected(vm: vm)
@@ -394,13 +399,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             executeSessionAction(vm: vm)
         // x — kill session process
         case (_, "x"):
-            if vm.pendingKillSessionId == nil && !vm.pendingMarkAllRead && vm.pendingForkSessionId == nil {
+            if vm.pendingKillSessionId == nil && !vm.pendingMarkAllRead && vm.pendingForkSessionId == nil && vm.pendingDeleteSessionId == nil {
                 vm.requestKill()
+            }
+        // d — delete the row outright. For sessions whose terminal was closed
+        // hard: the end hook never fired, so the row lingers with no process
+        // left for `x` to signal.
+        case (_, "d"):
+            if vm.pendingKillSessionId == nil && !vm.pendingMarkAllRead && vm.pendingForkSessionId == nil && vm.pendingDeleteSessionId == nil {
+                vm.requestDelete()
             }
         // y — confirm kill, mark all read, or fork
         case (_, "y"):
             if vm.pendingKillSessionId != nil {
                 vm.confirmKill()
+            } else if vm.pendingDeleteSessionId != nil {
+                vm.confirmDelete()
             } else if vm.pendingMarkAllRead {
                 vm.confirmMarkAllRead()
             } else if let forkId = vm.pendingForkSessionId,
@@ -418,6 +432,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case (_, "n"):
             if vm.pendingKillSessionId != nil {
                 vm.cancelKill()
+            } else if vm.pendingDeleteSessionId != nil {
+                vm.cancelDelete()
             } else if vm.pendingMarkAllRead {
                 vm.cancelMarkAllRead()
             } else if vm.pendingForkSessionId != nil {
@@ -427,6 +443,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case (_, "q"), (53, _):
             if vm.pendingKillSessionId != nil {
                 vm.cancelKill()
+            } else if vm.pendingDeleteSessionId != nil {
+                vm.cancelDelete()
             } else if vm.pendingMarkAllRead {
                 vm.cancelMarkAllRead()
             } else if vm.pendingForkSessionId != nil {

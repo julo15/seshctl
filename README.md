@@ -47,6 +47,8 @@ Press **Cmd+Shift+S** to toggle the session panel.
 - **f** — fork the selected Claude session into a new branched session in a new tab (then **y** to confirm, **n** to cancel)
 - **o** — open session detail view
 - **x** — kill session process (then **y** to confirm, **n** to cancel)
+- **d** — delete the row from seshctl (then **y** to confirm, **n** to cancel)
+- **t** — regenerate the selected session's title from its latest messages
 - **u** — mark the selected session as read
 - **U** — mark all sessions as read (then **y** to confirm, **n** to cancel)
 - **r** — cycle the source filter: all → local only → cloud only → all
@@ -55,6 +57,32 @@ Press **Cmd+Shift+S** to toggle the session panel.
 - **/** — search/filter sessions
 - **?** — open the keyboard help popover
 - **q** or **Esc** — dismiss the panel
+
+### Session titles
+
+Off by default. When enabled under **⋯ → Appearance**, each session gets a short title generated once from its opening exchange and then left alone — the way Claude.ai and ChatGPT name a thread:
+
+```
+seshctl
+Claude Code · main
+Diversify repo color palette
+968 tests pass. Both installed — no failures outside…
+```
+
+The title answers "what is this session"; the preview line below it still answers "what did it just say". The title is frozen on purpose — a live-updating label would read `yes do that` half the time. Press **t** on a row to regenerate it from the *latest* messages, which is what you want when a session has drifted from what it started as.
+
+Titling shells out to `claude -p` with Haiku, so it uses your Claude quota — roughly one short call per session, plus one per **t**. That's why it's opt-in rather than on by default. It works for Claude Code and Codex; Cursor and Gemini have no transcript to read.
+
+#### Clearing a ghost row
+
+Close a terminal hard and its agent never fires an end hook, so the row can outlive the process. **x** can't help — there's nothing left to signal. **d** deletes the row itself.
+
+Most ghosts are cleaned up automatically: each poll marks active sessions whose PID is dead as stale, and stale rows drop out of the list. Two cases slip through, and both leave a row still looking active:
+
+- The session has no PID recorded, so the liveness check never runs on it.
+- The PID was recycled by an unrelated process, so the dead session keeps testing alive.
+
+Already-ended rows aren't in the default list at all. Press **/** to search, then **d**.
 
 ### Session detail
 
