@@ -1013,4 +1013,39 @@ struct ShellRunnerTests {
         // for slow CI but still much less than the sleep duration.
         #expect(elapsed < 5.0)
     }
+
+    @Test("extra environment reaches the child process")
+    func extraEnvironmentIsSet() {
+        let result = ShellRunner.run(
+            path: "/bin/sh",
+            args: ["-c", "printf %s \"$SESHCTL_TEST_MARKER\""],
+            timeout: 5,
+            extraEnvironment: ["SESHCTL_TEST_MARKER": "on"]
+        )
+        #expect(result?.stdout == "on")
+        #expect(result?.status == 0)
+    }
+
+    @Test("extra environment is merged onto the inherited one")
+    func inheritedEnvironmentSurvives() {
+        // Assigning `process.environment` outright would strip PATH and HOME,
+        // which breaks every CLI we launch this way.
+        let result = ShellRunner.run(
+            path: "/bin/sh",
+            args: ["-c", "printf %s \"$HOME\""],
+            timeout: 5,
+            extraEnvironment: ["SESHCTL_TEST_MARKER": "on"]
+        )
+        #expect(result?.stdout == NSHomeDirectory())
+    }
+
+    @Test("child inherits our environment when nothing extra is passed")
+    func defaultEnvironmentUnchanged() {
+        let result = ShellRunner.run(
+            path: "/bin/sh",
+            args: ["-c", "printf %s \"$HOME\""],
+            timeout: 5
+        )
+        #expect(result?.stdout == NSHomeDirectory())
+    }
 }
