@@ -103,11 +103,11 @@ private func describe(_ action: FirstLaunchInstaller.Action) -> String {
     case .hookAlreadyRegistered(let llm, let event):
         return "\(llm): \(event) already registered"
     case .codexConfigUpdated:
-        return "set codex_hooks = true in ~/.agents/config.toml"
+        return "set [features].hooks = true in ~/.agents/config.toml"
     case .codexConfigAlreadySet:
-        return "codex_hooks = true already set"
+        return "[features].hooks = true already set"
     case .codexConfigCleared(let path):
-        return "cleared codex_hooks = true from \(path)"
+        return "cleared [features].hooks = true from \(path)"
     case .markerFileWritten(let path):
         return "wrote marker file: \(path)"
     case .removedHookEntry(let llm, let event):

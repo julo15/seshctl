@@ -5,7 +5,7 @@
 - **SwiftPM lock contention:** SwiftPM acquires a file lock on `.build/`. If a second `swift build` or `swift test` runs concurrently, it blocks indefinitely. Always use a **timeout of 120s** for builds and **30s** for test runs. If a build/test hangs or times out, immediately run `make kill-build` before retrying.
 - `make kill-build` — force-kills all stale SwiftPM processes
 - `make install` — canonical dev loop: build + sign + install `Seshctl.app` to `/Applications` and re-launch. AppDelegate's launch-time reconciler refreshes the CLI symlink, standalone uninstaller, and hook registrations automatically.
-- `make uninstall` — one-liner: runs `seshctl uninstall` against the installed CLI (CLI symlink + hook entries + standalone uninstaller + marker + `codex_hooks` flag). Drag `Seshctl.app` to Trash separately.
+- `make uninstall` — one-liner: runs `seshctl uninstall` against the installed CLI (CLI symlink + hook entries + standalone uninstaller + marker + Codex `[features].hooks` flag). Drag `Seshctl.app` to Trash separately.
 - `make cert-setup` — one-time: generate the self-signed code-signing identity in the login keychain.
 - `make test` — run all tests
 
@@ -37,7 +37,7 @@ Seshctl ships as a self-signed `.app` bundle in a DMG. There is exactly one inst
 | `make install-vscode` | Build + install VS Code extension |
 | `make install-cursor` | Build + install Cursor extension (chat-thread focus + terminal-tab focus) |
 | `make cert-setup` | One-time: generate the self-signed cert in login keychain |
-| `make uninstall` | One-liner: invokes `seshctl uninstall` (CLI symlink + hooks + standalone uninstaller + marker + `codex_hooks` flag) |
+| `make uninstall` | One-liner: invokes `seshctl uninstall` (CLI symlink + hooks + standalone uninstaller + marker + Codex `[features].hooks` flag) |
 
 **Phase 2 (Sparkle auto-updates) is implemented.** See `Sparkle Auto-Updates` section below for the runtime, key, and release-flow details. The plan is `.agents/plans/2026-05-20-2300-sparkle-auto-updates.md`.
 

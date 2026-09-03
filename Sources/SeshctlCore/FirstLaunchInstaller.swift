@@ -311,7 +311,7 @@ public enum FirstLaunchInstaller {
     ///   - CLI symlinks (when they're symlinks)
     ///   - Standalone uninstaller script
     ///   - Application Support directory (includes marker)
-    ///   - `codex_hooks = true` line in `~/.agents/config.toml` (and the
+    ///   - `hooks = true` line in `~/.agents/config.toml` (and the
     ///     `[features]` header if it ends up empty)
     ///
     /// Conditionally removes when `deleteSessionHistory` is `true`:
@@ -1023,13 +1023,27 @@ public enum FirstLaunchInstaller {
         try updatedData.write(to: URL(fileURLWithPath: settingsPath))
     }
 
+    /// The Codex feature flag that turns the hooks engine on. Codex 0.153
+    /// renamed `codex_hooks` to `hooks`; the old spelling still works but
+    /// prints a deprecation warning on every run, so install writes the new
+    /// name and migrates any legacy line it finds.
+    static let codexHooksFlagLine = "hooks = true"
+    static let legacyCodexHooksFlagLine = "codex_hooks = true"
+
+    /// True when `line` is exactly the flag (ignoring surrounding whitespace).
+    private static func isCodexFlagLine(_ line: String, legacyOnly: Bool = false) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed == legacyCodexHooksFlagLine { return true }
+        return !legacyOnly && trimmed == codexHooksFlagLine
+    }
+
     static func ensureCodexConfigFlag(paths: Paths, actions: inout [Action]) throws {
         let fm = FileManager.default
         let parent = (paths.codexConfigFile as NSString).deletingLastPathComponent
         try fm.createDirectory(atPath: parent, withIntermediateDirectories: true)
 
         if !fm.fileExists(atPath: paths.codexConfigFile) {
-            try "[features]\ncodex_hooks = true\n".write(
+            try "[features]\n\(codexHooksFlagLine)\n".write(
                 toFile: paths.codexConfigFile, atomically: true, encoding: .utf8
             )
             actions.append(.codexConfigUpdated)
@@ -1037,19 +1051,30 @@ public enum FirstLaunchInstaller {
         }
 
         let contents = try String(contentsOfFile: paths.codexConfigFile, encoding: .utf8)
-        if contents.contains("codex_hooks = true") {
+        var lines = contents.components(separatedBy: "\n")
+        let hasLegacy = lines.contains { isCodexFlagLine($0, legacyOnly: true) }
+        let hasCurrent = lines.contains { $0.trimmingCharacters(in: .whitespaces) == codexHooksFlagLine }
+
+        if hasCurrent && !hasLegacy {
             actions.append(.codexConfigAlreadySet)
             return
         }
 
-        let updated: String
-        if contents.contains("[features]") {
-            updated = contents.replacingOccurrences(
-                of: "[features]",
-                with: "[features]\ncodex_hooks = true"
-            )
-        } else {
-            updated = contents + "\n[features]\ncodex_hooks = true\n"
+        // Migration: drop any `codex_hooks = true` line before (re)writing the
+        // current flag, otherwise Codex keeps warning about the deprecated key.
+        lines.removeAll { isCodexFlagLine($0, legacyOnly: true) }
+        var updated = lines.joined(separator: "\n")
+
+        if !hasCurrent {
+            if let idx = lines.firstIndex(where: {
+                $0.trimmingCharacters(in: .whitespaces) == "[features]"
+            }) {
+                var withFlag = lines
+                withFlag.insert(codexHooksFlagLine, at: idx + 1)
+                updated = withFlag.joined(separator: "\n")
+            } else {
+                updated += "\n[features]\n\(codexHooksFlagLine)\n"
+            }
         }
 
         try updated.write(toFile: paths.codexConfigFile, atomically: true, encoding: .utf8)
@@ -1057,7 +1082,9 @@ public enum FirstLaunchInstaller {
     }
 
     /// Mirror of `ensureCodexConfigFlag`, but for uninstall. Drops the
-    /// `codex_hooks = true` line from `~/.agents/config.toml`. If the
+    /// `hooks = true` line (and the deprecated `codex_hooks = true` spelling
+    /// we may have written on an older install) from `~/.agents/config.toml`.
+    /// If the
     /// `[features]` section ends up with no keys, drops the header too.
     /// Other sections and keys are left untouched.
     ///
@@ -1067,10 +1094,11 @@ public enum FirstLaunchInstaller {
         guard fm.fileExists(atPath: paths.codexConfigFile) else { return }
 
         let original = try String(contentsOfFile: paths.codexConfigFile, encoding: .utf8)
-        guard original.contains("codex_hooks = true") else { return }
+        guard original.components(separatedBy: "\n").contains(where: { isCodexFlagLine($0) })
+        else { return }
 
         // Walk the file line-by-line, tracking which section we're in. Drop
-        // the `codex_hooks = true` line whenever we see it. After the pass,
+        // the flag line whenever we see it. After the pass,
         // also drop the `[features]` header if that section is empty.
         //
         // A "section" runs from a `[name]` header up to the next header (or
@@ -1093,12 +1121,10 @@ public enum FirstLaunchInstaller {
             }
         }
 
-        // Drop the codex_hooks line from any section that contains it
-        // (defensive — really should only ever be in [features]).
+        // Drop the flag line (both spellings) from any section that contains
+        // it (defensive — really should only ever be in [features]).
         for i in sections.indices {
-            sections[i].lines.removeAll { line in
-                line.trimmingCharacters(in: .whitespaces) == "codex_hooks = true"
-            }
+            sections[i].lines.removeAll { isCodexFlagLine($0) }
         }
 
         // If [features] is now empty, drop the whole section (header + body).
@@ -1302,7 +1328,7 @@ extension FirstLaunchInstaller {
         #   - ~/.local/bin/seshctl-uninstall (this file itself)
         #   - ~/.local/share/seshctl/hooks/  (NOT seshctl.db — that's user data)
         #   - ~/Library/Application Support/Seshctl/
-        #   - codex_hooks = true line in ~/.agents/config.toml (and [features] if empty)
+        #   - hooks = true line in ~/.agents/config.toml (and [features] if empty)
         #
         # What this does NOT touch:
         #   - ~/.local/share/seshctl/seshctl.db (user data, kept like `make uninstall`)
@@ -1460,14 +1486,15 @@ extension FirstLaunchInstaller {
             echo "  removed $HOOKS_DIR"
         fi
 
-        echo "==> Clearing codex_hooks flag from $CODEX_CONFIG"
+        echo "==> Clearing Codex hooks flag from $CODEX_CONFIG"
         if [ -f "$CODEX_CONFIG" ]; then
-            if grep -q '^codex_hooks = true$' "$CODEX_CONFIG"; then
-                # Drop the flag line.
-                sed -i '' '/^codex_hooks = true$/d' "$CODEX_CONFIG"
+            if grep -qE '^(codex_)?hooks = true$' "$CODEX_CONFIG"; then
+                # Drop the flag line — both the current `hooks` spelling and the
+                # deprecated `codex_hooks` one an older install may have written.
+                sed -i '' -E '/^(codex_)?hooks = true$/d' "$CODEX_CONFIG"
                 # If [features] is now empty (no key/value lines between it and the next
                 # header or EOF), drop the header line too. This mirrors the Swift
-                # clearCodexConfigFlag — install only writes [features] / codex_hooks
+                # clearCodexConfigFlag — install only writes [features] / hooks
                 # when we put it there, so cleaning it up is part of "leave no trace."
                 awk '
                     BEGIN { features=0; buf="" }
@@ -1502,7 +1529,7 @@ extension FirstLaunchInstaller {
                         # the buffered header. Otherwise we already flushed it.
                     }
                 ' "$CODEX_CONFIG" > "$CODEX_CONFIG.tmp" && mv "$CODEX_CONFIG.tmp" "$CODEX_CONFIG"
-                echo "  cleared codex_hooks = true from $CODEX_CONFIG"
+                echo "  cleared hooks = true from $CODEX_CONFIG"
             fi
         fi
 

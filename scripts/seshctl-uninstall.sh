@@ -15,7 +15,7 @@
 #   - ~/.local/bin/seshctl-uninstall (this file itself)
 #   - ~/.local/share/seshctl/hooks/  (NOT seshctl.db — that's user data)
 #   - ~/Library/Application Support/Seshctl/
-#   - codex_hooks = true line in ~/.agents/config.toml (and [features] if empty)
+#   - hooks = true line in ~/.agents/config.toml (and [features] if empty)
 #
 # What this does NOT touch:
 #   - ~/.local/share/seshctl/seshctl.db (user data, kept like `make uninstall`)
@@ -173,14 +173,15 @@ if [ -d "$HOOKS_DIR" ]; then
     echo "  removed $HOOKS_DIR"
 fi
 
-echo "==> Clearing codex_hooks flag from $CODEX_CONFIG"
+echo "==> Clearing Codex hooks flag from $CODEX_CONFIG"
 if [ -f "$CODEX_CONFIG" ]; then
-    if grep -q '^codex_hooks = true$' "$CODEX_CONFIG"; then
-        # Drop the flag line.
-        sed -i '' '/^codex_hooks = true$/d' "$CODEX_CONFIG"
+    if grep -qE '^(codex_)?hooks = true$' "$CODEX_CONFIG"; then
+        # Drop the flag line — both the current `hooks` spelling and the
+        # deprecated `codex_hooks` one an older install may have written.
+        sed -i '' -E '/^(codex_)?hooks = true$/d' "$CODEX_CONFIG"
         # If [features] is now empty (no key/value lines between it and the next
         # header or EOF), drop the header line too. This mirrors the Swift
-        # clearCodexConfigFlag — install only writes [features] / codex_hooks
+        # clearCodexConfigFlag — install only writes [features] / hooks
         # when we put it there, so cleaning it up is part of "leave no trace."
         awk '
             BEGIN { features=0; buf="" }
@@ -215,7 +216,7 @@ if [ -f "$CODEX_CONFIG" ]; then
                 # the buffered header. Otherwise we already flushed it.
             }
         ' "$CODEX_CONFIG" > "$CODEX_CONFIG.tmp" && mv "$CODEX_CONFIG.tmp" "$CODEX_CONFIG"
-        echo "  cleared codex_hooks = true from $CODEX_CONFIG"
+        echo "  cleared hooks = true from $CODEX_CONFIG"
     fi
 fi
 

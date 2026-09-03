@@ -157,7 +157,7 @@ Seshctl reuses a single tab when flipping between remote Claude sessions across 
 
 ## Uninstall
 
-From the menu-bar icon (or the **⋯** menu in the panel) → **Uninstall Seshctl…**. Tick **Also delete session history** if you want the DB removed. Then drag `Seshctl.app` to Trash. The CLI symlink, hook entries, standalone uninstaller, install marker, and `codex_hooks` flag all clean up automatically.
+From the menu-bar icon (or the **⋯** menu in the panel) → **Uninstall Seshctl…**. Tick **Also delete session history** if you want the DB removed. Then drag `Seshctl.app` to Trash. The CLI symlink, hook entries, standalone uninstaller, install marker, and Codex `[features].hooks` flag all clean up automatically.
 
 Terminal equivalents (same cleanup):
 - `seshctl uninstall` (add `--delete-history` for the DB)

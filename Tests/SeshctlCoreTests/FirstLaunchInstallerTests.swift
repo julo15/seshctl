@@ -180,9 +180,11 @@ struct FirstLaunchInstallerTests {
             #expect(codexHooks?[event] != nil, "missing codex hook event: \(event)")
         }
 
-        // 8. ~/.agents/config.toml contains codex_hooks = true
+        // 8. ~/.agents/config.toml contains the (non-deprecated) hooks flag
         let toml = try String(contentsOfFile: paths.codexConfigFile, encoding: .utf8)
-        #expect(toml.contains("codex_hooks = true"))
+        #expect(toml.contains("hooks = true"))
+        #expect(!toml.contains("codex_hooks = true"),
+                "install must write the current flag name, not the deprecated one")
 
         // 9. Marker file exists, parses, contains expected fields.
         // `installedAt` is written as a Double (seconds since 1970) so the
@@ -478,13 +480,13 @@ struct FirstLaunchInstallerTests {
 
     // MARK: 9. ensureCodexConfigFlag handles the existing-[features]-section case
 
-    @Test("ensureCodexConfigFlag adds codex_hooks under existing [features] block")
+    @Test("ensureCodexConfigFlag adds hooks flag under existing [features] block")
     func ensureCodexConfigFlag_existingFeaturesSection() throws {
         let temp = try makeTempHome()
         defer { cleanup(temp) }
         let paths = FirstLaunchInstaller.Paths(homeRoot: temp)
 
-        // Pre-create config.toml with a [features] section but no codex_hooks line.
+        // Pre-create config.toml with a [features] section but no hooks line.
         let agentsDir = temp.appendingPathComponent(".agents")
         try FileManager.default.createDirectory(at: agentsDir, withIntermediateDirectories: true)
         let preexisting = "[features]\nother_flag = false\n"
@@ -497,13 +499,47 @@ struct FirstLaunchInstallerTests {
 
         let after = try String(contentsOfFile: paths.codexConfigFile, encoding: .utf8)
         #expect(after.contains("[features]"))
-        #expect(after.contains("codex_hooks = true"))
+        #expect(after.contains("hooks = true"))
         #expect(after.contains("other_flag = false"))
 
         // Re-running should hit the "already set" branch.
         var actions2: [FirstLaunchInstaller.Action] = []
         try FirstLaunchInstaller.ensureCodexConfigFlag(paths: paths, actions: &actions2)
         #expect(actions2.contains(.codexConfigAlreadySet))
+    }
+
+    @Test("ensureCodexConfigFlag migrates the deprecated codex_hooks line")
+    func ensureCodexConfigFlag_migratesLegacyFlag() throws {
+        let temp = try makeTempHome()
+        defer { cleanup(temp) }
+        let paths = FirstLaunchInstaller.Paths(homeRoot: temp)
+
+        // A config written by an older Seshctl install: the deprecated flag
+        // name Codex 0.153+ warns about on every run.
+        let agentsDir = temp.appendingPathComponent(".agents")
+        try FileManager.default.createDirectory(at: agentsDir, withIntermediateDirectories: true)
+        try "[features]\ncodex_hooks = true\n\n[other]\nval = 1\n".write(
+            toFile: paths.codexConfigFile, atomically: true, encoding: .utf8
+        )
+
+        var actions: [FirstLaunchInstaller.Action] = []
+        try FirstLaunchInstaller.ensureCodexConfigFlag(paths: paths, actions: &actions)
+
+        let after = try String(contentsOfFile: paths.codexConfigFile, encoding: .utf8)
+        #expect(!after.contains("codex_hooks"),
+                "deprecated flag line should be removed")
+        #expect(after.contains("[features]"))
+        #expect(after.contains("hooks = true"))
+        #expect(after.contains("[other]"))
+        #expect(after.contains("val = 1"))
+        #expect(actions.contains(.codexConfigUpdated))
+
+        // Second pass is a no-op — nothing left to migrate.
+        var actions2: [FirstLaunchInstaller.Action] = []
+        try FirstLaunchInstaller.ensureCodexConfigFlag(paths: paths, actions: &actions2)
+        #expect(actions2.contains(.codexConfigAlreadySet))
+        let after2 = try String(contentsOfFile: paths.codexConfigFile, encoding: .utf8)
+        #expect(after2 == after)
     }
 
     @Test("ensureCodexConfigFlag appends [features] when none exists")
@@ -523,7 +559,7 @@ struct FirstLaunchInstallerTests {
 
         let after = try String(contentsOfFile: paths.codexConfigFile, encoding: .utf8)
         #expect(after.contains("[features]"))
-        #expect(after.contains("codex_hooks = true"))
+        #expect(after.contains("hooks = true"))
         #expect(after.contains("[other]"))
     }
 
@@ -830,26 +866,26 @@ struct FirstLaunchInstallerTests {
                 "bundleNewer should carry a mtime strictly after installedAt")
     }
 
-    // MARK: 15. Uninstall removes codex_hooks flag from config.toml
+    // MARK: 15. Uninstall removes the hooks flag from config.toml
 
-    @Test("Uninstall removes codex_hooks line and drops empty [features] header")
+    @Test("Uninstall removes hooks line and drops empty [features] header")
     func testUninstall_removesCodexConfigFlag() throws {
         let temp = try makeTempHome()
         defer { cleanup(temp) }
         let bundle = try makeFakeBundle(in: temp)
         let paths = FirstLaunchInstaller.Paths(homeRoot: temp)
 
-        // Install seeds [features] / codex_hooks = true.
+        // Install seeds [features] / hooks = true.
         try FirstLaunchInstaller.install(bundleURL: bundle, paths: paths)
         let installed = try String(contentsOfFile: paths.codexConfigFile, encoding: .utf8)
-        #expect(installed.contains("codex_hooks = true"))
+        #expect(installed.contains("hooks = true"))
         #expect(installed.contains("[features]"))
 
         // Uninstall without delete-history; just check the codex flag.
         try FirstLaunchInstaller.uninstall(paths: paths)
         let after = try String(contentsOfFile: paths.codexConfigFile, encoding: .utf8)
-        #expect(!after.contains("codex_hooks = true"),
-                "codex_hooks line should be gone after uninstall")
+        #expect(!after.contains("hooks = true"),
+                "hooks line should be gone after uninstall")
         #expect(!after.contains("[features]"),
                 "empty [features] header should also be gone")
     }
@@ -861,7 +897,8 @@ struct FirstLaunchInstallerTests {
         let bundle = try makeFakeBundle(in: temp)
         let paths = FirstLaunchInstaller.Paths(homeRoot: temp)
 
-        // Pre-write a config with codex_hooks AND an unrelated key, plus
+        // Pre-write a config with the deprecated codex_hooks flag AND an
+        // unrelated key, plus
         // a totally unrelated section.
         let agentsDir = temp.appendingPathComponent(".agents")
         try FileManager.default.createDirectory(at: agentsDir, withIntermediateDirectories: true)
@@ -881,8 +918,8 @@ struct FirstLaunchInstallerTests {
         try FirstLaunchInstaller.uninstall(paths: paths)
 
         let after = try String(contentsOfFile: paths.codexConfigFile, encoding: .utf8)
-        #expect(!after.contains("codex_hooks = true"),
-                "codex_hooks line should be gone")
+        #expect(!after.contains("hooks = true"),
+                "hooks line (either spelling) should be gone")
         #expect(after.contains("[features]"),
                 "[features] header should remain because other_flag is still under it")
         #expect(after.contains("other_flag = true"),
@@ -1184,22 +1221,22 @@ struct FirstLaunchInstallerTests {
     // MARK: 21. Bash uninstaller clears codex_hooks (Fix 4)
 
     /// The shell uninstaller must mirror the Swift one's behavior of
-    /// clearing `codex_hooks = true` from `~/.agents/config.toml`. The
+    /// clearing `hooks = true` from `~/.agents/config.toml`. The
     /// `[features]` header is dropped along with it when (and only when)
     /// the section becomes empty.
-    @Test("Standalone shell uninstaller clears codex_hooks and removes empty [features]")
+    @Test("Standalone shell uninstaller clears the hooks flag and removes empty [features]")
     func testStandaloneScript_clearsCodexFlag() throws {
         let temp = try makeTempHome()
         defer { cleanup(temp) }
 
-        // Seed a config.toml with [features]/codex_hooks plus an unrelated
+        // Seed a config.toml with [features]/hooks plus an unrelated
         // [other] section we must leave alone.
         let agentsDir = temp.appendingPathComponent(".agents")
         try FileManager.default.createDirectory(at: agentsDir, withIntermediateDirectories: true)
         let configPath = agentsDir.appendingPathComponent("config.toml").path
         let seed = """
             [features]
-            codex_hooks = true
+            hooks = true
 
             [other]
             foo = "bar"
@@ -1231,8 +1268,8 @@ struct FirstLaunchInstallerTests {
                 "shell uninstaller should exit 0; stderr: \(stderr)")
 
         let after = try String(contentsOfFile: configPath, encoding: .utf8)
-        #expect(!after.contains("codex_hooks = true"),
-                "codex_hooks line should be gone")
+        #expect(!after.contains("hooks = true"),
+                "hooks line should be gone")
         #expect(!after.contains("[features]"),
                 "[features] header should be gone because the section is empty")
         #expect(after.contains("[other]"),
@@ -1241,8 +1278,8 @@ struct FirstLaunchInstallerTests {
                 "[other] keys should be preserved")
     }
 
-    /// When `[features]` has unrelated keys besides `codex_hooks`, the
-    /// shell uninstaller drops the codex_hooks line but keeps the
+    /// When `[features]` has unrelated keys besides `hooks`, the
+    /// shell uninstaller drops the hooks line but keeps the
     /// header (and the unrelated keys).
     @Test("Standalone shell uninstaller preserves unrelated [features] entries")
     func testStandaloneScript_preservesUnrelatedFeaturesEntries() throws {
@@ -1283,8 +1320,8 @@ struct FirstLaunchInstallerTests {
                 "shell uninstaller should exit 0; stderr: \(stderr)")
 
         let after = try String(contentsOfFile: configPath, encoding: .utf8)
-        #expect(!after.contains("codex_hooks = true"),
-                "codex_hooks line should be gone")
+        #expect(!after.contains("hooks = true"),
+                "hooks line (either spelling) should be gone")
         #expect(after.contains("[features]"),
                 "[features] header should remain because another_feature is still under it")
         #expect(after.contains("another_feature = false"),
