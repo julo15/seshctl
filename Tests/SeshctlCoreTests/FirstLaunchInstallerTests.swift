@@ -38,6 +38,59 @@ private func cleanup(_ temp: URL) {
     try? FileManager.default.removeItem(at: temp)
 }
 
+/// Trimmed body lines of `section` in a TOML string — everything after the
+/// `[section]` header up to the next header or EOF, header excluded. Lets the
+/// Codex feature-flag tests assert *which section* a `hooks = true` line lives
+/// under; a bare `contents.contains("hooks = true")` can't tell that apart
+/// (and also matches the deprecated `codex_hooks = true` spelling).
+private func tomlSectionBody(_ contents: String, section: String) -> [String] {
+    var body: [String] = []
+    var inside = false
+    for line in contents.components(separatedBy: "\n") {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
+            inside = (trimmed == section)
+            continue
+        }
+        if inside { body.append(trimmed) }
+    }
+    return body
+}
+
+/// Number of lines equal to `flag` after trimming. Exact-match counting, so
+/// `codex_hooks = true` never counts as `hooks = true`.
+private func countLines(_ contents: String, equalTo flag: String) -> Int {
+    contents.components(separatedBy: "\n")
+        .filter { $0.trimmingCharacters(in: .whitespaces) == flag }
+        .count
+}
+
+/// Runs `scripts/seshctl-uninstall.sh` with `HOME` pointed at `home`, and
+/// returns its exit status + stderr. Mirrors the inline setup used by the
+/// older standalone-script tests.
+private func runStandaloneUninstaller(home: URL) throws -> (status: Int32, stderr: String) {
+    let script = repoRoot().appendingPathComponent("scripts/seshctl-uninstall.sh")
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: "/bin/bash")
+    proc.arguments = [script.path]
+    var env = ProcessInfo.processInfo.environment
+    env["HOME"] = home.path
+    if env["PATH"] == nil || env["PATH"]?.isEmpty == true {
+        env["PATH"] = "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin"
+    }
+    proc.environment = env
+    let outPipe = Pipe()
+    let errPipe = Pipe()
+    proc.standardOutput = outPipe
+    proc.standardError = errPipe
+    try proc.run()
+    proc.waitUntilExit()
+    _ = outPipe.fileHandleForReading.readDataToEndOfFile()
+    let stderr = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(),
+                        encoding: .utf8) ?? ""
+    return (proc.terminationStatus, stderr)
+}
+
 /// Creates a fake `.app`-like bundle layout in `parent` so
 /// `FirstLaunchInstaller.install(bundleURL:)` resolves the CLI binary and
 /// hook source dirs from it. Hook sources are copied from the repo `hooks/`
@@ -500,6 +553,8 @@ struct FirstLaunchInstallerTests {
         let after = try String(contentsOfFile: paths.codexConfigFile, encoding: .utf8)
         #expect(after.contains("[features]"))
         #expect(after.contains("hooks = true"))
+        #expect(!after.contains("codex_hooks"),
+                "install must write the current flag name, not the deprecated one")
         #expect(after.contains("other_flag = false"))
 
         // Re-running should hit the "already set" branch.
@@ -560,6 +615,8 @@ struct FirstLaunchInstallerTests {
         let after = try String(contentsOfFile: paths.codexConfigFile, encoding: .utf8)
         #expect(after.contains("[features]"))
         #expect(after.contains("hooks = true"))
+        #expect(!after.contains("codex_hooks"),
+                "appended flag must use the current name, not the deprecated one")
         #expect(after.contains("[other]"))
     }
 
@@ -879,6 +936,8 @@ struct FirstLaunchInstallerTests {
         try FirstLaunchInstaller.install(bundleURL: bundle, paths: paths)
         let installed = try String(contentsOfFile: paths.codexConfigFile, encoding: .utf8)
         #expect(installed.contains("hooks = true"))
+        #expect(!installed.contains("codex_hooks"),
+                "install must write the current flag name, not the deprecated one")
         #expect(installed.contains("[features]"))
 
         // Uninstall without delete-history; just check the codex flag.
@@ -1763,5 +1822,137 @@ struct FirstLaunchInstallerTests {
 
         let backupContents = try String(contentsOfFile: backupPath, encoding: .utf8)
         #expect(backupContents == garbage, "backup should preserve the original bytes")
+    }
+
+    // MARK: 25. Codex flag matching is scoped to [features]
+
+    /// `hooks` is a generic TOML key. Everything below pins that both the
+    /// install and uninstall sides only ever read/write it under
+    /// `[features]` — a same-named key under someone else's section must
+    /// neither satisfy our "already set" check nor be deleted.
+
+    @Test("ensureCodexConfigFlag collapses both spellings in [features] to one current line")
+    func ensureCodexConfigFlag_bothSpellingsInFeatures() throws {
+        let temp = try makeTempHome()
+        defer { cleanup(temp) }
+        let paths = FirstLaunchInstaller.Paths(homeRoot: temp)
+
+        // A half-migrated config: the deprecated line an older install wrote
+        // AND the current one. The legacy line must go without taking the
+        // working flag with it.
+        let agentsDir = temp.appendingPathComponent(".agents")
+        try FileManager.default.createDirectory(at: agentsDir, withIntermediateDirectories: true)
+        try "[features]\ncodex_hooks = true\nhooks = true\n".write(
+            toFile: paths.codexConfigFile, atomically: true, encoding: .utf8
+        )
+
+        var actions: [FirstLaunchInstaller.Action] = []
+        try FirstLaunchInstaller.ensureCodexConfigFlag(paths: paths, actions: &actions)
+
+        let after = try String(contentsOfFile: paths.codexConfigFile, encoding: .utf8)
+        #expect(countLines(after, equalTo: "hooks = true") == 1,
+                "exactly one current flag line should survive, got: \(after)")
+        #expect(countLines(after, equalTo: "codex_hooks = true") == 0,
+                "the deprecated spelling should be gone")
+        #expect(tomlSectionBody(after, section: "[features]").contains("hooks = true"),
+                "the surviving flag must be under [features]")
+        #expect(actions.contains(.codexConfigUpdated),
+                "the legacy line was rewritten, so this is an update, not a no-op")
+        #expect(!actions.contains(.codexConfigAlreadySet))
+
+        // Nothing left to migrate: second pass is a byte-identical no-op.
+        var actions2: [FirstLaunchInstaller.Action] = []
+        try FirstLaunchInstaller.ensureCodexConfigFlag(paths: paths, actions: &actions2)
+        #expect(actions2.contains(.codexConfigAlreadySet))
+        let after2 = try String(contentsOfFile: paths.codexConfigFile, encoding: .utf8)
+        #expect(after2 == after, "second pass must not rewrite the file")
+    }
+
+    @Test("ensureCodexConfigFlag ignores a hooks key under an unrelated section")
+    func ensureCodexConfigFlag_unrelatedSectionDoesNotSuppressWrite() throws {
+        let temp = try makeTempHome()
+        defer { cleanup(temp) }
+        let paths = FirstLaunchInstaller.Paths(homeRoot: temp)
+
+        // Some other tool already uses `hooks = true` under its own section.
+        // Ours is still missing, so [features] must be created regardless.
+        let agentsDir = temp.appendingPathComponent(".agents")
+        try FileManager.default.createDirectory(at: agentsDir, withIntermediateDirectories: true)
+        try "[other]\nhooks = true\n".write(
+            toFile: paths.codexConfigFile, atomically: true, encoding: .utf8
+        )
+
+        var actions: [FirstLaunchInstaller.Action] = []
+        try FirstLaunchInstaller.ensureCodexConfigFlag(paths: paths, actions: &actions)
+
+        let after = try String(contentsOfFile: paths.codexConfigFile, encoding: .utf8)
+        #expect(actions.contains(.codexConfigUpdated),
+                "an unrelated section's hooks key must not short-circuit the write")
+        #expect(!actions.contains(.codexConfigAlreadySet))
+        #expect(tomlSectionBody(after, section: "[features]").contains("hooks = true"),
+                "[features] should now carry our flag, got: \(after)")
+        #expect(tomlSectionBody(after, section: "[other]").contains("hooks = true"),
+                "the other section's key must be left untouched")
+        #expect(countLines(after, equalTo: "hooks = true") == 2,
+                "one line per section — ours plus theirs, got: \(after)")
+    }
+
+    @Test("Uninstall leaves a hooks key under an unrelated section alone")
+    func testUninstall_preservesUnrelatedSectionHooksKey() throws {
+        let temp = try makeTempHome()
+        defer { cleanup(temp) }
+        let bundle = try makeFakeBundle(in: temp)
+        let paths = FirstLaunchInstaller.Paths(homeRoot: temp)
+
+        let agentsDir = temp.appendingPathComponent(".agents")
+        try FileManager.default.createDirectory(at: agentsDir, withIntermediateDirectories: true)
+        try "[other]\nhooks = true\n".write(
+            toFile: paths.codexConfigFile, atomically: true, encoding: .utf8
+        )
+
+        try FirstLaunchInstaller.install(bundleURL: bundle, paths: paths)
+        let installed = try String(contentsOfFile: paths.codexConfigFile, encoding: .utf8)
+        #expect(tomlSectionBody(installed, section: "[features]").contains("hooks = true"))
+
+        try FirstLaunchInstaller.uninstall(paths: paths)
+
+        let after = try String(contentsOfFile: paths.codexConfigFile, encoding: .utf8)
+        #expect(!after.contains("[features]"),
+                "our now-empty [features] section should be gone")
+        #expect(tomlSectionBody(after, section: "[other]").contains("hooks = true"),
+                "the other section's key must survive uninstall, got: \(after)")
+        #expect(countLines(after, equalTo: "hooks = true") == 1,
+                "only theirs remains, got: \(after)")
+    }
+
+    @Test("Standalone shell uninstaller leaves a hooks key under an unrelated section alone")
+    func testStandaloneScript_preservesUnrelatedSectionHooksKey() throws {
+        let temp = try makeTempHome()
+        defer { cleanup(temp) }
+
+        let agentsDir = temp.appendingPathComponent(".agents")
+        try FileManager.default.createDirectory(at: agentsDir, withIntermediateDirectories: true)
+        let configPath = agentsDir.appendingPathComponent("config.toml").path
+        let seed = """
+            [other]
+            hooks = true
+
+            [features]
+            hooks = true
+
+            """
+        try seed.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+        let result = try runStandaloneUninstaller(home: temp)
+        #expect(result.status == 0,
+                "shell uninstaller should exit 0; stderr: \(result.stderr)")
+
+        let after = try String(contentsOfFile: configPath, encoding: .utf8)
+        #expect(!after.contains("[features]"),
+                "our now-empty [features] section should be gone, got: \(after)")
+        #expect(tomlSectionBody(after, section: "[other]").contains("hooks = true"),
+                "the other section's key must survive the shell uninstaller, got: \(after)")
+        #expect(countLines(after, equalTo: "hooks = true") == 1,
+                "only theirs remains, got: \(after)")
     }
 }

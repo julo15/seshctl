@@ -168,13 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     guard let self, let vm = self.viewModel else { return }
                     let target: SessionActionTarget = session.isActive
                         ? .activeSession(session) : .inactiveSession(session)
-                    SessionAction.execute(
-                        target: target,
-                        markRead: { vm.markSessionRead($0) },
-                        rememberFocused: { vm.rememberFocusedSession($0) },
-                        dismiss: { self.dismissPanel() },
-                        remoteBrowserCoordinator: self.remoteBrowserCoordinator
-                    )
+                    self.dispatch(target, vm: vm)
                 },
                 onOpenDetail: { [weak nav] session in
                     nav?.openDetail(for: session)
@@ -182,13 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 onOpenWeb: { [weak self] session in
                     guard let self, let remote = vm.bridgedRemote(for: session) else { return }
                     vm.markSessionRead(session)
-                    SessionAction.execute(
-                        target: .openRemote(remote.webUrl),
-                        markRead: { vm.markSessionRead($0) },
-                        rememberFocused: { vm.rememberFocusedSession($0) },
-                        dismiss: { self.dismissPanel() },
-                        remoteBrowserCoordinator: self.remoteBrowserCoordinator
-                    )
+                    self.dispatch(.openRemote(remote.webUrl), vm: vm)
                 },
                 onOpenRecallDetail: { [weak nav] result, session in
                     nav?.openDetail(for: result, session: session)
@@ -669,13 +657,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func openSelectedOnWeb(vm: SessionListViewModel) {
         guard let url = vm.selectedWebUrl else { return }
         vm.markSelectedRowRead()
-        SessionAction.execute(
-            target: .openRemote(url),
-            markRead: { vm.markSessionRead($0) },
-            rememberFocused: { vm.rememberFocusedSession($0) },
-            dismiss: { [weak self] in self?.dismissPanel() },
-            remoteBrowserCoordinator: remoteBrowserCoordinator
-        )
+        dispatch(.openRemote(url), vm: vm)
     }
 
     private func executeSessionAction(vm: SessionListViewModel) {
@@ -685,8 +667,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // read receipt. Mark-read goes through `markSelectedRowRead` (not
             // the `SessionAction.execute` `markRead` closure, which is
             // local-session-typed) so the unread pill clears immediately.
-            // FIXME: once `SessionAction.execute` grows a row-type-agnostic
-            // mark-read closure, unify the two paths.
+            // FIXME: `SessionAction.execute` still has no row-type-agnostic
+            // mark-read closure, so remote rows must be marked read here
+            // rather than by `dispatch`.
             vm.markSelectedRowRead()
             target = .openRemote(remote.webUrl)
         } else if let session = vm.selectedSession {
@@ -697,6 +680,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        dispatch(target, vm: vm)
+    }
+
+    /// Shared tail for every `SessionAction.execute` call site. Callers own any
+    /// site-specific work (e.g. row-type-agnostic mark-read) before dispatching.
+    private func dispatch(_ target: SessionActionTarget, vm: SessionListViewModel) {
         SessionAction.execute(
             target: target,
             markRead: { vm.markSessionRead($0) },

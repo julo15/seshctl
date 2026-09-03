@@ -188,13 +188,19 @@ A CLI session started with `/remote-control` exists on both sides. `BridgeMatche
 
 Last matching record in the file wins. When Claude Code stopped writing the legacy shape, the scanner silently returned `nil` for every transcript and every bridged pair split back into two unlinked rows — no error, no log, just a quiet regression. **If pairing ever "stops working" again, grep a live transcript for `bridge` first** (`grep -n 'bridge' ~/.claude/projects/<slug>/<convId>.jsonl`) before touching `BridgeMatcher`; the matcher is deterministic and rarely the culprit.
 
+**Both shapes are supported indefinitely, not transitionally.** Transcripts on disk are never rewritten, so a `.jsonl` written before the CLI changed keeps the legacy shape forever and stays resolvable as long as it's on disk. Don't plan on retiring the legacy branch or its fixtures — treat the `switch` in `TranscriptBridgeScanner` as append-only, one case per shape Claude Code has ever emitted.
+
 **Where the pairing surfaces.** `SessionListViewModel.refresh()` publishes three projections of the same `BridgeMatcher` output: `bridgedLocalIds` (row renders the cloud glyph), `bridgedRemoteIds` (twin filtered out of `activeRows`/`recentRows`), and `bridgedRemoteIdByLocalId` (the full map, used by `bridgedRemote(for:)` / `selectedWebUrl` to resolve the web URL for the `w` action). Keep the three in sync — the tests in `SessionListViewModelTests` assert the map's keys and values equal the two id sets.
 
 **Local vs. web routing.** `w` goes through `AppDelegate.openSelectedOnWeb` -> `vm.selectedWebUrl` -> `SessionAction.execute(target: .openRemote(...))` — the same action Enter uses on a pure-remote row, so browser tab reuse via `RemoteBrowserCoordinator` is shared. The mouse path (`SessionRowView.onOpenWeb`, plumbed `AppDelegate -> RootView -> SessionListView`/`SessionTreeView`) dispatches the same target. Never add a second browser-opening path.
 
+For how `bridgedLocalIds` fits alongside the other transcript-derived row signals (caching, pruning, the scanner pattern), see "Transcript-Derived Row Signals" below.
+
 ## Transcript-Derived Row Signals
 
 Three row signals are derived by scanning the live JSONL transcript on each ~2s refresh: `bridgedLocalIds` (via `TranscriptBridgeScanner` → `transcriptBridgeCache`), `awaySummariesById` (via `TranscriptAwaySummaryScanner` → `transcriptAwaySummaryCache`), and `latestAssistantById` (via `TranscriptLatestAssistantScanner` → `transcriptLatestAssistantCache`). All three live in `SessionListViewModel.refresh()`.
+
+For what `bridgedLocalIds` means and how `TranscriptBridgeScanner` derives it (join key shape, legacy fallback, the three published projections), see "Bridged Sessions" above.
 
 **Pattern.** A pure-Foundation scanner in `SeshctlCore` returns an optional value per transcript path. `SessionListViewModel` mtime-caches results in a `[String: (mtime: Date, value: X?)]` dict, populates a published `[session.id: X]` map, and prunes cache entries for transcripts whose owning session is no longer live on each refresh. The row view consumes the published map by `session.id` lookup.
 

@@ -28,11 +28,15 @@ public final class SessionListViewModel: ObservableObject {
     /// Filtered out of `activeRows` / `recentRows` to prevent the pair from
     /// showing twice. Computed in `refresh()` via `BridgeMatcher`.
     @Published public private(set) var bridgedRemoteIds: Set<String> = []
-    /// Full `localId -> remoteId` pairing, of which `bridgedLocalIds` and
-    /// `bridgedRemoteIds` are the two projections. Kept alongside them (not
-    /// derived on demand) so the "open the bridged twin on the web" action
-    /// can resolve a local row's remote URL without an O(n) scan per row
-    /// render. Computed in `refresh()` via `BridgeMatcher`.
+    /// Full `localId -> remoteId` pairing — the third projection of the same
+    /// single `BridgeMatcher` run that produces `bridgedLocalIds` and
+    /// `bridgedRemoteIds`. Published so the two user-action handlers in
+    /// `AppDelegate` (the cloud-glyph click closure and `openSelectedOnWeb`)
+    /// can do a direct `localId -> remoteId` lookup when resolving the
+    /// bridged twin's web URL. Not a render-path optimization: nothing reads
+    /// this during row rendering or on the refresh tick, and
+    /// `bridgedRemote(for:)` still scans `remoteSessions` to turn the id into
+    /// a session. Computed in `refresh()` via `BridgeMatcher`.
     @Published public private(set) var bridgedRemoteIdByLocalId: [String: String] = [:]
     /// Latest Claude Code `away_summary` ("recap") per local session, keyed by
     /// `session.id`. Sessions without a recap are absent (the row falls
@@ -292,8 +296,9 @@ public final class SessionListViewModel: ObservableObject {
 
             // Compute bridged pairs (local CLI session ↔ remote claude.ai
             // `environment_kind == "bridge"` session) by reading each live
-            // Claude local's transcript for a `bridge_status` event, which
-            // carries the claude.ai session URL deterministically. Hides
+            // Claude local's transcript for a bridge event, which identifies
+            // the claude.ai session deterministically (both recognized event
+            // shapes are documented on `TranscriptBridgeScanner`). Hides
             // the remote twin from the list and marks the local twin for
             // a cloud badge.
             let pairs = BridgeMatcher.match(
@@ -863,7 +868,8 @@ public final class SessionListViewModel: ObservableObject {
         lastFocusedAt = Date()
     }
 
-    /// Scan the session's transcript for a `bridge_status` cse_id, re-using a
+    /// Scan the session's transcript for a bridged cse_id (see
+    /// `TranscriptBridgeScanner` for the event shapes it recognizes), re-using a
     /// previous result when the transcript's mtime hasn't advanced. Non-Claude
     /// tools return nil without a filesystem hit — Codex/Gemini transcripts
     /// can't contain a Claude bridge event, and skipping them avoids multi-MB

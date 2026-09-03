@@ -37,12 +37,16 @@ import Foundation
 public enum TranscriptBridgeScanner {
 
     /// Scan a transcript file on disk for its most recent bridge event
-    /// (either shape). Returns `nil` when:
+    /// (either shape). The last *valid* bridge record wins: a malformed or
+    /// id-less record (e.g. a `bridge-session` line with `bridgeSessionId`
+    /// missing) is skipped rather than clearing an id found earlier in the
+    /// file. Staleness isn't this scanner's job — `BridgeMatcher` checks the
+    /// returned id against the live API-supplied remote ids, so an id that
+    /// outlived its bridge is inert.
+    ///
+    /// Returns `nil` when:
     /// - the file can't be read,
-    /// - the transcript never bridged,
-    /// - the most recent bridge event carries no usable id (e.g., a future
-    ///   "bridge ended" event with the id field dropped — let the caller's
-    ///   existence check in the API response confirm the pair is still live).
+    /// - the transcript never bridged.
     public static func extractBridgedRemoteId(transcriptPath: String) -> String? {
         guard let contents = try? String(contentsOfFile: transcriptPath, encoding: .utf8) else {
             return nil

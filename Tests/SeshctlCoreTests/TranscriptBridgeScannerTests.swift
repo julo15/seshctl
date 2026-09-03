@@ -140,6 +140,57 @@ struct TranscriptBridgeScannerTests {
         #expect(id == "cse_REAL")
     }
 
+    @Test("bridge-session id survives the ordinary chat that follows it")
+    func bridgeSessionFollowedByChat() {
+        // The realistic transcript shape: the bridge record fires once, early,
+        // and the whole conversation follows it. Ordinary events after the
+        // record must not clear the id.
+        let transcript = """
+        {"type":"permission-mode","permissionMode":"bypassPermissions","sessionId":"local-uuid"}
+        {"type":"bridge-session","sessionId":"local","bridgeSessionId":"cse_017aNW1FKSDu8VqUHKoyAKit","lastSequenceNum":0}
+        {"type":"user","message":{"role":"user","content":"add a test"}}
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"on it"}]}}
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Read","input":{}}]}}
+        {"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"ok"}]}}
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}
+        {"type":"summary","summary":"Added a test"}
+        """
+        let id = TranscriptBridgeScanner.extractBridgedRemoteId(transcript: transcript)
+        #expect(id == "cse_017aNW1FKSDu8VqUHKoyAKit")
+    }
+
+    @Test("bridge-session with a non-string bridgeSessionId is skipped")
+    func bridgeSessionNonStringId() {
+        #expect(TranscriptBridgeScanner.extractBridgedRemoteId(
+            transcript: #"{"type":"bridge-session","sessionId":"local","bridgeSessionId":12345}"#
+        ) == nil)
+        #expect(TranscriptBridgeScanner.extractBridgedRemoteId(
+            transcript: #"{"type":"bridge-session","sessionId":"local","bridgeSessionId":null}"#
+        ) == nil)
+        #expect(TranscriptBridgeScanner.extractBridgedRemoteId(
+            transcript: #"{"type":"bridge-session","sessionId":"local","bridgeSessionId":true}"#
+        ) == nil)
+
+        // Like a missing key, a non-string value is skipped rather than
+        // clearing an id found earlier in the file.
+        let afterValid = """
+        {"type":"bridge-session","sessionId":"local","bridgeSessionId":"cse_REAL"}
+        {"type":"bridge-session","sessionId":"local","bridgeSessionId":12345}
+        {"type":"bridge-session","sessionId":"local","bridgeSessionId":null}
+        """
+        #expect(TranscriptBridgeScanner.extractBridgedRemoteId(transcript: afterValid) == "cse_REAL")
+    }
+
+    @Test("bridge-session with a whitespace-only id is skipped")
+    func bridgeSessionWhitespaceOnlyId() {
+        #expect(TranscriptBridgeScanner.extractBridgedRemoteId(
+            transcript: #"{"type":"bridge-session","bridgeSessionId":"   "}"#
+        ) == nil)
+        #expect(TranscriptBridgeScanner.extractBridgedRemoteId(
+            transcript: #"{"type":"bridge-session","bridgeSessionId":"  cse_  "}"#
+        ) == nil)
+    }
+
     @Test("bridge-session with an empty or prefix-only id is skipped")
     func bridgeSessionEmptyId() {
         #expect(TranscriptBridgeScanner.extractBridgedRemoteId(

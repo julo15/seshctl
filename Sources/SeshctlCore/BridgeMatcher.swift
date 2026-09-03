@@ -3,10 +3,10 @@ import Foundation
 /// Identifies local Claude Code CLI sessions that are the same conversation
 /// as a remote claude.ai Code-tab session.
 ///
-/// The pairing is **deterministic**, not heuristic: Claude Code CLI writes
-/// a `bridge_status` system event into its transcript when bridged, carrying
-/// a `https://claude.ai/code/session_<SUFFIX>` URL whose suffix matches the
-/// claude.ai API's `cse_<SUFFIX>` identifier. `TranscriptBridgeScanner`
+/// The pairing is **deterministic**, not heuristic: Claude Code CLI writes an
+/// explicit bridge event into its transcript when bridged, naming the
+/// claude.ai `cse_<SUFFIX>` identifier the session belongs to (see
+/// `TranscriptBridgeScanner` for the event shapes). `TranscriptBridgeScanner`
 /// extracts that cse_id; this matcher pairs a local to the remote if
 /// - the local is live (`idle`/`working`/`waiting`),
 /// - the transcript declares a cse_id,
@@ -54,7 +54,7 @@ public enum BridgeMatcher {
     ///     `locals` sorted by `updated_at DESC`, so "most recently active"
     ///     wins — reasonable in practice.
     ///   - **Last scanner event wins**: the scanner returns only the most
-    ///     recent `bridge_status` event per transcript. If a session rebridged
+    ///     recent bridge event per transcript. If a session rebridged
     ///     mid-run, the newer cse_id is the one used; any earlier cse_ids the
     ///     transcript referenced are ignored.
     public static func match(

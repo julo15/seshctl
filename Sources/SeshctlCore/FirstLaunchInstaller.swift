@@ -1030,11 +1030,46 @@ public enum FirstLaunchInstaller {
     static let codexHooksFlagLine = "hooks = true"
     static let legacyCodexHooksFlagLine = "codex_hooks = true"
 
-    /// True when `line` is exactly the flag (ignoring surrounding whitespace).
-    private static func isCodexFlagLine(_ line: String, legacyOnly: Bool = false) -> Bool {
+    /// The TOML section our flag lives under. `hooks` is a generic key name,
+    /// so every match — read or write — must be scoped to this section:
+    /// a `hooks = true` under some other tool's section is not ours.
+    static let codexFeaturesHeader = "[features]"
+
+    /// True when `line` is exactly the current flag (ignoring surrounding
+    /// whitespace).
+    private static func isCurrentCodexFlagLine(_ line: String) -> Bool {
+        line.trimmingCharacters(in: .whitespaces) == codexHooksFlagLine
+    }
+
+    /// True when `line` is exactly the deprecated flag spelling.
+    private static func isLegacyCodexFlagLine(_ line: String) -> Bool {
+        line.trimmingCharacters(in: .whitespaces) == legacyCodexHooksFlagLine
+    }
+
+    /// True when `line` is either spelling of the flag.
+    private static func isAnyCodexFlagLine(_ line: String) -> Bool {
+        isCurrentCodexFlagLine(line) || isLegacyCodexFlagLine(line)
+    }
+
+    /// True when `line` is a TOML section header (`[name]`).
+    private static func isTOMLSectionHeader(_ line: String) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
-        if trimmed == legacyCodexHooksFlagLine { return true }
-        return !legacyOnly && trimmed == codexHooksFlagLine
+        return trimmed.hasPrefix("[") && trimmed.hasSuffix("]")
+    }
+
+    /// Locates the `[features]` section in `lines`: the index of its header
+    /// plus the range of body lines that follow it, up to the next section
+    /// header or EOF. The preamble before any header is NOT `[features]`.
+    /// Returns `nil` when the file has no `[features]` header.
+    private static func codexFeaturesSection(
+        in lines: [String]
+    ) -> (header: Int, body: Range<Int>)? {
+        guard let header = lines.firstIndex(where: {
+            $0.trimmingCharacters(in: .whitespaces) == codexFeaturesHeader
+        }) else { return nil }
+        var end = header + 1
+        while end < lines.count && !isTOMLSectionHeader(lines[end]) { end += 1 }
+        return (header, (header + 1)..<end)
     }
 
     static func ensureCodexConfigFlag(paths: Paths, actions: inout [Action]) throws {
@@ -1043,7 +1078,7 @@ public enum FirstLaunchInstaller {
         try fm.createDirectory(atPath: parent, withIntermediateDirectories: true)
 
         if !fm.fileExists(atPath: paths.codexConfigFile) {
-            try "[features]\n\(codexHooksFlagLine)\n".write(
+            try "\(codexFeaturesHeader)\n\(codexHooksFlagLine)\n".write(
                 toFile: paths.codexConfigFile, atomically: true, encoding: .utf8
             )
             actions.append(.codexConfigUpdated)
@@ -1052,29 +1087,40 @@ public enum FirstLaunchInstaller {
 
         let contents = try String(contentsOfFile: paths.codexConfigFile, encoding: .utf8)
         var lines = contents.components(separatedBy: "\n")
-        let hasLegacy = lines.contains { isCodexFlagLine($0, legacyOnly: true) }
-        let hasCurrent = lines.contains { $0.trimmingCharacters(in: .whitespaces) == codexHooksFlagLine }
+
+        // Every decision below is scoped to the `[features]` section. A
+        // `hooks = true` under any other section belongs to another tool: it
+        // must neither satisfy our "already set" check nor be removed.
+        let section = codexFeaturesSection(in: lines)
+        let body = section.map { Array(lines[$0.body]) } ?? []
+        let hasCurrent = body.contains(where: isCurrentCodexFlagLine)
+        let hasLegacy = body.contains(where: isLegacyCodexFlagLine)
 
         if hasCurrent && !hasLegacy {
             actions.append(.codexConfigAlreadySet)
             return
         }
 
-        // Migration: drop any `codex_hooks = true` line before (re)writing the
-        // current flag, otherwise Codex keeps warning about the deprecated key.
-        lines.removeAll { isCodexFlagLine($0, legacyOnly: true) }
-        var updated = lines.joined(separator: "\n")
+        // Migration: drop any `codex_hooks = true` line inside `[features]`
+        // before (re)writing the current flag, otherwise Codex keeps warning
+        // about the deprecated key.
+        if let section, hasLegacy {
+            let kept = lines[section.body].filter { !isLegacyCodexFlagLine($0) }
+            lines.replaceSubrange(section.body, with: kept)
+        }
 
-        if !hasCurrent {
-            if let idx = lines.firstIndex(where: {
-                $0.trimmingCharacters(in: .whitespaces) == "[features]"
-            }) {
-                var withFlag = lines
-                withFlag.insert(codexHooksFlagLine, at: idx + 1)
-                updated = withFlag.joined(separator: "\n")
-            } else {
-                updated += "\n[features]\n\(codexHooksFlagLine)\n"
-            }
+        // Removing legacy lines never shifts the header index (it precedes
+        // the body), so `section.header` is still valid here.
+        let updated: String
+        if hasCurrent {
+            updated = lines.joined(separator: "\n")
+        } else if let section {
+            var withFlag = lines
+            withFlag.insert(codexHooksFlagLine, at: section.header + 1)
+            updated = withFlag.joined(separator: "\n")
+        } else {
+            updated = lines.joined(separator: "\n")
+                + "\n\(codexFeaturesHeader)\n\(codexHooksFlagLine)\n"
         }
 
         try updated.write(toFile: paths.codexConfigFile, atomically: true, encoding: .utf8)
@@ -1084,21 +1130,21 @@ public enum FirstLaunchInstaller {
     /// Mirror of `ensureCodexConfigFlag`, but for uninstall. Drops the
     /// `hooks = true` line (and the deprecated `codex_hooks = true` spelling
     /// we may have written on an older install) from `~/.agents/config.toml`.
-    /// If the
+    /// Only the `[features]` section is considered — `hooks` is a generic key
+    /// name and a same-named key under another section belongs to another
+    /// tool. If the
     /// `[features]` section ends up with no keys, drops the header too.
     /// Other sections and keys are left untouched.
     ///
-    /// Idempotent: missing file or missing line → no-op.
+    /// Idempotent: missing file, or no flag line under `[features]` → no-op.
     static func clearCodexConfigFlag(paths: Paths, actions: inout [Action]) throws {
         let fm = FileManager.default
         guard fm.fileExists(atPath: paths.codexConfigFile) else { return }
 
         let original = try String(contentsOfFile: paths.codexConfigFile, encoding: .utf8)
-        guard original.components(separatedBy: "\n").contains(where: { isCodexFlagLine($0) })
-        else { return }
 
         // Walk the file line-by-line, tracking which section we're in. Drop
-        // the flag line whenever we see it. After the pass,
+        // the flag line only inside `[features]`. After the pass,
         // also drop the `[features]` header if that section is empty.
         //
         // A "section" runs from a `[name]` header up to the next header (or
@@ -1121,17 +1167,27 @@ public enum FirstLaunchInstaller {
             }
         }
 
-        // Drop the flag line (both spellings) from any section that contains
-        // it (defensive — really should only ever be in [features]).
-        for i in sections.indices {
-            sections[i].lines.removeAll { isCodexFlagLine($0) }
+        // `hooks` is a generic key name, so only the `[features]` section is
+        // ours to edit. A line with the same text under any other section
+        // belongs to a different tool — leave it alone. Bail out entirely
+        // (no rewrite, no action logged) when [features] has no flag line.
+        func isFeaturesSection(_ section: Section) -> Bool {
+            section.header?.trimmingCharacters(in: .whitespaces) == codexFeaturesHeader
+        }
+
+        guard sections.contains(where: {
+            isFeaturesSection($0) && $0.lines.contains(where: isAnyCodexFlagLine)
+        }) else { return }
+
+        // Drop the flag line (both spellings) from [features] only.
+        for i in sections.indices where isFeaturesSection(sections[i]) {
+            sections[i].lines.removeAll(where: isAnyCodexFlagLine)
         }
 
         // If [features] is now empty, drop the whole section (header + body).
         // "Empty" means: no non-blank, non-comment lines remain.
         sections.removeAll { section in
-            guard let header = section.header else { return false }
-            guard header.trimmingCharacters(in: .whitespaces) == "[features]" else { return false }
+            guard isFeaturesSection(section) else { return false }
             let hasRealContent = section.lines.contains { line in
                 let t = line.trimmingCharacters(in: .whitespaces)
                 return !t.isEmpty && !t.hasPrefix("#")
@@ -1488,48 +1544,62 @@ extension FirstLaunchInstaller {
 
         echo "==> Clearing Codex hooks flag from $CODEX_CONFIG"
         if [ -f "$CODEX_CONFIG" ]; then
-            if grep -qE '^(codex_)?hooks = true$' "$CODEX_CONFIG"; then
-                # Drop the flag line — both the current `hooks` spelling and the
-                # deprecated `codex_hooks` one an older install may have written.
-                sed -i '' -E '/^(codex_)?hooks = true$/d' "$CODEX_CONFIG"
-                # If [features] is now empty (no key/value lines between it and the next
-                # header or EOF), drop the header line too. This mirrors the Swift
-                # clearCodexConfigFlag — install only writes [features] / hooks
-                # when we put it there, so cleaning it up is part of "leave no trace."
-                awk '
-                    BEGIN { features=0; buf="" }
-                    /^\[features\][[:space:]]*$/ {
-                        features=1; buf=$0; next
+            # One section-aware pass mirroring the Swift clearCodexConfigFlag:
+            #   - drop the flag line (current `hooks` and deprecated `codex_hooks`
+            #     spellings) ONLY while inside [features]. `hooks` is a generic key
+            #     name; a same-named key under another section belongs to some other
+            #     tool and must survive untouched.
+            #   - drop the [features] header too when the section ends up with no
+            #     real (non-blank, non-comment) keys — install only writes
+            #     [features] / hooks when we put it there, so cleaning it up is part
+            #     of "leave no trace."
+            # awk exits 0 only if it actually removed a flag line, so an untouched
+            # config is never rewritten.
+            if awk '
+                BEGIN { in_features=0; kept=0; buf=""; cleared=0 }
+                /^[[:space:]]*\[/ {
+                    # Section header. Anything buffered belongs to a [features]
+                    # section that never showed a real key — drop it.
+                    buf=""
+                    kept=0
+                    if ($0 ~ /^[[:space:]]*\[features\][[:space:]]*$/) {
+                        in_features=1
+                        buf=$0
+                    } else {
+                        in_features=0
+                        print
                     }
-                    features==1 {
-                        if ($0 ~ /^\[/) {
-                            # Hit the next section header. [features] is empty —
-                            # drop the saved header line and continue.
-                            features=0
-                            print
-                            next
-                        }
-                        if ($0 ~ /^[[:space:]]*$/) {
-                            # Blank line inside [features] — buffer it; we still
-                            # might find a non-blank key below.
-                            buf = buf "\n" $0
-                            next
-                        }
-                        # Any non-blank, non-header line = [features] is non-empty.
-                        # Flush the buffered header (and any blanks) and print this
-                        # line as well.
-                        print buf
-                        print $0
-                        features=0
-                        next
-                    }
-                    features==0 { print }
-                    END {
-                        # If we hit EOF while still inside an empty [features], drop
-                        # the buffered header. Otherwise we already flushed it.
-                    }
-                ' "$CODEX_CONFIG" > "$CODEX_CONFIG.tmp" && mv "$CODEX_CONFIG.tmp" "$CODEX_CONFIG"
+                    next
+                }
+                in_features==1 && /^[[:space:]]*(codex_)?hooks = true[[:space:]]*$/ {
+                    cleared=1
+                    next
+                }
+                in_features==1 && kept==0 && ($0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*#/) {
+                    # Blank or comment before any real key — buffer it; the whole
+                    # section may still turn out to be ours to delete.
+                    buf = buf "\n" $0
+                    next
+                }
+                in_features==1 && kept==0 {
+                    # First real key: [features] survives. Flush the buffered header
+                    # (plus any blanks/comments) and print this line too.
+                    print buf
+                    buf=""
+                    kept=1
+                    print
+                    next
+                }
+                { print }
+                END {
+                    if (cleared == 1) { exit 0 }
+                    exit 1
+                }
+            ' "$CODEX_CONFIG" > "$CODEX_CONFIG.tmp"; then
+                mv "$CODEX_CONFIG.tmp" "$CODEX_CONFIG"
                 echo "  cleared hooks = true from $CODEX_CONFIG"
+            else
+                rm -f "$CODEX_CONFIG.tmp"
             fi
         fi
 

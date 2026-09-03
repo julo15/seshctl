@@ -116,8 +116,15 @@ The map backs two accessors:
 - `selectedWebUrl: URL?` — remote row → its own `webUrl`; bridged local row → the twin's
   `webUrl`; anything else → `nil`
 
-Keeping the map alongside the sets (rather than deriving one from the others) avoids an
-O(n) scan per row render on the 2s refresh tick.
+All three are projections of one `BridgeMatcher` run, published together rather than
+derived from each other. The map isn't a render-path optimization — it's read only from
+the two user-action handlers in `AppDelegate` (the cloud-glyph click closure and
+`openSelectedOnWeb`), never during row rendering or on the 2s refresh tick, and
+`bridgedRemote(for:)` still scans `remoteSessions` to turn the id into a session. It
+earns its place by giving those handlers a direct `localId -> remoteId` lookup and by
+mirroring the two id sets clearly. The per-render cost that *is* real is
+`bridgedLocalIds.contains(session.id)` — an O(1) `Set` lookup, which is why those two
+stay `Set`s.
 
 Both the keyboard and mouse paths converge on the **existing** action:
 
@@ -163,9 +170,14 @@ practice since the glyph isn't rendered for unbridged rows at all. Belt and brac
   both. Cost is one extra `switch` case.
 - **Last record wins, across both shapes.** Preserves the pre-existing rebridge semantics
   without special-casing which shape is "newer". Pinned by `mixedShapesLastWins`.
-- **Publish the map, don't derive it.** `bridgedLocalIds`/`bridgedRemoteIds` could be
-  computed from the map, but they're read per-row-render on a 2s tick; three cheap
-  projections beat one O(n) recomputation per row. Consistency is asserted by
+- **Publish the map, don't derive it.** All three come out of one `BridgeMatcher` run, so
+  publishing the map costs nothing extra and gives the two `AppDelegate` user-action
+  handlers a direct `localId -> remoteId` lookup. It is *not* a render-path win: nothing
+  reads the map per row or on the refresh tick, and `bridgedRemote(for:)` scans
+  `remoteSessions` anyway. The per-render cost that is real is
+  `bridgedLocalIds.contains(session.id)` — an O(1) `Set` lookup on every row on the 2s
+  tick — which is why `bridgedLocalIds`/`bridgedRemoteIds` stay `Set`s instead of being
+  derived from the map. Consistency across the three is asserted by
   `bridgedPairMapMirrorsIdSets`.
 - **`Dictionary(_:uniquingKeysWith:)`, not `uniqueKeysWithValues:`.** `BridgeMatcher`
   guarantees one pair per local today, but the trapping initializer would turn any future
@@ -267,6 +279,8 @@ practice since the glyph isn't rendered for unbridged rows at all. Belt and brac
    pre-existing Enter-on-bridged-local behavior, but confirm that's desired.
 5. **Untouched neighbors:** `Sources/SeshctlCore/FirstLaunchInstaller.swift`,
    `Sources/seshctl-cli/Install.swift`, `scripts/seshctl-uninstall.sh`, and
-   `Tests/SeshctlCoreTests/FirstLaunchInstallerTests.swift` were already modified in the
-   working tree before this work (in-flight Codex hooks deprecation) and are **not part of
-   this change**. Nothing here was committed.
+   `Tests/SeshctlCoreTests/FirstLaunchInstallerTests.swift` are a separate commit
+   (`b83ce0d`, "Write the non-deprecated Codex hooks feature flag") on the same branch
+   (`julo/bridge-pairing-fix`), unrelated to the bridge work described by this plan and
+   reviewable independently — **not part of this change**. This plan's own work landed as
+   `a85fe39`.

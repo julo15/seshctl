@@ -89,19 +89,23 @@ public struct SessionRowView: View {
     private var cloudMarker: some View {
         if let onOpenWeb {
             Button(action: onOpenWeb) {
-                Image(systemName: "cloud.fill")
-                    .font(.footnote)
-                    .foregroundStyle(.tertiary)
+                cloudGlyph
             }
             .buttonStyle(.plain)
             .help("Open on claude.ai (w)")
             .accessibilityLabel("Open on claude.ai")
         } else {
-            Image(systemName: "cloud.fill")
-                .font(.footnote)
-                .foregroundStyle(.tertiary)
+            cloudGlyph
                 .help("Also running on claude.ai")
         }
+    }
+
+    /// The bare `cloud.fill` image shared by both `cloudMarker` branches. The
+    /// branch-specific `.help(...)` is applied at each use site.
+    private var cloudGlyph: some View {
+        Image(systemName: "cloud.fill")
+            .font(.footnote)
+            .foregroundStyle(.tertiary)
     }
 
     /// Accent-bar color for the unread marker. `nil` means render the slot
