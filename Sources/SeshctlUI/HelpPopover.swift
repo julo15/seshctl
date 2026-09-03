@@ -24,6 +24,7 @@ public struct HelpPopover: View {
 
             section("Act") {
                 row("enter  e", "focus or resume")
+                row("w", "open on claude.ai (bridged / remote rows)")
                 row("f", "fork Claude session (then y to confirm)")
                 row("o", "open detail")
                 row("u  U", "mark read · mark all read")

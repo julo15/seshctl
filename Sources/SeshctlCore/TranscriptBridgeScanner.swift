@@ -4,7 +4,17 @@ import Foundation
 /// is bridged to.
 ///
 /// Claude Code CLI writes an explicit event to its JSONL transcript when
-/// bridging is enabled:
+/// bridging is enabled. Two shapes have shipped over time and both are
+/// recognized here:
+///
+/// **Current shape** — a dedicated record carrying the API id directly:
+///
+/// ```json
+/// {"type":"bridge-session","sessionId":"<local uuid>",
+///  "bridgeSessionId":"cse_<SUFFIX>","lastSequenceNum":0, ...}
+/// ```
+///
+/// **Legacy shape** — a system event carrying the web URL:
 ///
 /// ```json
 /// {"type":"system","subtype":"bridge_status",
@@ -15,19 +25,24 @@ import Foundation
 ///
 /// The web URL's `session_<SUFFIX>` form is the same suffix the claude.ai
 /// API returns as `cse_<SUFFIX>`. Converting between the two gives a
-/// deterministic local ↔ remote join — no heuristics needed.
+/// deterministic local <-> remote join — no heuristics needed. The current
+/// shape skips the conversion by emitting the `cse_`-prefixed id verbatim.
 ///
-/// This scanner is the source of truth for the `local.id → cse_id` mapping
+/// Both shapes are still scanned because a transcript written by an older
+/// CLI (or resumed across a CLI upgrade) can contain either. Whichever
+/// event appears last in the file wins.
+///
+/// This scanner is the source of truth for the `local.id -> cse_id` mapping
 /// used by `BridgeMatcher`.
 public enum TranscriptBridgeScanner {
 
-    /// Scan a transcript file on disk for its most recent `bridge_status`
-    /// event. Returns `nil` when:
+    /// Scan a transcript file on disk for its most recent bridge event
+    /// (either shape). Returns `nil` when:
     /// - the file can't be read,
     /// - the transcript never bridged,
-    /// - the most recent bridge event has no `url` field (e.g., a future
-    ///   "bridge ended" event — let the caller's existence check in the
-    ///   API response confirm the pair is still live).
+    /// - the most recent bridge event carries no usable id (e.g., a future
+    ///   "bridge ended" event with the id field dropped — let the caller's
+    ///   existence check in the API response confirm the pair is still live).
     public static func extractBridgedRemoteId(transcriptPath: String) -> String? {
         guard let contents = try? String(contentsOfFile: transcriptPath, encoding: .utf8) else {
             return nil
@@ -42,14 +57,38 @@ public enum TranscriptBridgeScanner {
         transcript.enumerateLines { line, _ in
             guard let data = line.data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  obj["type"] as? String == "system",
-                  obj["subtype"] as? String == "bridge_status",
-                  let url = obj["url"] as? String
+                  let type = obj["type"] as? String
             else { return }
-            guard let cseId = cseId(fromWebUrl: url) else { return }
-            latestCseId = cseId
+            switch type {
+            case "bridge-session":
+                // Current shape: the API id is already `cse_`-prefixed.
+                guard let raw = obj["bridgeSessionId"] as? String,
+                      let cseId = normalizedCseId(raw)
+                else { return }
+                latestCseId = cseId
+            case "system":
+                // Legacy shape: derive the id from the claude.ai web URL.
+                guard obj["subtype"] as? String == "bridge_status",
+                      let url = obj["url"] as? String,
+                      let cseId = cseId(fromWebUrl: url)
+                else { return }
+                latestCseId = cseId
+            default:
+                return
+            }
         }
         return latestCseId
+    }
+
+    /// Normalize a `bridgeSessionId` into the API-native `cse_<SUFFIX>` form.
+    /// The field ships already prefixed, but tolerating a bare suffix keeps
+    /// the join working if the CLI ever drops the prefix. Empty (or
+    /// prefix-only) values return `nil` so they can't pair with a remote.
+    static func normalizedCseId(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return nil }
+        guard trimmed.hasPrefix("cse_") else { return "cse_\(trimmed)" }
+        return trimmed.count > "cse_".count ? trimmed : nil
     }
 
     /// Convert `https://claude.ai/code/session_<SUFFIX>` (or a relative

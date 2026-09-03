@@ -43,7 +43,8 @@ Press **Cmd+Shift+S** to toggle the session panel.
 - **j / k** or **Arrow keys** — navigate sessions
 - **gg** — jump to top
 - **G** — jump to bottom
-- **Enter** — focus the selected session's terminal
+- **Enter** — focus the selected session's terminal (or open a cloud-only session on claude.ai)
+- **w** — open the selected session on claude.ai. On a bridged row this picks the web half of the pair instead of the terminal
 - **f** — fork the selected Claude session into a new branched session in a new tab (then **y** to confirm, **n** to cancel)
 - **o** — open session detail view
 - **x** — kill session process (then **y** to confirm, **n** to cancel)
@@ -77,6 +78,17 @@ Seshctl can list Claude Code sessions hosted on claude.ai (Cowork) alongside loc
 
 Once connected, remote sessions appear with a cloud glyph. Each remote row previews the latest assistant message, refreshed every 30 seconds. The connection lasts until the cookie expires (~28 days) or you click **Disconnect**.
 
+### Bridged sessions: local or web
+
+A CLI session started with `/remote-control` is *bridged* — it exists both in your terminal and on claude.ai. Seshctl pairs the two and shows them as one row marked with a laptop **and** a cloud glyph, so the pair never appears twice.
+
+Either half is one keystroke away:
+
+- **Enter** focuses the local terminal.
+- **w** opens the session on claude.ai. Clicking the row's cloud glyph does the same thing.
+
+Unbridged rows ignore **w** — a local-only session has nothing to open on the web, and a cloud-only row already opens on claude.ai with Enter.
+
 Accounts with Google-only sign-in: add an email/password or passkey on claude.ai first, then use that here.
 
 ## Compatibility
@@ -85,7 +97,7 @@ Accounts with Google-only sign-in: add an email/password or passkey on claude.ai
 
 | Tool | Hooks | Transcript | Notes |
 |---|---|---|---|
-| Claude Code | Full | Full | Bridged claude.ai sessions show as a single row with a cloud glyph |
+| Claude Code | Full | Full | Bridged claude.ai sessions show as a single row with a cloud glyph; **Enter** opens the terminal, **w** opens claude.ai |
 | Codex | Partial | Full | No `UserPromptSubmit` (no "In Progress" state); no `SessionEnd` (closes on `Stop` only) |
 | Cursor (1.7+) | Full | None | Workspace focus works out of the box; chat-thread focus needs the bundled companion extension (auto-installed from the in-app **Editor Integrations** window) |
 | Gemini | None | None | CLI-only tracking via `seshctl-cli start --tool gemini` |

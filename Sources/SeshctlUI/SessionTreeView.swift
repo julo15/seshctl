@@ -7,17 +7,22 @@ struct SessionTreeView: View {
     @StateObject private var hostAppResolver = HostAppResolver()
     var onSessionTap: ((Session) -> Void)?
     var onOpenDetail: ((Session) -> Void)?
+    /// Handler for opening a bridged local row's claude.ai twin. See the
+    /// matching property on `SessionListView`.
+    var onOpenWeb: ((Session) -> Void)?
 
     init(
         viewModel: SessionListViewModel,
         connectionStore: ClaudeCodeConnectionStore,
         onSessionTap: ((Session) -> Void)? = nil,
-        onOpenDetail: ((Session) -> Void)? = nil
+        onOpenDetail: ((Session) -> Void)? = nil,
+        onOpenWeb: ((Session) -> Void)? = nil
     ) {
         self.viewModel = viewModel
         self.connectionStore = connectionStore
         self.onSessionTap = onSessionTap
         self.onOpenDetail = onOpenDetail
+        self.onOpenWeb = onOpenWeb
     }
 
     var body: some View {
@@ -101,7 +106,12 @@ struct SessionTreeView: View {
                         viewModel.markSessionRead(session)
                         handler(session)
                     }
-                }
+                },
+                // Only bridged rows get a live handler — an unbridged local has
+                // no web twin, and the glyph isn't rendered for it anyway.
+                onOpenWeb: viewModel.bridgedLocalIds.contains(session.id)
+                    ? onOpenWeb.map { handler in { handler(session) } }
+                    : nil
             )
         case .remote(let remote):
             RemoteClaudeCodeRowView(

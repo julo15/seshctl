@@ -8,6 +8,9 @@ public struct SessionListView: View {
     @State private var showingSettings = false
     var onSessionTap: ((Session) -> Void)?
     var onOpenDetail: ((Session) -> Void)?
+    /// Handler for opening a bridged local row's claude.ai twin. Supplied by
+    /// `AppDelegate`; nil in previews/tests leaves the cloud glyph static.
+    var onOpenWeb: ((Session) -> Void)?
     var onOpenRecallDetail: ((RecallResult, Session?) -> Void)?
     /// Plumbed through to `SettingsPopover` so the triple-dot menu can offer
     /// Uninstall/Quit actions matching the status bar menu. Supplied by
@@ -31,6 +34,7 @@ public struct SessionListView: View {
         connectionStore: ClaudeCodeConnectionStore,
         onSessionTap: ((Session) -> Void)? = nil,
         onOpenDetail: ((Session) -> Void)? = nil,
+        onOpenWeb: ((Session) -> Void)? = nil,
         onOpenRecallDetail: ((RecallResult, Session?) -> Void)? = nil,
         onUninstall: (() -> Void)? = nil,
         onOpenIntegrations: (() -> Void)? = nil,
@@ -41,6 +45,7 @@ public struct SessionListView: View {
         self.connectionStore = connectionStore
         self.onSessionTap = onSessionTap
         self.onOpenDetail = onOpenDetail
+        self.onOpenWeb = onOpenWeb
         self.onOpenRecallDetail = onOpenRecallDetail
         self.onUninstall = onUninstall
         self.onOpenIntegrations = onOpenIntegrations
@@ -161,7 +166,8 @@ public struct SessionListView: View {
                     viewModel: viewModel,
                     connectionStore: connectionStore,
                     onSessionTap: onSessionTap,
-                    onOpenDetail: onOpenDetail
+                    onOpenDetail: onOpenDetail,
+                    onOpenWeb: onOpenWeb
                 )
             } else {
                 let ordered = viewModel.orderedRows
@@ -338,7 +344,7 @@ public struct SessionListView: View {
                     Text("mark all as read? y/n")
                         .foregroundStyle(.orange)
                 } else {
-                    Text("enter focus · f fork · / search · ? help · q close")
+                    Text("enter focus · w web · f fork · / search · ? help · q close")
                 }
             }
             .font(.system(.footnote, design: .monospaced))
@@ -413,7 +419,12 @@ public struct SessionListView: View {
                         viewModel.markSessionRead(session)
                         handler(session)
                     }
-                }
+                },
+                // Only bridged rows get a live handler — an unbridged local has
+                // no web twin, and the glyph isn't rendered for it anyway.
+                onOpenWeb: viewModel.bridgedLocalIds.contains(session.id)
+                    ? onOpenWeb.map { handler in { handler(session) } }
+                    : nil
             )
         case .remote(let remote):
             RemoteClaudeCodeRowView(

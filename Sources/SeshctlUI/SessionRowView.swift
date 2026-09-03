@@ -36,11 +36,18 @@ public struct SessionRowView: View {
     var yesterdayStyle: SessionAgeDisplay.YesterdayStyle = .date
 
     var onDetail: (() -> Void)?
+    /// Handler for "open this session's claude.ai twin in the browser".
+    /// Supplied only for bridged rows; when non-nil the `cloud.fill` glyph on
+    /// line 2 becomes a click target so the web half of the pair is reachable
+    /// with the mouse, mirroring the `w` key. Nil leaves the glyph as a plain
+    /// static marker (the pre-existing behavior for unbridged rows and for
+    /// previews/tests).
+    var onOpenWeb: (() -> Void)?
 
     @AppStorage(AppearanceDefaults.repoAccentBarKey) private var repoAccentBarEnabled: Bool = AppearanceDefaults.repoAccentBarDefault
     @AppStorage(AppearanceDefaults.stackedRowLayoutKey) private var stackedRowLayoutEnabled: Bool = AppearanceDefaults.stackedRowLayoutDefault
 
-    public init(session: Session, hostApp: HostAppInfo, isUnread: Bool = false, isBridged: Bool = false, showCloudAffordances: Bool = false, showAgentBadge: Bool = true, awaySummary: String? = nil, yesterdayStyle: SessionAgeDisplay.YesterdayStyle = .date, onDetail: (() -> Void)? = nil) {
+    public init(session: Session, hostApp: HostAppInfo, isUnread: Bool = false, isBridged: Bool = false, showCloudAffordances: Bool = false, showAgentBadge: Bool = true, awaySummary: String? = nil, yesterdayStyle: SessionAgeDisplay.YesterdayStyle = .date, onDetail: (() -> Void)? = nil, onOpenWeb: (() -> Void)? = nil) {
         self.session = session
         self.hostApp = hostApp
         self.isUnread = isUnread
@@ -50,6 +57,7 @@ public struct SessionRowView: View {
         self.awaySummary = awaySummary
         self.yesterdayStyle = yesterdayStyle
         self.onDetail = onDetail
+        self.onOpenWeb = onOpenWeb
     }
 
     public var body: some View {
@@ -70,6 +78,30 @@ public struct SessionRowView: View {
             iconAccessibilityLabel: Session.accessibilityLabel(hostApp: hostApp, agent: session.tool),
             isUnread: isUnread
         )
+    }
+
+    /// The `cloud.fill` half of the bridged row-kind marker. When the parent
+    /// supplies `onOpenWeb` it renders as a borderless button that opens the
+    /// claude.ai twin — the mouse counterpart to the `w` key, so a bridged row
+    /// exposes both halves of the pair (Enter/click → terminal, cloud → web).
+    /// Without a handler it stays a static glyph.
+    @ViewBuilder
+    private var cloudMarker: some View {
+        if let onOpenWeb {
+            Button(action: onOpenWeb) {
+                Image(systemName: "cloud.fill")
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+            .help("Open on claude.ai (w)")
+            .accessibilityLabel("Open on claude.ai")
+        } else {
+            Image(systemName: "cloud.fill")
+                .font(.footnote)
+                .foregroundStyle(.tertiary)
+                .help("Also running on claude.ai")
+        }
     }
 
     /// Accent-bar color for the unread marker. `nil` means render the slot
@@ -174,10 +206,7 @@ public struct SessionRowView: View {
                           ? "Running locally and on claude.ai (Enter focuses the local terminal)"
                           : "Running locally")
                 if isBridged {
-                    Image(systemName: "cloud.fill")
-                        .font(.footnote)
-                        .foregroundStyle(.tertiary)
-                        .help("Also running on claude.ai")
+                    cloudMarker
                 }
             }
 

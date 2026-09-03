@@ -177,6 +177,21 @@ Surfaces to touch when adding a new tool:
 - The CLI and Database are tool-agnostic except for the `SessionTool` raw string. Don't branch on `tool` in `seshctl-cli` unless it's genuinely tool-specific (e.g. the Cursor lazy-create path in `Update`/`End` keyed on `--conversation-id`).
 - Exhaustive `switch`es over `SessionTool` are the safety net: never add `default:` cases.
 
+## Bridged Sessions (local CLI <-> claude.ai)
+
+A CLI session started with `/remote-control` exists on both sides. `BridgeMatcher` pairs them so the list shows one row, not two, and the row exposes both halves: **Enter** focuses the terminal, **w** (or clicking the row's `cloud.fill` glyph) opens claude.ai.
+
+**The join key comes out of the transcript, and its shape has changed once already.** `TranscriptBridgeScanner` recognizes two record shapes:
+
+- **Current:** `{"type":"bridge-session","sessionId":"<local uuid>","bridgeSessionId":"cse_<SUFFIX>"}` — the API id verbatim.
+- **Legacy:** `{"type":"system","subtype":"bridge_status","url":"https://claude.ai/code/session_<SUFFIX>"}` — id derived from the web URL.
+
+Last matching record in the file wins. When Claude Code stopped writing the legacy shape, the scanner silently returned `nil` for every transcript and every bridged pair split back into two unlinked rows — no error, no log, just a quiet regression. **If pairing ever "stops working" again, grep a live transcript for `bridge` first** (`grep -n 'bridge' ~/.claude/projects/<slug>/<convId>.jsonl`) before touching `BridgeMatcher`; the matcher is deterministic and rarely the culprit.
+
+**Where the pairing surfaces.** `SessionListViewModel.refresh()` publishes three projections of the same `BridgeMatcher` output: `bridgedLocalIds` (row renders the cloud glyph), `bridgedRemoteIds` (twin filtered out of `activeRows`/`recentRows`), and `bridgedRemoteIdByLocalId` (the full map, used by `bridgedRemote(for:)` / `selectedWebUrl` to resolve the web URL for the `w` action). Keep the three in sync — the tests in `SessionListViewModelTests` assert the map's keys and values equal the two id sets.
+
+**Local vs. web routing.** `w` goes through `AppDelegate.openSelectedOnWeb` -> `vm.selectedWebUrl` -> `SessionAction.execute(target: .openRemote(...))` — the same action Enter uses on a pure-remote row, so browser tab reuse via `RemoteBrowserCoordinator` is shared. The mouse path (`SessionRowView.onOpenWeb`, plumbed `AppDelegate -> RootView -> SessionListView`/`SessionTreeView`) dispatches the same target. Never add a second browser-opening path.
+
 ## Transcript-Derived Row Signals
 
 Three row signals are derived by scanning the live JSONL transcript on each ~2s refresh: `bridgedLocalIds` (via `TranscriptBridgeScanner` → `transcriptBridgeCache`), `awaySummariesById` (via `TranscriptAwaySummaryScanner` → `transcriptAwaySummaryCache`), and `latestAssistantById` (via `TranscriptLatestAssistantScanner` → `transcriptLatestAssistantCache`). All three live in `SessionListViewModel.refresh()`.

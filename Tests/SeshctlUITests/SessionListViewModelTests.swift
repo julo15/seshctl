@@ -886,6 +886,116 @@ struct SessionListViewModelTests {
         )
     }
 
+    /// Current-shape sibling of `writeTranscript(bridgedToCseId:)`. Claude Code
+    /// CLI now emits a dedicated `bridge-session` record instead of the legacy
+    /// `system`/`bridge_status` event; pairing has to work off this shape or
+    /// every live bridged session shows up as two unlinked rows.
+    @MainActor
+    private func writeBridgeSessionTranscript(bridgedToCseId cseId: String) throws -> String {
+        let dir = NSTemporaryDirectory()
+        let path = (dir as NSString).appendingPathComponent("\(UUID().uuidString).jsonl")
+        let content = """
+        {"type":"bridge-session","sessionId":"local-uuid","bridgeSessionId":"\(cseId)","lastSequenceNum":0}
+        """
+        try content.write(toFile: path, atomically: true, encoding: .utf8)
+        return path
+    }
+
+    @Test("refresh pairs a bridged local via the current bridge-session transcript shape")
+    @MainActor
+    func refreshPairsBridgedPairCurrentShape() throws {
+        let transcriptPath = try writeBridgeSessionTranscript(bridgedToCseId: "cse_NEWSHAPE")
+        defer { try? FileManager.default.removeItem(atPath: transcriptPath) }
+
+        let db = try SeshctlDatabase.temporary()
+        let local = try db.startSession(tool: .claude, directory: "/tmp/x", pid: 8811)
+        try db.updateSession(pid: 8811, tool: .claude, transcriptPath: transcriptPath)
+        try db.upsertRemoteClaudeCodeSessions([makeBridgeRemote(id: "cse_NEWSHAPE")])
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+
+        #expect(vm.bridgedLocalIds.contains(local.id))
+        #expect(vm.bridgedRemoteIds.contains("cse_NEWSHAPE"))
+        // The remote twin must not also render as its own row.
+        #expect(!(vm.activeRows + vm.recentRows).map(\.id).contains("cse_NEWSHAPE"))
+    }
+
+    @Test("bridgedRemoteIdByLocalId mirrors the two published id sets")
+    @MainActor
+    func bridgedPairMapMirrorsIdSets() throws {
+        let transcriptPath = try writeBridgeSessionTranscript(bridgedToCseId: "cse_MAP")
+        defer { try? FileManager.default.removeItem(atPath: transcriptPath) }
+
+        let db = try SeshctlDatabase.temporary()
+        let local = try db.startSession(tool: .claude, directory: "/tmp/x", pid: 8812)
+        try db.updateSession(pid: 8812, tool: .claude, transcriptPath: transcriptPath)
+        try db.upsertRemoteClaudeCodeSessions([makeBridgeRemote(id: "cse_MAP")])
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+
+        #expect(vm.bridgedRemoteIdByLocalId[local.id] == "cse_MAP")
+        #expect(Set(vm.bridgedRemoteIdByLocalId.keys) == vm.bridgedLocalIds)
+        #expect(Set(vm.bridgedRemoteIdByLocalId.values) == vm.bridgedRemoteIds)
+    }
+
+    // MARK: - Local-vs-web action targeting
+    //
+    // Enter always prefers the local terminal for a bridged row; `w` picks the
+    // web half. These pin the view-model half of that split — the URL the `w`
+    // handler dispatches on.
+
+    @Test("selectedWebUrl resolves the twin's URL for a bridged local row")
+    @MainActor
+    func selectedWebUrlForBridgedLocal() throws {
+        let transcriptPath = try writeBridgeSessionTranscript(bridgedToCseId: "cse_WEBURL")
+        defer { try? FileManager.default.removeItem(atPath: transcriptPath) }
+
+        let db = try SeshctlDatabase.temporary()
+        let local = try db.startSession(tool: .claude, directory: "/tmp/x", pid: 8813)
+        try db.updateSession(pid: 8813, tool: .claude, transcriptPath: transcriptPath)
+        try db.upsertRemoteClaudeCodeSessions([makeBridgeRemote(id: "cse_WEBURL")])
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+
+        let session = try #require(vm.sessions.first { $0.id == local.id })
+        #expect(vm.bridgedRemote(for: session)?.id == "cse_WEBURL")
+
+        // The bridged local is the only visible row, so it's the selection.
+        #expect(vm.selectedRow?.id == local.id)
+        #expect(vm.selectedWebUrl?.absoluteString == "https://claude.ai/code/session_WEBURL")
+    }
+
+    @Test("selectedWebUrl is nil for an unbridged local row")
+    @MainActor
+    func selectedWebUrlNilForUnbridgedLocal() throws {
+        let db = try SeshctlDatabase.temporary()
+        let local = try db.startSession(tool: .claude, directory: "/tmp/x", pid: 8814)
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+
+        let session = try #require(vm.sessions.first { $0.id == local.id })
+        #expect(vm.bridgedRemote(for: session) == nil)
+        #expect(vm.selectedRow?.id == local.id)
+        #expect(vm.selectedWebUrl == nil)
+    }
+
+    @Test("selectedWebUrl uses a pure-remote row's own URL")
+    @MainActor
+    func selectedWebUrlForRemoteRow() throws {
+        let db = try SeshctlDatabase.temporary()
+        try db.upsertRemoteClaudeCodeSessions([makeBridgeRemote(id: "cse_PUREREMOTE")])
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+
+        #expect(vm.selectedRow?.id == "cse_PUREREMOTE")
+        #expect(vm.selectedWebUrl?.absoluteString == "https://claude.ai/code/session_PUREREMOTE")
+    }
+
     @Test("refresh pairs a bridged local with its matching remote via the transcript scanner")
     @MainActor
     func refreshPairsBridgedPair() throws {

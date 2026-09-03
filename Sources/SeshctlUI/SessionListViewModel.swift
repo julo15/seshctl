@@ -28,6 +28,12 @@ public final class SessionListViewModel: ObservableObject {
     /// Filtered out of `activeRows` / `recentRows` to prevent the pair from
     /// showing twice. Computed in `refresh()` via `BridgeMatcher`.
     @Published public private(set) var bridgedRemoteIds: Set<String> = []
+    /// Full `localId -> remoteId` pairing, of which `bridgedLocalIds` and
+    /// `bridgedRemoteIds` are the two projections. Kept alongside them (not
+    /// derived on demand) so the "open the bridged twin on the web" action
+    /// can resolve a local row's remote URL without an O(n) scan per row
+    /// render. Computed in `refresh()` via `BridgeMatcher`.
+    @Published public private(set) var bridgedRemoteIdByLocalId: [String: String] = [:]
     /// Latest Claude Code `away_summary` ("recap") per local session, keyed by
     /// `session.id`. Sessions without a recap are absent (the row falls
     /// through to its existing preview chain). Computed in `refresh()` via
@@ -300,6 +306,14 @@ public final class SessionListViewModel: ObservableObject {
             )
             bridgedLocalIds = Set(pairs.map(\.localId))
             bridgedRemoteIds = Set(pairs.map(\.remoteId))
+            // `uniquingKeysWith` rather than `uniqueKeysWithValues`: BridgeMatcher
+            // already emits at most one pair per local, but a trapping
+            // initializer would turn any future relaxation of that invariant
+            // into a crash on the 2-second refresh tick.
+            bridgedRemoteIdByLocalId = Dictionary(
+                pairs.map { ($0.localId, $0.remoteId) },
+                uniquingKeysWith: { first, _ in first }
+            )
             // Pull the latest Claude Code `away_summary` per local Claude session
             // into `awaySummariesById`. Reuses the per-transcript mtime cache to
             // skip re-reading unchanged JSONLs. Non-Claude tools are skipped at
@@ -551,6 +565,32 @@ public final class SessionListViewModel: ObservableObject {
     public var selectedSession: Session? {
         if case .local(let session) = selectedRow { return session }
         return nil
+    }
+
+    /// The bridged claude.ai twin of a local session, if the pair is live.
+    /// `nil` for unbridged locals and for pairs whose remote has since
+    /// dropped out of `remoteSessions`.
+    public func bridgedRemote(for session: Session) -> RemoteClaudeCodeSession? {
+        guard let remoteId = bridgedRemoteIdByLocalId[session.id] else { return nil }
+        return remoteSessions.first { $0.id == remoteId }
+    }
+
+    /// claude.ai URL for the selected row's cloud presence, or `nil` when the
+    /// selection has none. Two cases resolve:
+    /// - a remote row: its own `webUrl`,
+    /// - a bridged local row: its remote twin's `webUrl`.
+    ///
+    /// An unbridged local row (or a recall result) returns `nil` — there is no
+    /// web-side session to open, so the caller no-ops rather than guessing.
+    public var selectedWebUrl: URL? {
+        switch selectedRow {
+        case .remote(let remote):
+            return remote.webUrl
+        case .local(let session):
+            return bridgedRemote(for: session)?.webUrl
+        case nil:
+            return nil
+        }
     }
 
     public func moveSelectionUp() {

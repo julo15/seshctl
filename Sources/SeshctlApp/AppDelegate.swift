@@ -179,6 +179,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 onOpenDetail: { [weak nav] session in
                     nav?.openDetail(for: session)
                 },
+                onOpenWeb: { [weak self] session in
+                    guard let self, let remote = vm.bridgedRemote(for: session) else { return }
+                    vm.markSessionRead(session)
+                    SessionAction.execute(
+                        target: .openRemote(remote.webUrl),
+                        markRead: { vm.markSessionRead($0) },
+                        rememberFocused: { vm.rememberFocusedSession($0) },
+                        dismiss: { self.dismissPanel() },
+                        remoteBrowserCoordinator: self.remoteBrowserCoordinator
+                    )
+                },
                 onOpenRecallDetail: { [weak nav] result, session in
                     nav?.openDetail(for: result, session: session)
                 },
@@ -392,6 +403,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Enter, Return, or e
         case (36, _), (76, _), (_, "e"):
             executeSessionAction(vm: vm)
+        // w — open the row's claude.ai session in the browser. On a remote row
+        // this matches Enter; on a bridged local row it picks the web half of
+        // the pair instead of the terminal Enter would focus. No-op on rows
+        // with no cloud presence.
+        case (_, "w"):
+            if vm.pendingKillSessionId == nil && !vm.pendingMarkAllRead && vm.pendingForkSessionId == nil {
+                openSelectedOnWeb(vm: vm)
+            }
         // x — kill session process
         case (_, "x"):
             if vm.pendingKillSessionId == nil && !vm.pendingMarkAllRead && vm.pendingForkSessionId == nil {
@@ -637,6 +656,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             pendingG = false
             navigationState.openDetail(for: result, session: vm.session(for: result))
         }
+    }
+
+    /// Open the selected row's claude.ai session in the browser, regardless of
+    /// whether the row is a pure-remote row or the local half of a bridged
+    /// pair. This is the "choose the web side" counterpart to Enter, which
+    /// always prefers the local terminal when one exists.
+    ///
+    /// Mark-read goes through `markSelectedRowRead` (row-type-agnostic) so it
+    /// covers both cases; the local twin is the visible row in the bridged
+    /// case, and clearing its unread state is what the user sees.
+    private func openSelectedOnWeb(vm: SessionListViewModel) {
+        guard let url = vm.selectedWebUrl else { return }
+        vm.markSelectedRowRead()
+        SessionAction.execute(
+            target: .openRemote(url),
+            markRead: { vm.markSessionRead($0) },
+            rememberFocused: { vm.rememberFocusedSession($0) },
+            dismiss: { [weak self] in self?.dismissPanel() },
+            remoteBrowserCoordinator: remoteBrowserCoordinator
+        )
     }
 
     private func executeSessionAction(vm: SessionListViewModel) {
@@ -1071,6 +1110,9 @@ struct RootView: View {
     @ObservedObject var connectionStore: ClaudeCodeConnectionStore
     var onSessionTap: ((Session) -> Void)?
     var onOpenDetail: ((Session) -> Void)?
+    /// Supplied by `AppDelegate` so a bridged row's cloud glyph can open the
+    /// claude.ai half of the pair with the mouse. Same effect as the `w` key.
+    var onOpenWeb: ((Session) -> Void)?
     var onOpenRecallDetail: ((RecallResult, Session?) -> Void)?
     /// Supplied by `AppDelegate` for the in-app SettingsPopover's Application
     /// section. Threaded through `RootView` so the AppDelegate can stay the
@@ -1096,6 +1138,7 @@ struct RootView: View {
                     connectionStore: connectionStore,
                     onSessionTap: onSessionTap,
                     onOpenDetail: onOpenDetail,
+                    onOpenWeb: onOpenWeb,
                     onOpenRecallDetail: onOpenRecallDetail,
                     onUninstall: onUninstall,
                     onOpenIntegrations: onOpenIntegrations,
