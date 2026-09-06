@@ -840,6 +840,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Status item
 
+    /// Menu bar glyph: the same three-row session stack as the app icon, front
+    /// row solid with the status dot punched through it.
+    ///
+    /// Drawn in code rather than shipped as an asset — the bundle is assembled
+    /// by `scripts/build-app-bundle.sh`, not Xcode, so there's no asset catalog
+    /// to hold a multi-scale image, and drawing stays crisp on any display
+    /// scale factor.
+    ///
+    /// Template images keep only their alpha channel — macOS discards the color
+    /// and re-tints for light/dark menu bars. That constrains the design twice:
+    /// the two back rows recede via reduced alpha rather than a lighter color,
+    /// and the status dot is punched out with an even-odd winding rule rather
+    /// than painted in a background color, which would render as opaque black.
+    ///
+    /// Replaces `rectangle.stack.fill`, whose rounded stacked rectangles read
+    /// as a suitcase at menu bar size.
+    static func statusBarIcon() -> NSImage {
+        let image = NSImage(size: NSSize(width: 18, height: 16), flipped: false) { _ in
+            // Back rows — narrower and dimmer the further back they sit.
+            for (rect, alpha) in [
+                (NSRect(x: 5, y: 12.0, width: 9, height: 3.4), 0.38),
+                (NSRect(x: 3, y: 7.0, width: 12, height: 3.4), 0.62),
+            ] {
+                NSColor.black.withAlphaComponent(alpha).setFill()
+                NSBezierPath(roundedRect: rect, xRadius: 1.7, yRadius: 1.7).fill()
+            }
+
+            // Front (live) row, solid, with the dot knocked out of it.
+            let front = NSBezierPath(
+                roundedRect: NSRect(x: 1, y: 1.1, width: 16, height: 4.2),
+                xRadius: 2.1,
+                yRadius: 2.1
+            )
+            front.append(NSBezierPath(ovalIn: NSRect(x: 3.9, y: 2.05, width: 2.3, height: 2.3)))
+            front.windingRule = .evenOdd
+            NSColor.black.setFill()
+            front.fill()
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "Seshctl"
+        return image
+    }
+
     private func setupStatusItem() {
         // Respect the user's "Show menu bar icon" preference. Default `true`
         // when the key is unset so first-launch installs and existing users
@@ -855,14 +899,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
-        // SF Symbol as a template image — tints to the menu bar color
-        // correctly in both light and dark modes. `rectangle.stack.fill`
-        // reads as a stack of sessions at menu-bar size; reasonable visual
-        // shorthand for the app and on-brand with the panel's list metaphor.
-        if let image = NSImage(systemSymbolName: "rectangle.stack.fill", accessibilityDescription: "Seshctl") {
-            image.isTemplate = true
-            item.button?.image = image
-        }
+        item.button?.image = Self.statusBarIcon()
 
         let menu = NSMenu()
         menu.delegate = self
