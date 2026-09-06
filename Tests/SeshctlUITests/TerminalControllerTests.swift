@@ -219,7 +219,7 @@ struct ScriptGenerationTests {
         #expect(script == nil)
     }
 
-    @Test("Ghostty script matches by working directory with selected-tab priority")
+    @Test("Ghostty script matches by TTY before working directory")
     func ghosttyScript() {
         let script = TerminalController.buildFocusScript(
             app: .ghostty,
@@ -230,11 +230,72 @@ struct ScriptGenerationTests {
 
         #expect(script != nil)
         #expect(script!.contains("tell application \"Ghostty\""))
+        #expect(script!.contains("tty of trm is \"/dev/ttys042\""))
         #expect(script!.contains("working directory of trm is \"/Users/me/projects/cool-app\""))
-        // Should check front window's selected tab first, then fall back to full scan
+        // TTY is unique per surface; directory is ambiguous when several
+        // surfaces share a cwd. TTY must be tried first.
+        let ttyMatch = script!.range(of: "tty of trm is")!
+        let dirMatch = script!.range(of: "working directory of trm is")!
+        #expect(ttyMatch.lowerBound < dirMatch.lowerBound)
+        // Directory fallback keeps its selected-tab-first ordering
         let selectedTabCheck = script!.range(of: "selected tab of front window")!
         let fullScan = script!.range(of: "select tab t")!
         #expect(selectedTabCheck.lowerBound < fullScan.lowerBound)
+    }
+
+    @Test("Ghostty TTY match uses `focus` so it resolves splits, not just tabs")
+    func ghosttyScriptTtyFocusesSurface() {
+        let script = TerminalController.buildFocusScript(
+            app: .ghostty,
+            appName: "Ghostty",
+            tty: "/dev/ttys042",
+            directory: "/Users/me/project"
+        )
+
+        #expect(script != nil)
+        // `focus` targets the surface — raises the window, selects the tab AND
+        // focuses the split. `select tab` alone leaves focus in the wrong pane.
+        let ttyMatch = script!.range(of: "tty of trm is")!
+        let focusCall = script!.range(of: "focus trm")!
+        #expect(ttyMatch.upperBound < focusCall.lowerBound)
+        // The flat application-level `terminals` element covers every split
+        // without walking windows -> tabs -> terminals.
+        #expect(script!.contains("repeat with trm in terminals\n"))
+    }
+
+    @Test("Ghostty precision rungs are wrapped in try so older versions degrade")
+    func ghosttyScriptTtyIsVersionGuarded() {
+        let script = TerminalController.buildFocusScript(
+            app: .ghostty,
+            appName: "Ghostty",
+            tty: "/dev/ttys042",
+            directory: "/Users/me/project",
+            windowId: "F63A60A0-F28D-4FDC-8666-5844F57BDC1D"
+        )
+
+        #expect(script != nil)
+        // `tty` and `focus` are absent from older Ghostty dictionaries. Without
+        // `try`, the unknown term aborts the whole script and takes the
+        // directory fallback down with it.
+        #expect(script!.contains("try\n"))
+        #expect(script!.contains("end try"))
+        // Both precision rungs are guarded, and the directory fallback survives.
+        #expect(script!.components(separatedBy: "end try").count - 1 == 2)
+        #expect(script!.contains("working directory of trm is \"/Users/me/project\""))
+    }
+
+    @Test("Ghostty script escapes the TTY path")
+    func ghosttyScriptEscapesTty() {
+        let script = TerminalController.buildFocusScript(
+            app: .ghostty,
+            appName: "Ghostty",
+            tty: "/dev/tty\"; do shell script \"whoami",
+            directory: "/Users/me/project"
+        )
+
+        #expect(script != nil)
+        #expect(!script!.contains("tty of trm is \"/dev/tty\"; do shell script"))
+        #expect(script!.contains("\\\""))
     }
 
     @Test("Ghostty script works without TTY (uses directory instead)")
@@ -250,7 +311,7 @@ struct ScriptGenerationTests {
         #expect(script!.contains("working directory of trm is \"/Users/me/project\""))
     }
 
-    @Test("Ghostty script tries terminal ID first, then falls back to directory")
+    @Test("Ghostty ladder is TTY, then legacy terminal ID, then directory")
     func ghosttyScriptWithTerminalId() {
         let script = TerminalController.buildFocusScript(
             app: .ghostty,
@@ -265,10 +326,27 @@ struct ScriptGenerationTests {
         #expect(script!.contains("id of trm is \"F63A60A0-F28D-4FDC-8666-5844F57BDC1D\""))
         // Must also include directory fallback (ID may be stale after resume)
         #expect(script!.contains("working directory"))
-        // ID match should come before directory fallback
+        // TTY beats the stored ID: the ID is only there for rows written by the
+        // pre-TTY hook, and it goes stale on resume. Directory is last.
+        let ttyMatch = script!.range(of: "tty of trm is")!
         let idMatch = script!.range(of: "id of trm is")!
         let dirMatch = script!.range(of: "working directory")!
+        #expect(ttyMatch.lowerBound < idMatch.lowerBound)
         #expect(idMatch.lowerBound < dirMatch.lowerBound)
+    }
+
+    @Test("Ghostty legacy ID rung is omitted when no windowId is stored")
+    func ghosttyScriptWithoutTerminalId() {
+        let script = TerminalController.buildFocusScript(
+            app: .ghostty,
+            appName: "Ghostty",
+            tty: "/dev/ttys042",
+            directory: "/Users/me/project"
+        )
+
+        #expect(script != nil)
+        #expect(!script!.contains("id of trm is"))
+        #expect(script!.contains("tty of trm is \"/dev/ttys042\""))
     }
 
     @Test("Warp focus script uses TTY-based tab position via pgrep/ps")
@@ -818,7 +896,7 @@ struct FocusRoutingTests {
         #expect(!env.shellCommands.contains { $0.1.contains("/tmp/worktree") })
     }
 
-    @Test("Ghostty focus uses open -b then AppleScript with directory matching")
+    @Test("Ghostty focus uses open -b then AppleScript with TTY matching")
     func ghosttyRouting() {
         let env = MockSystemEnvironment()
         env.guiApps = [600: "com.mitchellh.ghostty"]
@@ -828,13 +906,26 @@ struct FocusRoutingTests {
 
         // open -b should be called to activate the app
         #expect(env.shellCommands.contains { $0.0 == "/usr/bin/open" && $0.1 == ["-b", "com.mitchellh.ghostty"] })
-        // AppleScript should match by working directory, not TTY
+        // TTY is resolved from the session PID at focus time — nothing needs to
+        // have been recorded at session start.
         #expect(env.executedScripts.count >= 1)
+        #expect(env.executedScripts[0].contains("tty of trm is \"/dev/ttys010\""))
         #expect(env.executedScripts[0].contains("working directory of trm is \"/tmp/project\""))
-        #expect(!env.executedScripts[0].contains("ttys010"))
     }
 
-    @Test("Ghostty focus with windowId uses terminal ID matching")
+    @Test("Ghostty focus falls back to directory when the PID has no TTY")
+    func ghosttyRoutingNoTty() {
+        let env = MockSystemEnvironment()
+        env.guiApps = [600: "com.mitchellh.ghostty"]
+
+        TerminalController.focus(pid: 600, directory: "/tmp/project", launchDirectory: nil, environment: env)
+
+        #expect(env.executedScripts.count >= 1)
+        #expect(!env.executedScripts[0].contains("tty of trm is"))
+        #expect(env.executedScripts[0].contains("working directory of trm is \"/tmp/project\""))
+    }
+
+    @Test("Ghostty focus with windowId keeps the legacy ID rung below TTY")
     func ghosttyRoutingWithWindowId() {
         let env = MockSystemEnvironment()
         env.guiApps = [600: "com.mitchellh.ghostty"]
@@ -851,9 +942,11 @@ struct FocusRoutingTests {
 
         #expect(env.shellCommands.contains { $0.0 == "/usr/bin/open" && $0.1 == ["-b", "com.mitchellh.ghostty"] })
         #expect(env.executedScripts.count >= 1)
-        #expect(env.executedScripts[0].contains("id of trm is \"F63A60A0-F28D-4FDC-8666-5844F57BDC1D\""))
+        let script = env.executedScripts[0]
+        #expect(script.contains("id of trm is \"F63A60A0-F28D-4FDC-8666-5844F57BDC1D\""))
         // Script should also contain directory fallback (ID may be stale)
-        #expect(env.executedScripts[0].contains("working directory"))
+        #expect(script.contains("working directory"))
+        #expect(script.range(of: "tty of trm is")!.lowerBound < script.range(of: "id of trm is")!.lowerBound)
     }
 
     @Test("Warp focus uses open -b then AppleScript with TTY-based tab lookup")

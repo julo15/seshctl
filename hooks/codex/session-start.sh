@@ -21,19 +21,9 @@ if [ -n "${CMUX_WORKSPACE_ID:-}" ]; then
   else
     ARGS+=(--window-id "$CMUX_WORKSPACE_ID")
   fi
-elif [ "${TERM_PROGRAM:-}" = "ghostty" ]; then
-  # Capture Ghostty terminal ID if running inside Ghostty.
-  GHOSTTY_ID=$(osascript -e '
-    tell application "Ghostty"
-      try
-        set trm to focused terminal of selected tab of front window
-        return id of trm
-      end try
-    end tell
-  ' 2>/dev/null || true)
-  if [ -n "$GHOSTTY_ID" ]; then
-    ARGS+=(--window-id "$GHOSTTY_ID")
-  fi
 fi
+# No Ghostty branch: the app matches Ghostty surfaces by TTY, derived from the
+# recorded PID at focus time. See hooks/claude/session-start.sh for why the
+# AppleScript capture was removed.
 
 seshctl-cli start "${ARGS[@]}" > /dev/null 2>&1
