@@ -153,6 +153,59 @@ private func countSeshctlGroups(in settings: [String: Any], event: String) -> In
     }.count
 }
 
+/// Runs a deployed hook script against a sandboxed `HOME`, with a `PATH` that
+/// deliberately omits `seshctl-cli` so the defensive guard takes its miss
+/// branch. Returns the script's exit status.
+private func runGuardedHook(script: String, home: URL) throws -> Int32 {
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: "/bin/bash")
+    proc.arguments = [script]
+    proc.environment = [
+        "HOME": home.path,
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        "SHELL": "/bin/bash",
+    ]
+    let inPipe = Pipe()
+    proc.standardInput = inPipe
+    proc.standardOutput = Pipe()
+    proc.standardError = Pipe()
+    try proc.run()
+    inPipe.fileHandleForWriting.write(Data("{}".utf8))
+    try inPipe.fileHandleForWriting.close()
+    proc.waitUntilExit()
+    return proc.terminationStatus
+}
+
+/// Rewrites `firstMissEpoch` so the guard's 24h gate reads as satisfied. A
+/// real streak accrues over days; a test can't wait, so it moves the clock.
+private func backdateFirstMiss(missFile: URL, by seconds: Int) throws {
+    let data = try Data(contentsOf: missFile)
+    guard var counter = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        throw CocoaError(.fileReadCorruptFile)
+    }
+    counter["firstMissEpoch"] = Int(Date().timeIntervalSince1970) - seconds
+    try JSONSerialization.data(withJSONObject: counter).write(to: missFile)
+}
+
+/// Seeds a settings.json carrying one unrelated user hook. Needed whenever a
+/// test asserts on what the uninstaller leaves behind: with no survivor the
+/// whole `hooks` object is deleted and per-event damage can't be observed.
+private func seedForeignHook(at settingsPath: String) throws {
+    let parent = (settingsPath as NSString).deletingLastPathComponent
+    try FileManager.default.createDirectory(
+        atPath: parent, withIntermediateDirectories: true
+    )
+    let seeded: [String: Any] = [
+        "hooks": [
+            "Notification": [
+                ["matcher": "", "hooks": [["type": "command", "command": "/usr/bin/true"]]]
+            ]
+        ]
+    ]
+    try JSONSerialization.data(withJSONObject: seeded)
+        .write(to: URL(fileURLWithPath: settingsPath))
+}
+
 // MARK: - Suite
 
 @Suite("FirstLaunchInstaller")
@@ -676,10 +729,15 @@ struct FirstLaunchInstallerTests {
         #expect(value == true || value == false)
     }
 
-    // MARK: 13. Hook self-clean fires on the 5th miss
+    // MARK: 13. Hook self-clean gating
 
-    @Test("Hook self-clean fires on 5th consecutive miss, not before")
-    func hookSelfCleanFiresAt5thMiss() throws {
+    /// The regression guarding a real incident: `make install` trashes the
+    /// bundle before copying the new one, and `~/.local/bin/seshctl-cli`
+    /// symlinks into it. Every hook firing in that window records a miss. The
+    /// v1 guard gated on miss count alone, so a run of rebuild cycles made the
+    /// hooks uninstall a perfectly healthy seshctl out from under the user.
+    @Test("Miss count alone does not self-clean while the bundle is installed")
+    func hookSelfCleanIgnoresMissCountWhileInstalled() throws {
         let temp = try makeTempHome()
         defer { cleanup(temp) }
         let bundle = try makeFakeBundle(in: temp)
@@ -687,65 +745,80 @@ struct FirstLaunchInstallerTests {
 
         try FirstLaunchInstaller.install(bundleURL: bundle, paths: paths)
 
-        // Sanity: seshctl entries exist after install.
+        let hookScript = (paths.claudeHooksDir as NSString)
+            .appendingPathComponent("session-start.sh")
+        let missFile = temp
+            .appendingPathComponent("Library/Application Support/Seshctl/hook-misses.json")
+        precondition(FileManager.default.isExecutableFile(atPath: "/usr/bin/jq"),
+                     "jq missing at /usr/bin/jq; test cannot proceed")
+
+        // Ten misses — twice the old threshold. The bundle is still on disk
+        // the whole time, which is what distinguishes this from a real delete.
+        for _ in 1...10 {
+            _ = try runGuardedHook(script: hookScript, home: temp)
+        }
+
+        let counter = try JSONSerialization.jsonObject(
+            with: try Data(contentsOf: missFile)
+        ) as? [String: Any]
+        #expect(counter?["misses"] as? Int == 10, "misses should still accumulate")
+
+        let settings = try loadJSONObject(at: paths.claudeSettingsFile)
+        #expect(countSeshctlGroups(in: settings, event: "SessionStart") == 1,
+                "a reinstall window must never trigger the self-clean")
+    }
+
+    /// The case the guard actually exists for: the user dragged the app to the
+    /// Trash, so no bundle remains and the misses keep accruing across days.
+    @Test("Hook self-clean fires once the app is gone and the streak has aged")
+    func hookSelfCleanFiresWhenAppGoneAndStreakAged() throws {
+        let temp = try makeTempHome()
+        defer { cleanup(temp) }
+        let bundle = try makeFakeBundle(in: temp)
+        let paths = FirstLaunchInstaller.Paths(homeRoot: temp)
+
+        // Seed an unrelated user hook so `hooks` survives the strip — without
+        // a survivor the whole object is deleted and per-event damage (below)
+        // can't be observed.
+        try seedForeignHook(at: paths.claudeSettingsFile)
+        try FirstLaunchInstaller.install(bundleURL: bundle, paths: paths)
+
         let beforeSettings = try loadJSONObject(at: paths.claudeSettingsFile)
         #expect(countSeshctlGroups(in: beforeSettings, event: "SessionStart") == 1)
 
         let hookScript = (paths.claudeHooksDir as NSString)
             .appendingPathComponent("session-start.sh")
-        let missFile = temp.appendingPathComponent("Library/Application Support/Seshctl/hook-misses.json")
+        let missFile = temp
+            .appendingPathComponent("Library/Application Support/Seshctl/hook-misses.json")
+        precondition(FileManager.default.isExecutableFile(atPath: "/usr/bin/jq"),
+                     "jq missing at /usr/bin/jq; test cannot proceed")
 
-        // Build a PATH that has jq + base utilities but NOT seshctl-cli.
-        // We deliberately DO NOT include temp/.local/bin in PATH so the hook
-        // sees no `seshctl-cli`.
-        let basePath = "/usr/bin:/bin:/usr/sbin:/sbin"
-        // Sanity check: jq must be reachable.
-        let jqPath = "/usr/bin/jq"
-        precondition(FileManager.default.isExecutableFile(atPath: jqPath),
-                     "jq missing at \(jqPath); test cannot proceed")
+        try FileManager.default.removeItem(at: bundle)
 
-        func runHookOnce() throws -> Int32 {
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: "/bin/bash")
-            proc.arguments = [hookScript]
-            var env: [String: String] = [
-                "HOME": temp.path,
-                "PATH": basePath,
-            ]
-            env["SHELL"] = "/bin/bash"
-            proc.environment = env
-            let inPipe = Pipe()
-            proc.standardInput = inPipe
-            proc.standardOutput = Pipe()
-            proc.standardError = Pipe()
-            try proc.run()
-            inPipe.fileHandleForWriting.write(Data("{}".utf8))
-            try inPipe.fileHandleForWriting.close()
-            proc.waitUntilExit()
-            return proc.terminationStatus
-        }
-
-        // Misses 1..4 — counter increments, hooks NOT cleaned yet.
+        // Misses 1-4 leave the entries alone regardless of the bundle.
         for i in 1...4 {
-            _ = try runHookOnce()
-            let counterData = try Data(contentsOf: missFile)
-            let counter = try JSONSerialization.jsonObject(with: counterData) as? [String: Any]
-            let misses = counter?["misses"] as? Int ?? -1
-            #expect(misses == i, "expected \(i) misses, got \(misses)")
-            // settings.json should still have the seshctl entry.
+            _ = try runGuardedHook(script: hookScript, home: temp)
             let settings = try loadJSONObject(at: paths.claudeSettingsFile)
             #expect(countSeshctlGroups(in: settings, event: "SessionStart") == 1,
                     "seshctl group should survive miss #\(i)")
         }
 
-        // Miss 5 — should trigger seshctl-uninstall, which cleans settings.
-        _ = try runHookOnce()
+        try backdateFirstMiss(missFile: missFile, by: 86_400 + 60)
+        _ = try runGuardedHook(script: hookScript, home: temp)
 
-        // After uninstaller fires, miss-counter file is gone (app support dir wiped).
-        // settings.json should no longer contain seshctl entries.
         let after = try loadJSONObject(at: paths.claudeSettingsFile)
-        let afterCount = countSeshctlGroups(in: after, event: "SessionStart")
-        #expect(afterCount == 0, "seshctl entries should be gone after 5th miss; got \(afterCount)")
+        #expect(countSeshctlGroups(in: after, event: "SessionStart") == 0,
+                "seshctl entries should be gone after the 5th aged miss")
+
+        // The uninstaller must DELETE an emptied event key, never null it.
+        // jq's `|= empty` sets it to null, and Claude Code then rejects the
+        // file with `hooks.SessionStart must be an array of matchers;
+        // received null` on every launch until the user hand-edits it.
+        let afterHooks = (after["hooks"] as? [String: Any]) ?? [:]
+        let nulled = afterHooks.filter { $0.value is NSNull }.keys.sorted()
+        #expect(nulled.isEmpty, "uninstaller left null hook events: \(nulled)")
+        #expect(afterHooks["Notification"] is [Any],
+                "an unrelated user hook must survive the strip")
     }
 
     // MARK: 14. reconcileInstall — pure decision function
