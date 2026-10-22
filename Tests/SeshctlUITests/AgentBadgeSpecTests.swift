@@ -25,7 +25,7 @@ struct AgentBadgeSpecForAgentTests {
 
     @Test("Every other badge draws its glyph in white")
     func otherGlyphsAreWhite() {
-        for tool: SessionTool in [.claude, .gemini, .cursor] {
+        for tool in SessionTool.allCases where tool != .codex {
             #expect(AgentBadgeSpec.forAgent(tool).glyphColor == .white)
         }
     }
