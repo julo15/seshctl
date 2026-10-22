@@ -530,6 +530,20 @@ public final class SessionListViewModel: ObservableObject {
         return unseen + seen
     }
 
+    /// Freeze or release the display order while the panel stays visible.
+    /// `panelDidShow()` freezes and `panelDidHide()` releases, but a pinned
+    /// panel stays visible indefinitely, so the app also releases it when the
+    /// pinned panel sits unfocused and unhovered (a glanceable dashboard that
+    /// should keep re-sorting) and re-freezes when the user comes back to it.
+    /// Freezing while already frozen keeps the original snapshot.
+    public func setOrderFrozen(_ frozen: Bool) {
+        if !frozen {
+            frozenOrder = nil
+        } else if frozenOrder == nil {
+            freezeOrder()
+        }
+    }
+
     /// Snapshot every row's recency rank, across both sources and ignoring
     /// search and source filters, so any subset sorted by these ranks keeps
     /// its relative order from when the panel opened.

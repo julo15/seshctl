@@ -48,6 +48,24 @@ final class FloatingPanel: NSPanel {
 
     var onKeyDown: ((UInt16, String?, NSEvent.ModifierFlags) -> Void)?
     var onDismiss: (() -> Void)?
+    /// Fires when key focus or mouse hover changes — the inputs to `isInUse`.
+    var onInteractionChange: (() -> Void)?
+
+    /// Whether the mouse is over the panel. Tracked even while the panel isn't
+    /// key, since a pinned panel is usually clicked without focusing it first.
+    private(set) var isMouseInside = false
+
+    /// Whether the user may be acting on the panel: it's visible and either
+    /// focused or under the mouse. The row list only reorders while this is
+    /// false, so a row never moves under the cursor. Pure + static so the rule
+    /// is unit-testable without a live window.
+    static func isInUse(isVisible: Bool, isKey: Bool, isMouseInside: Bool) -> Bool {
+        isVisible && (isKey || isMouseInside)
+    }
+
+    var isInUse: Bool {
+        Self.isInUse(isVisible: isVisible, isKey: isKeyWindow, isMouseInside: isMouseInside)
+    }
 
     /// When true the panel stops behaving like a Spotlight overlay: losing key
     /// focus no longer dismisses it, and it sits at `.normal` level so other
@@ -125,6 +143,15 @@ final class FloatingPanel: NSPanel {
         // Note: CGColor is captured at init; won't re-resolve on light/dark switch while the panel is open (panel is transient, so drift is narrow).
         effect.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(FloatingPanel.borderAlpha).cgColor
         contentView = effect
+        // `.activeAlways` because a pinned panel is usually not key when the
+        // mouse arrives; `.inVisibleRect` keeps the area matched to the panel
+        // through resizes.
+        effect.addTrackingArea(NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        ))
 
         // Black-tint overlay sits between the blur and the SwiftUI hosting
         // view so the wallpaper still bleeds through (preserved by the
@@ -239,7 +266,10 @@ final class FloatingPanel: NSPanel {
     override func resignKey() {
         super.resignKey()
         applyFocusAlpha(isKey: false)
-        guard Self.shouldDismissOnResignKey(keepOpen: keepOpen, isVisible: isVisible) else { return }
+        guard Self.shouldDismissOnResignKey(keepOpen: keepOpen, isVisible: isVisible) else {
+            onInteractionChange?()
+            return
+        }
         orderOut(nil)
         onDismiss?()
     }
@@ -249,6 +279,17 @@ final class FloatingPanel: NSPanel {
     override func becomeKey() {
         super.becomeKey()
         applyFocusAlpha(isKey: true)
+        onInteractionChange?()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isMouseInside = true
+        onInteractionChange?()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isMouseInside = false
+        onInteractionChange?()
     }
 
     // Allow the panel to become key (for receiving keyboard events)

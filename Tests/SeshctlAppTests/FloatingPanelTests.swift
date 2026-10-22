@@ -167,6 +167,43 @@ final class FloatingPanelTests: XCTestCase {
         )
     }
 
+    func test_isInUseMatrix() {
+        // Hidden: never in use, whatever stale focus/hover flags say.
+        XCTAssertFalse(FloatingPanel.isInUse(isVisible: false, isKey: true, isMouseInside: true))
+        // Visible: in use when focused or hovered — the user may be about to
+        // click a row, so the list mustn't reorder under them.
+        XCTAssertTrue(FloatingPanel.isInUse(isVisible: true, isKey: true, isMouseInside: false))
+        XCTAssertTrue(FloatingPanel.isInUse(isVisible: true, isKey: false, isMouseInside: true))
+        // A pinned panel sitting unfocused and unhovered is a glanceable
+        // dashboard, free to re-sort.
+        XCTAssertFalse(FloatingPanel.isInUse(isVisible: true, isKey: false, isMouseInside: false))
+    }
+
+    func test_contentViewTracksMouseEnterAndExit() throws {
+        let panel = FloatingPanel(rootView: EmptyView())
+        let effect = try XCTUnwrap(panel.contentView)
+        let area = try XCTUnwrap(effect.trackingAreas.first { $0.owner === panel })
+        XCTAssertTrue(area.options.contains(.mouseEnteredAndExited))
+        XCTAssertTrue(area.options.contains(.activeAlways), "A pinned panel is often not key; hover must still register.")
+        XCTAssertTrue(area.options.contains(.inVisibleRect), "The area must follow the panel when it's resized.")
+    }
+
+    func test_mouseEnterAndExitUpdateHoverAndNotify() throws {
+        let panel = FloatingPanel(rootView: EmptyView())
+        var notifications = 0
+        panel.onInteractionChange = { notifications += 1 }
+        let event = try XCTUnwrap(NSEvent.enterExitEvent(
+            with: .mouseEntered, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: panel.windowNumber, context: nil, eventNumber: 0, trackingNumber: 0, userData: nil
+        ))
+
+        panel.mouseEntered(with: event)
+        XCTAssertTrue(panel.isMouseInside)
+        panel.mouseExited(with: event)
+        XCTAssertFalse(panel.isMouseInside)
+        XCTAssertEqual(notifications, 2)
+    }
+
     func test_unfocusedAlphaStaysReadable() {
         // The blur is `.behindWindow`, so the window alpha re-blends the already
         // composited panel against the desktop. Too low reads as washed-out
