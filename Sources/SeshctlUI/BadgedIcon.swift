@@ -6,7 +6,7 @@ import SwiftUI
 /// `AgentBadgeSpec`.
 ///
 /// Carries a single unified accessibility label — the composite is read as
-/// one element (`"Ghostty, Claude"`) rather than two unlabeled images. This
+/// one element (`"Ghostty, Claude Code"`) rather than two unlabeled images. This
 /// also fixes the prior gap where an empty `Color.clear` icon slot read as
 /// "loading" to VoiceOver.
 ///
