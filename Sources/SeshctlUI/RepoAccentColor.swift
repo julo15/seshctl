@@ -17,8 +17,9 @@ public func repoAccentColor(for name: String?) -> Color? {
     return repoAccentPalette[index]
 }
 
-/// Curated 12-color dark-mode palette: hues spaced ~30° apart across the
-/// full wheel, starting at 15°, with two slots nudged off the status dots.
+/// Curated 12-color dark-mode palette: hues spread around the wheel, starting
+/// at 15°, with two slots nudged off the status dots and the purple and pure
+/// green bands left empty (see "Git colors" below).
 ///
 /// **Why even spacing matters more than semantic avoidance.** The previous
 /// palette picked hues that dodged the other colors on a row — status dots
@@ -49,6 +50,16 @@ public func repoAccentColor(for name: String?) -> Color? {
 /// 0.42). The old tints were pale enough that even well-separated hues
 /// washed toward the same warm gray.
 ///
+/// **Git colors.** The original green 105°, indigo 255° and violet 285° were
+/// within CIEDE2000 3–8 of GitHub's open/added green (#3FB950) and merged
+/// purple (#A371F7), so a repo label read as a PR state. They were replaced
+/// by bronze, blush and deep teal, picked by searching sRGB for the three
+/// colors farthest from those git colors, the status dots, the nine kept
+/// slots and each other (all ≥ ΔE00 19). That leaves the purple band empty —
+/// don't refill it. Bronze and deep teal sit darker (L* ~51) than the rest,
+/// and blush is a light tint whose HSB saturation is low even though it's
+/// clearly colored, so the tests gate on L*a*b* chroma, not HSB saturation.
+///
 /// The panel forces `.darkAqua` (see `FloatingPanel`), so these are tuned
 /// for a dark background only and need no light-mode variant.
 ///
@@ -59,13 +70,13 @@ let repoAccentPalette: [Color] = [
     Color(red: 0.93, green: 0.50, blue: 0.35),  // coral      15°
     Color(red: 0.82, green: 0.75, blue: 0.41),  // mustard    50° (off the waiting amber)
     Color(red: 0.75, green: 0.90, blue: 0.38),  // lime       75°
-    Color(red: 0.45, green: 0.78, blue: 0.35),  // green     105°
+    Color(red: 0.60, green: 0.45, blue: 0.00),  // bronze     45° (replaced git-like green)
     Color(red: 0.47, green: 0.85, blue: 0.62),  // mint      144° (off the working green)
     Color(red: 0.33, green: 0.78, blue: 0.68),  // teal      165°
     Color(red: 0.36, green: 0.75, blue: 0.90),  // cyan      195°
     Color(red: 0.33, green: 0.49, blue: 0.82),  // azure     225°
-    Color(red: 0.59, green: 0.42, blue: 0.93),  // indigo    255°
-    Color(red: 0.71, green: 0.40, blue: 0.83),  // violet    285°
+    Color(red: 1.00, green: 0.80, blue: 0.90),  // blush     330° (replaced merged-like indigo)
+    Color(red: 0.00, green: 0.55, blue: 0.55),  // deep teal 180° (replaced merged-like violet)
     Color(red: 0.92, green: 0.40, blue: 0.78),  // magenta   315°
     Color(red: 0.84, green: 0.35, blue: 0.49),  // rose      345°
 ]
