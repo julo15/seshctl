@@ -43,8 +43,8 @@ Press **Cmd+Shift+S** to toggle the session panel.
 - **j / k** or **Arrow keys** — navigate sessions
 - **gg** — jump to top
 - **G** — jump to bottom
-- **Enter** — focus the selected session's terminal (or open a cloud-only session on claude.ai)
-- **w** — open the selected session on claude.ai. On a bridged row this picks the web half of the pair instead of the terminal
+- **Enter** — focus the selected session's terminal (or open a cloud-only session in the Claude desktop app, or on claude.ai if the app isn't installed)
+- **w** — open the selected session in the Claude desktop app (or on claude.ai if the app isn't installed). On a bridged row this picks the web half of the pair instead of the terminal
 - **f** — fork the selected Claude session into a new branched session in a new tab (then **y** to confirm, **n** to cancel)
 - **o** — open session detail view
 - **x** — kill session process (then **y** to confirm, **n** to cancel)
@@ -87,7 +87,7 @@ Either half is one keystroke away:
 - **Enter** focuses the local terminal.
 - **w** opens the session on claude.ai. Clicking the row's cloud glyph does the same thing. If the Claude desktop app is installed, the session opens there instead of in a browser (see [Browsers](#browsers)).
 
-Unbridged rows ignore **w** — a local-only session has nothing to open on the web, and a cloud-only row already opens on claude.ai with Enter.
+Unbridged rows ignore **w** — a local-only session has nothing to open on the web, and a cloud-only row already opens with Enter.
 
 Accounts with Google-only sign-in: add an email/password or passkey on claude.ai first, then use that here.
 

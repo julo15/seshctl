@@ -53,12 +53,6 @@ public struct RemoteClaudeCodeSession: FetchableRecord, PersistableRecord, Senda
         return URL(string: "https://claude.ai/code/session_\(suffix)")!
     }
 
-    /// Claude desktop app deep link (`claude://code/<id>`), or `nil` when the
-    /// id fails validation. See `ClaudeDesktopApp` — the route is undocumented.
-    public var desktopUrl: URL? {
-        ClaudeDesktopApp.sessionURL(for: id)
-    }
-
     public init(
         id: String,
         title: String,

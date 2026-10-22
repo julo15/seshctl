@@ -178,6 +178,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 onOpenWeb: { [weak self] session in
                     guard let self, let remote = vm.bridgedRemote(for: session) else { return }
                     vm.markSessionRead(session)
+                    // Remember the clicked row, not `rememberSelectedRow()` —
+                    // a click can land on a row other than the selected one.
                     vm.rememberFocusedSession(session)
                     self.dispatch(.openRemote(remote.webUrl), vm: vm)
                 },

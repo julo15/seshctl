@@ -192,9 +192,9 @@ public enum SessionAction {
     /// up. The deep link is undocumented (see `ClaudeDesktopApp`), so the
     /// browser path below stays the fallback.
     ///
-    /// Otherwise, if a `RemoteBrowserCoordinator`
-    /// is provided, route through it so successive flips between sessions
-    /// reuse a single managed tab. Otherwise fall back to the stateless
+    /// Otherwise, if a `RemoteBrowserCoordinator` is provided, route through
+    /// it so successive flips between sessions reuse a single managed tab.
+    /// Otherwise fall back to the stateless
     /// `BrowserController.focusOrOpen` (Phase 1 behavior — focus existing tab
     /// or open a new one in the default browser).
     ///
