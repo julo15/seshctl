@@ -6,18 +6,19 @@ import SeshctlCore
 /// type-specific status onto this so the animated dot, color palette, and
 /// unread-pill treatments live in one place.
 public enum StatusKind: Equatable, Sendable {
-    /// Agent is actively working — pulsing orange.
+    /// Agent is actively working — pulsing green.
     case working
     /// Agent is waiting on user input (permission prompt, pending action) —
-    /// blinking blue.
+    /// blinking orange. The loudest color goes to the state blocked on the user.
     case waiting
-    /// Healthy and idle — solid green.
+    /// Healthy and idle (turn finished) — solid gray. Kept quiet on purpose:
+    /// unread turns are flagged by the unread pill / accent bar, not the dot.
     case idle
-    /// Local: session ended normally. Solid gray, no animation.
+    /// Local: session ended normally. Hollow gray ring, no animation.
     case completed
     /// Remote: worker disconnected (claude.ai can't reach it). Solid gray,
     /// no animation. Distinct from `.completed` semantically even though they
-    /// render identically today.
+    /// render identically today (hollow gray ring).
     case offline
     /// Canceled — solid red (local only today).
     case canceled
@@ -27,18 +28,21 @@ public enum StatusKind: Equatable, Sendable {
 }
 
 extension StatusKind {
-    /// Dot color for this kind. Matches the palette both row types previously
-    /// hardcoded independently.
+    /// Dot color for this kind. Activity-monitor convention: green means the
+    /// agent is running, gray means it isn't.
     public var color: Color {
         switch self {
-        case .working: return .orange
-        case .waiting: return .blue
-        case .idle: return .green
-        case .completed, .offline: return .gray
+        case .working: return .green
+        case .waiting: return .orange
+        case .idle, .completed, .offline: return .gray
         case .canceled: return .red
         case .stale: return .gray.opacity(0.5)
         }
     }
+
+    /// Whether the dot renders as an outline instead of a filled circle.
+    /// Separates ended sessions from idle ones, which share the gray color.
+    public var isHollow: Bool { self == .completed || self == .offline }
 
     /// Whether the `.working` pulse animation plays.
     public var isPulsing: Bool { self == .working }

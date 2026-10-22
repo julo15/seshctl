@@ -33,7 +33,12 @@ public struct AnimatedStatusDot: View {
                     .opacity(isPulsing ? 0.0 : 0.6)
             }
             Circle()
-                .fill(color)
+                .fill(kind.isHollow ? .clear : color)
+                .overlay {
+                    if kind.isHollow {
+                        Circle().strokeBorder(color, lineWidth: 1.5)
+                    }
+                }
                 .frame(width: 8, height: 8)
                 .shadow(
                     color: kind.isPulsing && isPulsing ? color.opacity(0.8) : .clear,
