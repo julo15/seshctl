@@ -91,7 +91,7 @@ struct ResultRowLayout<Status: View, Content: View>: View {
 
             // Icon and chevron sit closer together than the row's 12pt
             // spacing: they read as one trailing control.
-            HStack(alignment: .top, spacing: 2) {
+            HStack(alignment: .top, spacing: 5) {
                 // Host app icon — always takes the same slot, even for rows
                 // without a host app (e.g., remote claude.ai sessions, which fall
                 // through to the `hostAppSystemSymbol` placeholder). When
