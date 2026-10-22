@@ -15,11 +15,19 @@ struct AgentBadgeSpecForAgentTests {
         #expect(spec.color == AgentBadgeSpec.claudeColor)
     }
 
-    @Test("codex → indigo Codex mark")
+    @Test("codex → indigo Codex mark on white")
     func codexBadge() {
         let spec = AgentBadgeSpec.forAgent(.codex)
         #expect(spec.glyph == .codexMark)
-        #expect(spec.color == AgentBadgeSpec.codexColor)
+        #expect(spec.color == .white)
+        #expect(spec.glyphColor == AgentBadgeSpec.codexColor)
+    }
+
+    @Test("Every other badge draws its glyph in white")
+    func otherGlyphsAreWhite() {
+        for tool: SessionTool in [.claude, .gemini, .cursor] {
+            #expect(AgentBadgeSpec.forAgent(tool).glyphColor == .white)
+        }
     }
 
     @Test("gemini → blue G")
