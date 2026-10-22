@@ -153,7 +153,12 @@ public struct SessionListView: View {
                 case .recentsOnly:
                     emptyStateView(
                         headline: "No active sessions",
-                        subtext: "Press / to find recent sessions."
+                        subtext: "Press c to reopen a closed session, / to search."
+                    )
+                case .noClosedSessions:
+                    emptyStateView(
+                        headline: "No closed sessions",
+                        subtext: "Press c to go back."
                     )
                 case .filteredOut:
                     emptyStateView(
@@ -161,7 +166,7 @@ public struct SessionListView: View {
                         subtext: "Press r to change filter."
                     )
                 }
-            } else if viewModel.isTreeMode && !viewModel.isSearching {
+            } else if viewModel.isTreeMode && !viewModel.isSearching && !viewModel.isRecentsMode {
                 SessionTreeView(
                     viewModel: viewModel,
                     connectionStore: connectionStore,
@@ -171,7 +176,10 @@ public struct SessionListView: View {
                 )
             } else {
                 let ordered = viewModel.orderedRows
-                let activeCount = viewModel.activeRows.count
+                // The `c` view lists closed rows only, so there's no active
+                // half to bucket by age. Reading `activeRows.count` there would
+                // date-stamp the first N closed rows with the live buckets.
+                let activeCount = viewModel.isRecentsMode ? 0 : viewModel.activeRows.count
                 // Compute once per body pass — `hasMultipleAgentTypes`
                 // walks `orderedRows`; lifting it out of the per-row
                 // ViewBuilder avoids O(rows) walks per layout.
@@ -197,6 +205,8 @@ public struct SessionListView: View {
                                     }
                                 } else if index == activeCount && activeCount > 0 {
                                     sectionHeader("Recent")
+                                } else if index == 0 && viewModel.isRecentsMode {
+                                    sectionHeader("Closed · enter to reopen")
                                 }
 
                                 let isSelected = index == viewModel.selectedIndex
@@ -220,7 +230,7 @@ public struct SessionListView: View {
                                     .id(rowViewIdentity(for: row))
                             }
 
-                            if activeCount == 0 && !ordered.isEmpty {
+                            if activeCount == 0 && !ordered.isEmpty && !viewModel.isRecentsMode {
                                 sectionHeader("Recent")
                                     .padding(.top, -4) // adjust since ForEach won't insert it
                             }

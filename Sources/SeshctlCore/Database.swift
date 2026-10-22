@@ -657,6 +657,61 @@ public struct SeshctlDatabase: Sendable {
         }
     }
 
+    /// List closed sessions, newest first, one row per conversation.
+    ///
+    /// Backs the `c` closed-sessions view. It is deliberately separate from
+    /// `listSessions` for two reasons.
+    ///
+    /// First, the budget. `listSessions(limit: 50)` is shared by active and
+    /// closed rows, so a busy day of live sessions leaves almost no room for
+    /// history. The closed view needs its own limit.
+    ///
+    /// Second, the dedup. Resuming a conversation starts a fresh process, so
+    /// the session-start hook inserts a new row while the previous run's row
+    /// survives until the 30-day gc sweep. Collapsing here shows each
+    /// conversation once without deleting anything.
+    ///
+    /// A row with no conversation id partitions on its own primary key, so it
+    /// always survives — unless `reopenableOnly` is set. That drops rows with
+    /// no conversation id (nothing to hand to the agent's resume command)
+    /// *before* the limit, so they can't crowd resumable rows out of it.
+    ///
+    /// A conversation that is running again is excluded outright. Its closed
+    /// row describes the previous run of a session the user can already see in
+    /// the live list, so offering to reopen it would open a second copy of
+    /// something already on screen.
+    public func listRecentSessions(limit: Int = 100, reopenableOnly: Bool = false) throws -> [Session] {
+        let activeStatuses = [
+            SessionStatus.idle.rawValue,
+            SessionStatus.working.rawValue,
+            SessionStatus.waiting.rawValue,
+        ]
+        return try dbPool.read { db in
+            try Session.fetchAll(db, sql: """
+                SELECT * FROM (
+                    SELECT *, ROW_NUMBER() OVER (
+                        PARTITION BY COALESCE(conversation_id, id), tool
+                        ORDER BY updated_at DESC
+                    ) AS twin_rank
+                    FROM sessions
+                    WHERE status NOT IN (?, ?, ?)
+                      AND (? = 0 OR COALESCE(conversation_id, '') != '')
+                      AND NOT EXISTS (
+                          SELECT 1 FROM sessions AS live
+                          WHERE live.conversation_id IS NOT NULL
+                            AND live.conversation_id = sessions.conversation_id
+                            AND live.tool = sessions.tool
+                            AND live.status IN (?, ?, ?)
+                      )
+                )
+                WHERE twin_rank = 1
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """, arguments: StatementArguments(
+                    activeStatuses + [reopenableOnly] + activeStatuses + [limit]))
+        }
+    }
+
     /// Fetch a single session by ID.
     public func getSession(id: String) throws -> Session? {
         try dbPool.read { db in

@@ -251,6 +251,15 @@ Last matching record in the file wins. When Claude Code stopped writing the lega
 
 For how `bridgedLocalIds` fits alongside the other transcript-derived row signals (caching, pruning, the scanner pattern), see "Transcript-Derived Row Signals" below.
 
+## Closed-Sessions View (`c`)
+
+`c` swaps the live list for closed sessions (`SessionListViewModel.isRecentsMode`, rows from `closedRows`). Enter reopens through the normal `.inactiveSession` resume path; there is no separate restore action. Rules:
+
+- **Source:** `Database.listRecentSessions`, not `listSessions(limit: 50)`. It dedupes to the newest row per conversation at read time (nothing is deleted), hides conversations that are running again, and has its own limit. `recentSessions` is loaded only while the mode is on.
+- **Overrides, doesn't mutate:** `filteredRows` checks `isRecentsMode` before tree mode and search. Tree mode is suspended without writing the persisted `isTreeMode`, so `v` and the group-jump keys no-op in `c`.
+- **Ordering is plain recency,** not `sortedForDisplay`: the frozen order only snapshots the newest 50 `sessions`.
+- **Reset on every panel show** (`AppDelegate.showPanel`), and Esc/`q` leave the mode before they close the panel.
+
 ## Transcript-Derived Row Signals
 
 Four row signals are derived by scanning the live JSONL transcript on each ~2s refresh: `bridgedLocalIds` (via `TranscriptBridgeScanner` → `transcriptBridgeCache`), `awaySummariesById` (via `TranscriptAwaySummaryScanner` → `transcriptAwaySummaryCache`), `latestAssistantById` (via `TranscriptLatestAssistantScanner` → `transcriptLatestAssistantCache`), and `titlesById` (via `TranscriptTitleScanner` → `transcriptTitleCache`). All four live in `SessionListViewModel.refresh()`.

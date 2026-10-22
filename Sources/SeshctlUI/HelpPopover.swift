@@ -45,6 +45,7 @@ public struct HelpPopover: View {
 
             section("View") {
                 row("v", "toggle list / tree")
+                row("c", "closed sessions (enter reopens)")
                 row("r", "cycle source filter")
             }
 

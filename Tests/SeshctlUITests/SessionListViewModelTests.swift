@@ -1356,9 +1356,16 @@ struct SessionListViewModelTests {
     /// Poll until `condition()` is true or `timeout` elapses. Used by recall tests
     /// to wait for async debounce + Task continuations to land under heavy
     /// parallel @MainActor contention (a fixed sleep is flaky on loaded CI).
+    ///
+    /// The timeout is generous on purpose: polling returns the moment the
+    /// condition holds, so it costs nothing on a passing run. Swift Testing
+    /// starts ~1100 @MainActor tests at once, and every `Task.sleep` wake-up
+    /// here queues behind them. Measured on a quiet machine, these tests
+    /// already finish at 2.7–3.0s of wall time, so a 3s limit failed whenever
+    /// the machine had any extra load.
     @MainActor
     private func waitForRecall(
-        timeout: TimeInterval = 3.0,
+        timeout: TimeInterval = 15.0,
         _ condition: () -> Bool
     ) async {
         let start = Date()

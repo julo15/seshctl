@@ -335,6 +335,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.centerOnScreen()
         panel.makeKeyAndOrderFront(nil)
         viewModel?.exitSearch()
+        viewModel?.exitRecentsMode()
         viewModel?.applyInboxAwareResetIfNeeded()
         viewModel?.panelDidShow()
         viewModel?.resetSelection()
@@ -417,6 +418,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case (_, "/"):
             if vm.pendingKillSessionId == nil && !vm.pendingMarkAllRead && vm.pendingForkSessionId == nil {
                 vm.enterSearch()
+            }
+        // c — toggle the closed-sessions view (Enter reopens the selected row)
+        case (_, "c"):
+            if vm.pendingKillSessionId == nil && !vm.pendingMarkAllRead && vm.pendingForkSessionId == nil {
+                vm.toggleRecentsMode()
             }
         // v — toggle list/tree view mode
         case (_, "v"):
@@ -518,7 +524,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 vm.cancelMarkAllRead()
             } else if vm.pendingForkSessionId != nil {
                 vm.cancelFork()
-            } else {
+            } else if !vm.backOutOfRecentsMode() {
+                // Backing out of `c` takes one press, like cancelling a pending
+                // confirmation, before the same key closes the panel.
                 dismissPanel()
             }
         default:
