@@ -423,14 +423,57 @@ public final class SessionListViewModel: ObservableObject {
     /// fields match as before — this is the local-only slice.
     public var localFilteredSessions: [Session] {
         guard isSearching, !searchQuery.isEmpty else { return sessions }
-        let query = searchQuery.lowercased()
-        return sessions.filter { session in
-            session.directory.lowercased().contains(query)
-                || (session.gitRepoName?.lowercased().contains(query) ?? false)
-                || (session.gitBranch?.lowercased().contains(query) ?? false)
-                || (session.lastAsk?.lowercased().contains(query) ?? false)
-                || (session.lastReply?.lowercased().contains(query) ?? false)
-                || session.tool.rawValue.lowercased().contains(query)
+        return sessions.filter {
+            Self.matches(session: $0, title: titlesById[$0.id], query: searchQuery)
+        }
+    }
+
+    /// Split a query into lowercased tokens on whitespace.
+    ///
+    /// Tokens are ANDed across the row, fields are ORed within a token. A
+    /// single `contains` over the whole query only matched when every word
+    /// appeared consecutively in one field, so `sesh dedup` found nothing.
+    /// Tokenized, it finds a `seshctl` row titled "Session deduplication
+    /// verification".
+    nonisolated static func searchTokens(_ query: String) -> [String] {
+        query.lowercased().split(whereSeparator: \.isWhitespace).map(String.init)
+    }
+
+    /// Static and `nonisolated` so the match rule tests without a view model,
+    /// database, clock, or MainActor hop. An empty query matches everything.
+    /// `title` comes from `titlesById`, since titles live outside `Session`.
+    nonisolated static func matches(session: Session, title: String? = nil, query: String) -> Bool {
+        let tokens = searchTokens(query)
+        guard !tokens.isEmpty else { return true }
+        let fields: [String?] = [
+            session.directory,
+            session.gitRepoName,
+            session.gitBranch,
+            session.lastAsk,
+            session.lastReply,
+            title,
+            session.tool.rawValue,
+        ]
+        let haystack = fields.compactMap { $0?.lowercased() }
+        return tokens.allSatisfy { token in
+            haystack.contains { $0.contains(token) }
+        }
+    }
+
+    /// Remote counterpart of `matches(session:query:)`. Same token rule over
+    /// the three fields a cloud row carries, so one query can't behave
+    /// differently on the two halves of a search.
+    nonisolated static func matches(remote: RemoteClaudeCodeSession, query: String) -> Bool {
+        let tokens = searchTokens(query)
+        guard !tokens.isEmpty else { return true }
+        let fields: [String?] = [
+            remote.title,
+            DisplayRow.repoShortName(from: remote.repoUrl),
+            remote.branches.joined(separator: " "),
+        ]
+        let haystack = fields.compactMap { $0?.lowercased() }
+        return tokens.allSatisfy { token in
+            haystack.contains { $0.contains(token) }
         }
     }
 
@@ -470,13 +513,7 @@ public final class SessionListViewModel: ObservableObject {
     /// `title`, derived repo short name, and `branches[]`.
     private var filteredRemoteSessions: [RemoteClaudeCodeSession] {
         guard isSearching, !searchQuery.isEmpty else { return remoteSessions }
-        let query = searchQuery.lowercased()
-        return remoteSessions.filter { remote in
-            let titleHit = remote.title.lowercased().contains(query)
-            let repoHit = (DisplayRow.repoShortName(from: remote.repoUrl)?.lowercased().contains(query)) ?? false
-            let branchesHit = remote.branches.joined(separator: " ").lowercased().contains(query)
-            return titleHit || repoHit || branchesHit
-        }
+        return remoteSessions.filter { Self.matches(remote: $0, query: searchQuery) }
     }
 
     /// Active rows: local `isActive == true` sessions plus remote sessions
