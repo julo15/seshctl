@@ -58,6 +58,9 @@ public final class SessionListViewModel: ObservableObject {
     /// `refresh()` so the @Published mutations from refresh land in the same
     /// body-recomputation pass with the fresh timestamp visible.
     @Published public private(set) var lastPanelShownAt: Date = .distantPast
+    /// Recency rank (and active state) of every row at the moment the panel
+    /// opened; `nil` while hidden. See `sortedForDisplay(_:)`.
+    private var frozenOrder: [String: (rank: Int, wasActive: Bool)]?
     /// Latest in-progress assistant text per local Claude session, keyed by
     /// `session.id`. Sessions without a current assistant-text turn are
     /// absent (the row falls through to its existing preview chain).
@@ -221,7 +224,9 @@ public final class SessionListViewModel: ObservableObject {
         // refresh's @Published mutations sees the fresh `lastPanelShownAt`
         // and suppresses the reorder spring.
         lastPanelShownAt = Date()
+        frozenOrder = nil
         refresh()
+        freezeOrder()
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) {
             [weak self] _ in
@@ -235,6 +240,7 @@ public final class SessionListViewModel: ObservableObject {
     public func panelDidHide() {
         timer?.invalidate()
         timer = nil
+        frozenOrder = nil
         pendingKillSessionId = nil
         pendingForkSessionId = nil
         pendingMarkAllRead = false
@@ -486,7 +492,7 @@ public final class SessionListViewModel: ObservableObject {
                 .filter { !bridgedRemoteIds.contains($0.id) }
                 .map { .remote($0) }
             : []
-        return (localActive + remoteActive).sorted { $0.sortTimestamp > $1.sortTimestamp }
+        return sortedForDisplay(localActive + remoteActive)
     }
 
     /// Recent rows: local inactive sessions plus remote sessions not
@@ -501,7 +507,40 @@ public final class SessionListViewModel: ObservableObject {
                 .filter { !bridgedRemoteIds.contains($0.id) }
                 .map { .remote($0) }
             : []
-        return (localRecent + remoteRecent).sorted { $0.sortTimestamp > $1.sortTimestamp }
+        return sortedForDisplay(localRecent + remoteRecent)
+    }
+
+    /// Sort rows newest-first — unless the panel is visible, in which case
+    /// rows keep the order they had when it opened (`frozenOrder`). A row
+    /// jumping to the top on every hook update moves the click target out
+    /// from under the cursor, so recency only re-sorts on the next open.
+    /// Rows the snapshot hasn't seen in their current active/recent state
+    /// (a new session, or one that just resumed) go on top, newest-first.
+    private func sortedForDisplay(_ rows: [DisplayRow]) -> [DisplayRow] {
+        let byRecency = rows.sorted { $0.sortTimestamp > $1.sortTimestamp }
+        guard let frozenOrder else { return byRecency }
+        func rank(_ row: DisplayRow) -> Int? {
+            guard let entry = frozenOrder[row.id], entry.wasActive == row.isActive else { return nil }
+            return entry.rank
+        }
+        let unseen = byRecency.filter { rank($0) == nil }
+        let seen = byRecency.compactMap { row in rank(row).map { (row, $0) } }
+            .sorted { $0.1 < $1.1 }
+            .map(\.0)
+        return unseen + seen
+    }
+
+    /// Snapshot every row's recency rank, across both sources and ignoring
+    /// search and source filters, so any subset sorted by these ranks keeps
+    /// its relative order from when the panel opened.
+    private func freezeOrder() {
+        let all = sessions.map(DisplayRow.local) + remoteSessions.map(DisplayRow.remote)
+        let byRecency = all.sorted { $0.sortTimestamp > $1.sortTimestamp }
+        var order: [String: (rank: Int, wasActive: Bool)] = [:]
+        for (index, row) in byRecency.enumerated() where order[row.id] == nil {
+            order[row.id] = (index, row.isActive)
+        }
+        frozenOrder = order
     }
 
     /// The view-facing filtered + mode-aware row list. Tree mode and the
@@ -718,7 +757,7 @@ public final class SessionListViewModel: ObservableObject {
             return false
         }
         return keys.map { key in
-            let sorted = (buckets[key] ?? []).sorted { $0.sortTimestamp > $1.sortTimestamp }
+            let sorted = sortedForDisplay(buckets[key] ?? [])
             return SessionGroup(name: key.name, isRepo: key.isRepo, rows: sorted)
         }
     }

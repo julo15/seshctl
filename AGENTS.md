@@ -212,6 +212,10 @@ The local session status comes entirely from `hooks/claude/*.sh`:
 
 **Debugging a wrong dot:** `grep <session_id> ~/.local/share/seshctl/logs/hooks.log` shows the event sequence. Hook updates run in the background (`&`), so two events in the same second can land in either order.
 
+## Row Order
+
+Rows sort newest-first, but only when the panel opens. `panelDidShow()` snapshots every row's recency rank into `frozenOrder`, and `sortedForDisplay(_:)` — the one sort behind `activeRows`, `recentRows` and the tree groups — keeps that order until `panelDidHide()` clears it. Without this, every hook update jumped a row to the top and moved the click target out from under the cursor. Rows the snapshot hasn't seen in their current active/recent state (a new session, or one that just resumed) go on top. Route any new row sort through `sortedForDisplay`, not a bare `sortTimestamp` sort.
+
 ## Status Dots
 
 `StatusKind` (`Sources/SeshctlUI/StatusKind.swift`) is the single source of truth for the row's status dot: color, animation (`isPulsing` for working, `isPinging` for waiting), `isHollow` (completed/offline), and age dimming via `color(age:)` (neutral gray kinds fade for yesterday / older). Both `SessionRowView` and `RemoteClaudeCodeRowView` render it through `AnimatedStatusDot`, passing the row's `SessionAgeDisplay.bucket`. Don't hardcode dot colors in a row view.
