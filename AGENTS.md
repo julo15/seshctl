@@ -184,6 +184,14 @@ Surfaces to touch when adding a new tool:
 - The CLI and Database are tool-agnostic except for the `SessionTool` raw string. Don't branch on `tool` in `seshctl-cli` unless it's genuinely tool-specific (e.g. the Cursor lazy-create path in `Update`/`End` keyed on `--conversation-id`).
 - Exhaustive `switch`es over `SessionTool` are the safety net: never add `default:` cases.
 
+### Codex gates hooks behind a trust prompt
+
+Codex (verified against codex-cli 0.145.0) will not run a hook until the user has trusted it. On the next launch after seshctl installs or changes its hooks, Codex shows a **Hooks need review** screen — `Trust all and continue` / `Review hooks` / `Continue without trusting (hooks won't run)` — and until the user accepts, Codex sessions silently never reach seshctl. There is a `--dangerously-bypass-hook-trust` flag; don't reach for it on the user's behalf.
+
+Trust is content-sensitive: Codex distinguishes `New hook - review required` from `Modified since last trusted - review required`. `writeHookScripts` rewrites every deployed script on every install, so **any change to `hookGuardBlock` re-triggers the prompt for every Codex user**, not just changes to `hooks/codex/*.sh`. Budget for that when touching the guard.
+
+Codex's event set is PreToolUse, PermissionRequest, PostToolUse, PreCompact, PostCompact, SessionStart, SessionEnd, SubagentStart, SubagentStop, Stop, UserPromptSubmit. seshctl registers SessionStart, UserPromptSubmit, Stop, and SessionEnd.
+
 ## Claude Hook Status Transitions
 
 The local session status comes entirely from `hooks/claude/*.sh`:
