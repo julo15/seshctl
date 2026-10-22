@@ -429,6 +429,23 @@ public struct SeshctlDatabase: Sendable {
         }
     }
 
+    /// End an active session by row id. For rows with no live process to
+    /// fire an end hook — the kill flow uses it when there's nothing to
+    /// signal. No-op if the row is already ended.
+    public func endSession(id: String, status: SessionStatus = .completed) throws {
+        try dbPool.write { db in
+            if var session = try Session
+                .filter(Column("id") == id)
+                .filter(Self.activeStatusFilter)
+                .fetchOne(db)
+            {
+                session.status = status
+                session.updatedAt = Date()
+                try session.update(db)
+            }
+        }
+    }
+
     // MARK: - Conversation-ID-Keyed Session Operations
     //
     // These mirror the pid-keyed methods above but match on `conversation_id`
@@ -660,9 +677,7 @@ public struct SeshctlDatabase: Sendable {
     /// Fast check: mark active sessions with dead PIDs as stale.
     /// Intended to run every poll cycle for responsive cleanup.
     @discardableResult
-    public func reapStaleSessions(isProcessAlive: (Int) -> Bool = { pid in
-        kill(Int32(pid), 0) == 0
-    }) throws -> Int {
+    public func reapStaleSessions(isProcessAlive: (Int) -> Bool = ProcessLiveness.isAlive) throws -> Int {
         try dbPool.write { db in
             let activeSessions = try Session
                 .filter(Self.activeStatusFilter)
@@ -684,9 +699,7 @@ public struct SeshctlDatabase: Sendable {
     /// Garbage collect: delete old completed sessions and mark stale ones.
     /// Returns (deleted, marked_stale) counts.
     @discardableResult
-    public func gc(olderThan: TimeInterval = 30 * 24 * 3600, isProcessAlive: (Int) -> Bool = { pid in
-        kill(Int32(pid), 0) == 0
-    }) throws -> (deleted: Int, markedStale: Int) {
+    public func gc(olderThan: TimeInterval = 30 * 24 * 3600, isProcessAlive: (Int) -> Bool = ProcessLiveness.isAlive) throws -> (deleted: Int, markedStale: Int) {
         try dbPool.write { db in
             let cutoff = Date().addingTimeInterval(-olderThan)
 

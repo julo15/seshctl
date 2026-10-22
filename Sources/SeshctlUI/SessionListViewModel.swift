@@ -15,6 +15,9 @@ public final class SessionListViewModel: ObservableObject {
     @Published public var searchQuery: String = ""
     @Published public var isNavigatingSearch: Bool = false
     @Published public var pendingKillSessionId: String?
+    /// True when the pending kill targets a row whose process is already gone,
+    /// so confirming removes the row instead of signalling anything.
+    @Published public private(set) var pendingKillRemovesRow: Bool = false
     @Published public var pendingForkSessionId: String?
     @Published public var pendingMarkAllRead: Bool = false
     @Published public var showingHelp: Bool = false
@@ -1127,31 +1130,45 @@ public final class SessionListViewModel: ObservableObject {
 
     // MARK: - Kill process
 
+    /// Liveness check for the kill flow. Injectable so tests never depend on
+    /// (or signal) real PIDs.
+    var isProcessAlive: (Int) -> Bool = ProcessLiveness.isAlive
+
     public func requestKill() {
         // Cloud rows: silent no-op with a one-time toast flag flip.
         if case .remote = selectedRow {
             showedCloudKillToast = true
             return
         }
-        guard let session = selectedSession, session.isActive, session.pid != nil else { return }
+        guard let session = selectedSession, session.isActive else { return }
         pendingKillSessionId = session.id
+        pendingKillRemovesRow = !hasLiveProcess(session)
     }
 
     public func confirmKill() {
+        defer { pendingKillSessionId = nil; pendingKillRemovesRow = false }
         guard let killId = pendingKillSessionId,
               let session = sessions.first(where: { $0.id == killId }),
-              session.isActive,
-              let pid = session.pid else {
-            pendingKillSessionId = nil
-            return
+              session.isActive else { return }
+        if let pid = session.pid, isProcessAlive(pid) {
+            kill(Int32(pid), SIGTERM)
+        } else {
+            // Nothing left to signal: the process exited without its end hook
+            // firing, or no PID was ever recorded. The reaper only ends rows
+            // with a dead PID, so a PID-less row would stay active forever.
+            try? database.endSession(id: session.id, status: .stale)
         }
-        kill(Int32(pid), SIGTERM)
-        pendingKillSessionId = nil
         refresh()
     }
 
     public func cancelKill() {
         pendingKillSessionId = nil
+        pendingKillRemovesRow = false
+    }
+
+    private func hasLiveProcess(_ session: Session) -> Bool {
+        guard let pid = session.pid else { return false }
+        return isProcessAlive(pid)
     }
 
     public func requestFork() {
