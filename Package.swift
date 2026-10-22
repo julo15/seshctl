@@ -87,5 +87,9 @@ let package = Package(
             name: "SeshctlAppTests",
             dependencies: ["SeshctlApp"]
         ),
+        .testTarget(
+            name: "SeshctlCLITests",
+            dependencies: ["seshctl-cli"]
+        ),
     ]
 )

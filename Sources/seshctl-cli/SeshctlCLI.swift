@@ -59,9 +59,8 @@ struct Start: ParsableCommand {
     var windowId: String?
 
     func run() throws {
-        // Require exactly one matcher. Ambiguous when both are set (which is
-        // the matcher? which is the value to write?). Mirrors the Update/End
-        // validation pattern.
+        // Require at least one stable identifier. When both are present, PID
+        // is the matcher and conversation id is metadata written onto the row.
         switch (pid, conversationId) {
         case (nil, nil):
             throw ValidationError("Provide exactly one of --pid or --conversation-id.")
@@ -233,16 +232,7 @@ struct Update: ParsableCommand {
     var skipGit = false
 
     func run() throws {
-        // Require exactly one matcher. Ambiguous when both are set (which is
-        // the matcher? which is the value to write?).
-        switch (pid, conversationId) {
-        case (nil, nil):
-            throw ValidationError("Provide exactly one of --pid or --conversation-id.")
-        case (.some, .some):
-            throw ValidationError("Provide exactly one of --pid or --conversation-id, not both.")
-        default:
-            break
-        }
+        try Self.validateMatchers(pid: pid, conversationId: conversationId)
 
         let db = try openDatabase()
 
@@ -266,6 +256,19 @@ struct Update: ParsableCommand {
             }
 
             try db.updateSession(conversationId: conversationId, tool: tool, ask: ask, reply: reply, status: status, transcriptPath: transcriptPath, directory: dir, gitRepoName: gitRepoName, gitBranch: gitBranch, hostAppBundleId: hostAppBundleId, hostAppName: hostAppName)
+        }
+    }
+
+    static func validateMatchers(pid: Int?, conversationId: String?) throws {
+        switch (pid, conversationId) {
+        case (nil, nil):
+            throw ValidationError("Provide exactly one of --pid or --conversation-id.")
+        case (.some, .some):
+            // PID is the matcher; conversation id is metadata written onto
+            // the matched row. Codex sends both on UserPromptSubmit.
+            break
+        default:
+            break
         }
     }
 }
