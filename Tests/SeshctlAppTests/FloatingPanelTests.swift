@@ -225,12 +225,14 @@ final class FloatingPanelTests: XCTestCase {
     }
 
     func test_onlyAPinnedPlacedPanelKeepsItsPlacement() {
-        XCTAssertTrue(FloatingPanel.keepsPlacement(keepOpen: true, hasPlacement: true))
-        XCTAssertFalse(FloatingPanel.keepsPlacement(keepOpen: true, hasPlacement: false),
+        XCTAssertTrue(FloatingPanel.keepsPlacement(keepOpen: true, hasPlacement: true, isOnScreen: true))
+        XCTAssertFalse(FloatingPanel.keepsPlacement(keepOpen: true, hasPlacement: false, isOnScreen: true),
                        "A pinned panel with nowhere saved still needs centering once.")
-        XCTAssertFalse(FloatingPanel.keepsPlacement(keepOpen: false, hasPlacement: true),
+        XCTAssertFalse(FloatingPanel.keepsPlacement(keepOpen: true, hasPlacement: true, isOnScreen: false),
+                       "A panel parked on a disconnected display must come back on screen.")
+        XCTAssertFalse(FloatingPanel.keepsPlacement(keepOpen: false, hasPlacement: true, isOnScreen: true),
                        "The transient panel follows the active screen, like Spotlight.")
-        XCTAssertFalse(FloatingPanel.keepsPlacement(keepOpen: false, hasPlacement: false))
+        XCTAssertFalse(FloatingPanel.keepsPlacement(keepOpen: false, hasPlacement: false, isOnScreen: true))
     }
 
     func test_transientPanelRecentersEvenAfterBeingMoved() throws {

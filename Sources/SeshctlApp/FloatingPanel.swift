@@ -40,10 +40,10 @@ final class FloatingPanel: NSPanel {
     /// and the titlebar is hidden so there's no chrome to grab on a tiny panel.
     static let minPanelSize = NSSize(width: 520, height: 320)
 
-    /// AppKit autosave slot for the panel frame. Position is remembered in both
-    /// modes: a user who drags the panel to a second monitor must get it back
-    /// there on the next show, not yanked to whatever `NSScreen.main` happens
-    /// to be at the time.
+    /// AppKit autosave slot for the panel frame. Size is remembered in both
+    /// modes; position only matters to a kept-open panel, which must come back
+    /// on the monitor it was parked on rather than whatever `NSScreen.main`
+    /// happens to be (see `centerOnScreen()`).
     static let frameAutosaveName = "SeshctlSessionPanel"
 
     var onKeyDown: ((UInt16, String?, NSEvent.ModifierFlags) -> Void)?
@@ -53,7 +53,7 @@ final class FloatingPanel: NSPanel {
     /// focus no longer dismisses it, and it sits at `.normal` level so other
     /// windows can cover it. Drives the "Keep panel open" setting
     /// (`AppearanceDefaults.keepPanelOpenKey`); apply changes through
-    /// `setKeepOpen(_:)` so the window level moves with it.
+    /// `setWindowMode(keepOpen:alwaysInFront:)` so the window level moves with it.
     private(set) var keepOpen = false
 
     /// Whether a pinned panel keeps the `.floating` always-on-top level. Drives
@@ -173,9 +173,11 @@ final class FloatingPanel: NSPanel {
     }
 
     /// Whether a show should leave the panel where it is. Pure + static so the
-    /// rule is unit-testable without a live window.
-    static func keepsPlacement(keepOpen: Bool, hasPlacement: Bool) -> Bool {
-        keepOpen && hasPlacement
+    /// rule is unit-testable without a live window. A placement on a display
+    /// that's since been disconnected doesn't count — keeping it would show
+    /// the panel off every screen.
+    static func keepsPlacement(keepOpen: Bool, hasPlacement: Bool, isOnScreen: Bool) -> Bool {
+        keepOpen && hasPlacement && isOnScreen
     }
 
     /// Apply both panel settings at once. They jointly determine the window
@@ -211,7 +213,8 @@ final class FloatingPanel: NSPanel {
     /// monitor back to the active screen. A transient panel always re-centers,
     /// like Spotlight, so it follows you across displays.
     func centerOnScreen() {
-        guard !Self.keepsPlacement(keepOpen: keepOpen, hasPlacement: hasPlacement) else { return }
+        let onScreen = NSScreen.screens.contains { $0.visibleFrame.intersects(frame) }
+        guard !Self.keepsPlacement(keepOpen: keepOpen, hasPlacement: hasPlacement, isOnScreen: onScreen) else { return }
         guard let screen = NSScreen.main else { return }
         let screenFrame = screen.visibleFrame
         let x = screenFrame.midX - frame.width / 2

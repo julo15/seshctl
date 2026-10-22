@@ -40,11 +40,12 @@ public enum AppearanceDefaults {
     /// behaving like a Spotlight overlay: it no longer dismisses itself when it
     /// loses key focus, and it drops from `.floating` to `.normal` window level
     /// so other windows can sit above it. Intended for parking the panel on a
-    /// spare monitor as a always-visible dashboard.
+    /// spare monitor as an always-visible dashboard. While on, the app also
+    /// gets a Dock icon and Cmd+Tab entry (`AppDelegate.activationPolicy`).
     ///
-    /// Panel *position* is persisted independently of this toggle (see
-    /// `FloatingPanel.frameAutosaveName`) — a panel the user has moved is
-    /// restored where they left it in either mode.
+    /// Size persists in both modes (`FloatingPanel.frameAutosaveName`), but
+    /// only a kept-open panel keeps its position — a transient panel
+    /// re-centers on the active screen every time it's shown.
     public static let keepPanelOpenKey = "seshctl.keepPanelOpen"
 
     /// Default — off, preserving the Spotlight-style transient panel that the
