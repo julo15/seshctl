@@ -46,11 +46,11 @@ struct ClaudeLogoShape: Shape {
     }
 }
 
-/// Minimal SVG path-data parser. Handles only the commands appearing in
-/// `ClaudeLogoShape.pathData` — adding new commands requires extending
-/// the `switch` below. Tokenization tolerates the compact SVG style where
+/// Minimal SVG path-data parser shared by `ClaudeLogoShape` and
+/// `CodexLogoShape`. Handles only the commands appearing in their path
+/// data — adding new commands requires extending the `switch` below. Tokenization tolerates the compact SVG style where
 /// numbers run together with no whitespace (e.g. `19.7-11`, `.3-1`).
-private enum SVGPathParser {
+enum SVGPathParser {
     static func parse(_ d: String, transform: (CGPoint) -> CGPoint) -> Path {
         var path = Path()
         let tokens = tokenize(d)

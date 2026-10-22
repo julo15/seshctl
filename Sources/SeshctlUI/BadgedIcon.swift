@@ -55,7 +55,7 @@ struct BadgedIcon: View {
 }
 
 /// Private inner view rendering the colored circle + glyph (monogram
-/// letter or Claude mark). Kept inside `BadgedIcon.swift` because it
+/// letter or vector mark). Kept inside `BadgedIcon.swift` because it
 /// has no use outside this composite.
 private struct BadgeView: View {
     let spec: AgentBadgeSpec
@@ -73,11 +73,17 @@ private struct BadgeView: View {
             case .letter(let s):
                 Text(s)
                     .font(.system(size: size * 0.7, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(spec.glyphColor)
             case .claudeMark:
                 ClaudeLogoShape()
-                    .fill(Color.white)
-                    .padding(size * 0.18)
+                    .fill(spec.glyphColor)
+                    .padding(size * 0.14)
+            case .codexMark:
+                // Nearly fills the disc: the `>_` cut-out is the part that
+                // identifies it, and it's barely 2pt tall at this size.
+                CodexLogoShape()
+                    .fill(spec.glyphColor, style: FillStyle(eoFill: true))
+                    .padding(size * 0.08)
             }
         }
         .frame(width: size, height: size)

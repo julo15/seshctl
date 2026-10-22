@@ -8,18 +8,26 @@ import Testing
 @Suite("AgentBadgeSpec.forAgent")
 struct AgentBadgeSpecForAgentTests {
 
-    @Test("claude → orange Claude mark")
+    @Test("claude → clay Claude mark")
     func claudeBadge() {
         let spec = AgentBadgeSpec.forAgent(.claude)
         #expect(spec.glyph == .claudeMark)
-        #expect(spec.color == .orange)
+        #expect(spec.color == AgentBadgeSpec.claudeColor)
     }
 
-    @Test("codex → green X")
+    @Test("codex → indigo Codex mark on white")
     func codexBadge() {
         let spec = AgentBadgeSpec.forAgent(.codex)
-        #expect(spec.glyph == .letter("X"))
-        #expect(spec.color == .green)
+        #expect(spec.glyph == .codexMark)
+        #expect(spec.color == .white)
+        #expect(spec.glyphColor == AgentBadgeSpec.codexColor)
+    }
+
+    @Test("Every other badge draws its glyph in white")
+    func otherGlyphsAreWhite() {
+        for tool: SessionTool in [.claude, .gemini, .cursor] {
+            #expect(AgentBadgeSpec.forAgent(tool).glyphColor == .white)
+        }
     }
 
     @Test("gemini → blue G")
@@ -34,7 +42,7 @@ struct AgentBadgeSpecForAgentTests {
     /// resolved.
     @Test("Equatable: identical specs compare equal; differing specs do not")
     func equatable() {
-        #expect(AgentBadgeSpec.forAgent(.claude) == AgentBadgeSpec(glyph: .claudeMark, color: .orange))
+        #expect(AgentBadgeSpec.forAgent(.claude) == AgentBadgeSpec(glyph: .claudeMark, color: AgentBadgeSpec.claudeColor))
         #expect(AgentBadgeSpec.forAgent(.claude) != AgentBadgeSpec.forAgent(.codex))
         // Glyph case is part of identity: a `.letter("C")` is not equal
         // to `.claudeMark`, even at the same color.
