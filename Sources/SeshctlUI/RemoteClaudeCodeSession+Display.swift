@@ -45,4 +45,13 @@ extension RemoteClaudeCodeSession {
     var branchDisplay: String? {
         branches.first
     }
+
+    /// Headline for the compact row layout: the claude.ai session title,
+    /// trimmed, falling back to the branch, then the repo name. Mirrors
+    /// `Session.compactHeadline(title:)`.
+    var compactHeadline: String {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
+        return branchDisplay.nonEmpty ?? senderDisplay
+    }
 }

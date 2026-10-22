@@ -31,13 +31,38 @@ public enum RemoteEventsParser {
     /// - the first assistant event has no `type == "text"` content block, or
     /// - the matched text is empty after trimming wrapper whitespace.
     public static func extractLatestAssistantText(eventsResponseData: Data) -> String? {
-        guard let parsed = try? JSONSerialization.jsonObject(with: eventsResponseData),
-              let root = parsed as? [String: Any]
-        else {
-            return nil
+        if case .text(let text) = scanPage(eventsResponseData: eventsResponseData) {
+            return text
         }
-        guard let events = root["data"] as? [[String: Any]], !events.isEmpty else {
-            return nil
+        return nil
+    }
+
+    /// Outcome of scanning one page of the events endpoint, newest-first.
+    public enum PageScan: Equatable, Sendable {
+        /// The newest assistant event on the page has this text.
+        case text(String)
+        /// The newest assistant event has no usable text (tool_use-only,
+        /// empty, or a malformed message). Paging stops: older assistant
+        /// text is stale once a newer turn has fired.
+        case assistantWithoutText
+        /// No assistant event on this page — only system / control events.
+        /// Remote-control sessions write a `system/init` event on every
+        /// reconnect, so a whole page of them is normal; the caller should
+        /// fetch the older page at `nextCursor` (nil = no older page).
+        case noAssistant(nextCursor: String?)
+        /// The body isn't an events response at all (schema drift).
+        case malformed
+    }
+
+    /// Scan one events page. See `PageScan` for the outcomes.
+    /// `extractLatestAssistantText(eventsResponseData:)` is the single-page
+    /// convenience; `RemoteClaudeCodeFetcher` pages with this.
+    public static func scanPage(eventsResponseData: Data) -> PageScan {
+        guard let parsed = try? JSONSerialization.jsonObject(with: eventsResponseData),
+              let root = parsed as? [String: Any],
+              let events = root["data"] as? [[String: Any]]
+        else {
+            return .malformed
         }
         // The events array is server-sorted newest-first (by `sequence_num`
         // descending), so the first assistant event we hit is the latest.
@@ -49,7 +74,7 @@ public enum RemoteEventsParser {
                   let message = payload["message"] as? [String: Any],
                   let content = message["content"] as? [[String: Any]]
             else {
-                return nil
+                return .assistantWithoutText
             }
             for block in content {
                 guard let blockType = block["type"] as? String, blockType == "text",
@@ -58,14 +83,26 @@ public enum RemoteEventsParser {
                     continue
                 }
                 let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                if trimmed.isEmpty { return nil }
-                return trimmed
+                return trimmed.isEmpty ? .assistantWithoutText : .text(trimmed)
             }
             // Newest assistant turn is tool_use-only (no text block). Deliberate:
             // older assistant text is stale once a newer turn has fired, so the
             // right UX is "no recap" rather than walking further back.
+            return .assistantWithoutText
+        }
+        return .noAssistant(nextCursor: cursorString(root["next_cursor"]))
+    }
+
+    /// `next_cursor` is a sequence number; accept it as a JSON string or
+    /// number so a server-side type change doesn't silently stop paging.
+    static func cursorString(_ value: Any?) -> String? {
+        switch value {
+        case let string as String:
+            return string.isEmpty ? nil : string
+        case let number as NSNumber where CFGetTypeID(number) != CFBooleanGetTypeID():
+            return number.stringValue
+        default:
             return nil
         }
-        return nil
     }
 }

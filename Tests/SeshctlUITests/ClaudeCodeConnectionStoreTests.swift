@@ -340,6 +340,38 @@ struct ClaudeCodeConnectionStoreAwaySummaryTests {
         #expect(calls == 1)
     }
 
+    @Test("a recap past the paging cap keeps the recap already shown")
+    func beyondPageCapKeepsRecap() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let id = "cse_beyond_cap"
+        let initialSession = makeRemoteSession(id: id, lastEventAt: Date(timeIntervalSince1970: 1_700_000_000))
+        let reconnectedSession = makeRemoteSession(id: id, lastEventAt: Date(timeIntervalSince1970: 1_700_000_999))
+
+        let fetcher = StubFetcher(result: .success([initialSession]))
+        await fetcher.setAssistantText(.success("Shipped it."), forSessionID: id)
+        let store = ClaudeCodeConnectionStore(
+            database: db,
+            fetcher: fetcher,
+            initialState: .connected(lastFetchAt: nil)
+        )
+        await store.fetchNow()
+        await store.awaitPendingAwaySummaryFetches()
+        #expect(store.remoteAwaySummariesById[id] == "Shipped it.")
+
+        // A reconnect advances lastEventAt and buries the reply past the cap.
+        await fetcher.setRefreshResult(.success([reconnectedSession]))
+        await fetcher.setAssistantText(.failure(RemoteRecapBeyondPageCap()), forSessionID: id)
+        await store.fetchNow()
+        await store.awaitPendingAwaySummaryFetches()
+        #expect(store.remoteAwaySummariesById[id] == "Shipped it.")
+
+        // Cached against the new lastEventAt: no repeat walk until it advances.
+        await store.fetchNow()
+        await store.awaitPendingAwaySummaryFetches()
+        let calls = await fetcher.assistantTextCallCount(for: id)
+        #expect(calls == 2)
+    }
+
     @Test("advancing lastEventAt re-dispatches an events fetch")
     func advancingLastEventAtRedispatches() async throws {
         let db = try SeshctlDatabase.temporary()

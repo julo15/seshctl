@@ -224,6 +224,41 @@ enum PreviewContent: Equatable {
     case awaySummary(String)
 }
 
+extension PreviewContent {
+    /// The preview as plain text for the compact row layout, with the
+    /// `You: ` prefix on user prompts (the stacked layouts add it in the
+    /// view). Compact rows style every case alike apart from italics, so
+    /// they only need the string.
+    var compactText: String {
+        switch self {
+        case .reply(let text), .statusHint(let text), .awaySummary(let text):
+            return text
+        case .userPrompt(let text):
+            return "You: " + text
+        }
+    }
+
+    /// Whether the compact layout italicizes this preview — the same cases
+    /// the stacked layouts italicize, so prompts and hints stay visibly
+    /// distinct from real assistant output.
+    var isItalic: Bool {
+        switch self {
+        case .reply, .awaySummary: return false
+        case .userPrompt, .statusHint: return true
+        }
+    }
+
+    /// `compactText` flattened to one line for the collapsed row, where a
+    /// newline would otherwise cut the preview off at its first line.
+    var compactSingleLine: String {
+        compactText
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+}
+
 /// Returns the trimmed content of `self` if it has any non-whitespace
 /// content; otherwise returns nil. Used to fold "nil", "" and whitespace-only
 /// strings into a single notion of "empty" for the preview-priority chain.
@@ -253,6 +288,32 @@ extension Session {
             return repoName
         }
         return (directory as NSString).lastPathComponent
+    }
+
+    /// Folder label for the compact row layout, rendered in the repo's accent
+    /// color. Unlike `senderDisplay` it names the checkout folder rather than
+    /// the git repo, so side-by-side clones (`whisperfast`, `whisperfast-2`)
+    /// read differently while still sharing the repo's color. Claude Code
+    /// worktrees (`<checkout>/.claude/worktrees/<name>`) collapse to their
+    /// owning checkout — the worktree name says nothing the title doesn't.
+    var folderLabel: String {
+        if let range = directory.range(of: "/.claude/worktrees/") {
+            return (String(directory[..<range.lowerBound]) as NSString).lastPathComponent
+        }
+        return (directory as NSString).lastPathComponent
+    }
+
+    /// Headline for the compact row layout: Claude Code's session title,
+    /// falling back to the git branch, then the folder label for tools and
+    /// sessions that have no title.
+    func compactHeadline(title: String?) -> String {
+        if let title = title.nonEmpty {
+            return title.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let branch = gitBranch.nonEmpty {
+            return branch
+        }
+        return folderLabel
     }
 
     /// Priority-chain preview content for the row's line-1 preview slot.

@@ -258,4 +258,83 @@ struct RemoteEventsParserTests {
         let result = RemoteEventsParser.extractLatestAssistantText(eventsResponseData: makeJSON(body))
         #expect(result == "Line one.\nLine two.\n\nLine four.")
     }
+
+    // MARK: - scanPage
+    //
+    // `scanPage` drives the fetcher's paging: a page of only system/control
+    // events (the common case for remote-control sessions, which write a
+    // `system/init` on every reconnect) must report `noAssistant` with the
+    // cursor so the fetcher can step to older events.
+
+    private func systemInit() -> [String: Any] {
+        ["event_type": "system", "payload": ["type": "system", "subtype": "init"] as [String: Any]]
+    }
+
+    @Test("scanPage: page of only system events reports noAssistant with the string cursor")
+    func scanPageSystemOnlyReportsCursor() {
+        let body = makeJSON(["data": [systemInit(), systemInit()], "next_cursor": "5024"])
+        #expect(RemoteEventsParser.scanPage(eventsResponseData: body) == .noAssistant(nextCursor: "5024"))
+        #expect(RemoteEventsParser.extractLatestAssistantText(eventsResponseData: body) == nil)
+    }
+
+    @Test("scanPage: numeric next_cursor is accepted")
+    func scanPageNumericCursor() {
+        let body = makeJSON(["data": [systemInit()], "next_cursor": 297])
+        #expect(RemoteEventsParser.scanPage(eventsResponseData: body) == .noAssistant(nextCursor: "297"))
+    }
+
+    @Test("scanPage: missing, null, or empty next_cursor means no older page")
+    func scanPageNoCursor() {
+        let missing = makeJSON(["data": [systemInit()]])
+        let null = makeJSON(["data": [systemInit()], "next_cursor": NSNull()])
+        let empty = makeJSON(["data": [systemInit()], "next_cursor": ""])
+        #expect(RemoteEventsParser.scanPage(eventsResponseData: missing) == .noAssistant(nextCursor: nil))
+        #expect(RemoteEventsParser.scanPage(eventsResponseData: null) == .noAssistant(nextCursor: nil))
+        #expect(RemoteEventsParser.scanPage(eventsResponseData: empty) == .noAssistant(nextCursor: nil))
+    }
+
+    @Test("scanPage: assistant text behind system events is found")
+    func scanPageFindsTextBehindSystemEvents() {
+        let body = makeJSON([
+            "data": [systemInit(), systemInit(), assistantEvent(content: [["type": "text", "text": " Done. "]])],
+            "next_cursor": "100",
+        ])
+        #expect(RemoteEventsParser.scanPage(eventsResponseData: body) == .text("Done."))
+    }
+
+    @Test("scanPage: tool_use-only newest assistant turn stops paging")
+    func scanPageToolUseOnlyStops() {
+        let body = makeJSON([
+            "data": [assistantEvent(content: [["type": "tool_use", "id": "t1", "name": "Bash", "input": [:] as [String: Any]]])],
+            "next_cursor": "100",
+        ])
+        #expect(RemoteEventsParser.scanPage(eventsResponseData: body) == .assistantWithoutText)
+    }
+
+    @Test("scanPage: non-events body is malformed")
+    func scanPageMalformed() {
+        #expect(RemoteEventsParser.scanPage(eventsResponseData: Data("not json".utf8)) == .malformed)
+        #expect(RemoteEventsParser.scanPage(eventsResponseData: makeJSON(["items": []])) == .malformed)
+    }
+
+    @Test("scanPage: an empty data array keeps paging")
+    func scanPageEmptyDataKeepsPaging() {
+        let body = makeJSON(["data": [] as [Any], "next_cursor": "12"])
+        #expect(RemoteEventsParser.scanPage(eventsResponseData: body) == .noAssistant(nextCursor: "12"))
+    }
+
+    @Test("scanPage: an assistant event with a malformed message stops paging")
+    func scanPageMalformedAssistantStops() {
+        let body = makeJSON([
+            "data": [systemInit(), ["event_type": "assistant", "payload": ["message": "not an object"] as [String: Any]]],
+            "next_cursor": "12",
+        ])
+        #expect(RemoteEventsParser.scanPage(eventsResponseData: body) == .assistantWithoutText)
+    }
+
+    @Test("scanPage: a boolean next_cursor is not a cursor")
+    func scanPageBooleanCursor() {
+        let body = makeJSON(["data": [systemInit()], "next_cursor": true])
+        #expect(RemoteEventsParser.scanPage(eventsResponseData: body) == .noAssistant(nextCursor: nil))
+    }
 }

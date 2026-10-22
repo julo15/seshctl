@@ -42,6 +42,15 @@ public enum RemoteClaudeCodeError: Error, Equatable {
     case transport(String)
 }
 
+/// Thrown by `fetchLatestAssistantText` when `maxEventPages` pages hold no
+/// assistant event but older pages remain. Distinct from a nil result ("this
+/// session has no reply"): the latest reply exists, just past the cap — so
+/// callers should keep any recap they already show rather than clear it.
+/// Reconnect noise pushes a reply past the cap without changing it.
+public struct RemoteRecapBeyondPageCap: Error, Equatable {
+    public init() {}
+}
+
 // MARK: - API response types
 
 /// Top-level shape of `GET /v1/code/sessions?limit=50`.
@@ -331,8 +340,9 @@ public actor RemoteClaudeCodeFetcher {
     }
 
     /// Fetch the latest assistant text for a single remote session by issuing
-    /// `GET /v1/code/sessions/<id>/events?limit=10` and running the response
-    /// body through `RemoteEventsParser.extractLatestAssistantText`.
+    /// paging `GET /v1/code/sessions/<id>/events?limit=10[&cursor=<next_cursor>]`
+    /// newest-first through `RemoteEventsParser.scanPage` until the newest
+    /// assistant event appears, for at most `maxEventPages` pages.
     ///
     /// Returns:
     /// - The trimmed text body of the most-recent assistant event's first
@@ -342,6 +352,10 @@ public actor RemoteClaudeCodeFetcher {
     ///   assistant turn was tool-call-only (no text block). This is a valid
     ///   "no recap available" signal — callers should fall through to the
     ///   default preview.
+    ///
+    /// Throws `RemoteRecapBeyondPageCap` when `maxEventPages` pages hold no
+    /// assistant event but older pages remain — callers should keep any
+    /// recap they already show.
     ///
     /// Throws on failure (not nil):
     /// - `.notConnected` if either `sessionKey` or `sessionKeyLC` cookies are
@@ -367,23 +381,66 @@ public actor RemoteClaudeCodeFetcher {
             .map { "\($0.name)=\($0.value)" }
             .joined(separator: "; ")
 
-        // 3. Build URL. Session ids are server-issued (`cse_<base32-ish>`) and
-        //    URL-path-safe in practice, but we defensively percent-encode via
-        //    URLComponents so anything unexpected can't break the URL.
+        // 3. Page backwards through the events, newest-first, until the
+        //    newest assistant event turns up. Remote-control sessions write a
+        //    `system/init` event on every reconnect, so the newest page is
+        //    often nothing but those; capped at `maxEventPages` because a
+        //    reconnect-heavy session can bury its last reply arbitrarily deep.
+        // Outcomes are logged at debug level (no message text) so a silent
+        // "remote rows never show a recap" regression is diagnosable with
+        // `log stream --level debug --predicate 'subsystem == "app.seshctl"'`.
+        var cursor: String?
+        for page in 1...Self.maxEventPages {
+            let data = try await fetchEventsPage(sessionId: sessionId, cursor: cursor, cookieHeader: cookieHeader)
+            switch RemoteEventsParser.scanPage(eventsResponseData: data) {
+            case .text(let text):
+                fetcherLogger.debug("events \(sessionId, privacy: .public): text on page \(page)")
+                return text
+            case .assistantWithoutText:
+                fetcherLogger.debug("events \(sessionId, privacy: .public): newest assistant turn has no text (page \(page))")
+                return nil
+            case .noAssistant(let next):
+                guard let next, next != cursor else {
+                    fetcherLogger.debug("events \(sessionId, privacy: .public): no assistant event in history (page \(page))")
+                    return nil
+                }
+                cursor = next
+            case .malformed:
+                // Tolerated rather than thrown: a malformed body is a "no
+                // recap available" outcome that self-heals on the next
+                // `last_event_at` advance.
+                if data.count > 200 {
+                    fetcherLogger.info("events response unparseable; possible schema drift (\(data.count, privacy: .public) bytes)")
+                }
+                return nil
+            }
+        }
+        fetcherLogger.debug("events \(sessionId, privacy: .public): no assistant event within \(Self.maxEventPages) pages")
+        throw RemoteRecapBeyondPageCap()
+    }
+
+    /// Fetch one page of `/v1/code/sessions/<id>/events`. `cursor` is the
+    /// previous page's `next_cursor`, passed back as `?cursor=` to step to
+    /// older events; nil fetches the newest page.
+    private func fetchEventsPage(sessionId: String, cursor: String?, cookieHeader: String) async throws -> Data {
+        // Session ids are server-issued (`cse_<base32-ish>`) and URL-path-safe
+        // in practice, but we defensively percent-encode via URLComponents so
+        // anything unexpected can't break the URL.
         var components = URLComponents()
         components.scheme = "https"
         components.host = "claude.ai"
         let encodedId = sessionId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionId
         components.path = "/v1/code/sessions/\(encodedId)/events"
         components.queryItems = [URLQueryItem(name: "limit", value: "10")]
+        if let cursor {
+            components.queryItems?.append(URLQueryItem(name: "cursor", value: cursor))
+        }
         guard let url = components.url else {
             throw RemoteClaudeCodeError.transport("failed to build events URL for session \(sessionId)")
         }
 
-        // 4. Build request via the shared header helper.
         let request = buildAuthedRequest(url: url, cookieHeader: cookieHeader)
 
-        // 5. Issue request and map transport errors.
         let data: Data
         let response: URLResponse
         do {
@@ -399,21 +456,17 @@ public actor RemoteClaudeCodeFetcher {
         }
         switch http.statusCode {
         case 200:
-            break
+            return data
         case 401:
             throw RemoteClaudeCodeError.needsReauth
         default:
             throw RemoteClaudeCodeError.http(http.statusCode)
         }
-
-        // 6. Hand the body to the parser. The parser tolerates malformed
-        //    JSON (returns nil) so we don't classify decode failures here as
-        //    errors — a malformed events body is a "no recap available" outcome
-        //    that self-heals on the next `last_event_at` advance.
-        let parsed = RemoteEventsParser.extractLatestAssistantText(eventsResponseData: data)
-        if parsed == nil && data.count > 200 {
-            fetcherLogger.info("events response parsed to nil; possible schema drift (\(data.count, privacy: .public) bytes)")
-        }
-        return parsed
     }
+
+    /// Most events pages `fetchLatestAssistantText` walks before giving up.
+    /// Each page is 10 events, and `system/init` events run ~9 KB apiece, so
+    /// the worst case is roughly 0.5 MB per session — paid only when the
+    /// session's `last_event_at` advances (the connection store caches by it).
+    static let maxEventPages = 5
 }
