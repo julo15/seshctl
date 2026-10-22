@@ -305,6 +305,60 @@ struct SessionListViewModelTests {
         #expect(vm.selectedSession?.id == second.id)
     }
 
+    @Test("rememberSelectedRow restores a remote row on reopen")
+    @MainActor
+    func rememberSelectedRowRestoresRemote() throws {
+        let db = try SeshctlDatabase.temporary()
+        try db.startSession(tool: .claude, directory: "/tmp/a", pid: 1)
+        try db.startSession(tool: .claude, directory: "/tmp/b", pid: 2)
+        try db.upsertRemoteClaudeCodeSessions([
+            makeRemoteForMarkRead(id: "cse_remember", lastEventAt: Date(timeIntervalSinceNow: -3600), unread: false)
+        ])
+
+        let vm = SessionListViewModel(database: db, enableGC: false, focusMemoryWindow: 60)
+        vm.refresh()
+
+        let remoteIndex = try #require(vm.orderedRows.firstIndex { $0.id == "cse_remember" })
+        #expect(remoteIndex != 0)
+        vm.selectedIndex = remoteIndex
+        vm.rememberSelectedRow()
+
+        vm.selectedIndex = 0
+        vm.resetSelection()
+        #expect(vm.selectedRow?.id == "cse_remember")
+    }
+
+    @Test("rememberSelectedRow restores a local row on reopen")
+    @MainActor
+    func rememberSelectedRowRestoresLocal() throws {
+        let db = try SeshctlDatabase.temporary()
+        for i in 1...3 { try db.startSession(tool: .claude, directory: "/tmp/\(i)", pid: i) }
+
+        let vm = SessionListViewModel(database: db, enableGC: false, focusMemoryWindow: 60)
+        vm.refresh()
+
+        vm.selectedIndex = 2
+        let rememberedId = vm.selectedRow?.id
+        vm.rememberSelectedRow()
+
+        vm.selectedIndex = 0
+        vm.resetSelection()
+        #expect(vm.selectedIndex == 2)
+        #expect(vm.selectedRow?.id == rememberedId)
+    }
+
+    @Test("rememberSelectedRow is a no-op with nothing selected")
+    @MainActor
+    func rememberSelectedRowEmpty() throws {
+        let db = try SeshctlDatabase.temporary()
+        let vm = SessionListViewModel(database: db, enableGC: false, focusMemoryWindow: 60)
+        vm.refresh()
+
+        vm.rememberSelectedRow()
+        vm.resetSelection()
+        #expect(vm.selectedIndex == -1)
+    }
+
     // MARK: - Kill Flow Tests
 
     @Test("requestKill sets pendingKillSessionId for active session")
