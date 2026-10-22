@@ -40,6 +40,23 @@ extension StatusKind {
         }
     }
 
+    /// Dot color dimmed by recency. Only the neutral gray kinds (idle,
+    /// completed, offline) fade — yesterday is dimmer than today, older is
+    /// dimmer still — so the eye lands on today's sessions first. Colored
+    /// kinds keep full strength at any age; they're signals, not history.
+    public func color(age: SessionAgeDisplay.AgeBucket) -> Color {
+        switch self {
+        case .idle, .completed, .offline:
+            switch age {
+            case .today: return color
+            case .yesterday: return color.opacity(0.6)
+            case .older: return color.opacity(0.35)
+            }
+        case .working, .waiting, .canceled, .stale:
+            return color
+        }
+    }
+
     /// Whether the dot renders as an outline instead of a filled circle.
     /// Separates ended sessions from idle ones, which share the gray color.
     public var isHollow: Bool { self == .completed || self == .offline }

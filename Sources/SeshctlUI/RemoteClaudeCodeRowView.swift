@@ -85,8 +85,8 @@ public struct RemoteClaudeCodeRowView: View {
 
     public var body: some View {
         ResultRowLayout(
-            status: { AnimatedStatusDot(kind: statusKind) },
-            ageDisplay: SessionAgeDisplay(timestamp: session.lastEventAt, yesterdayStyle: yesterdayStyle),
+            status: { AnimatedStatusDot(kind: statusKind, age: ageDisplay.bucket) },
+            ageDisplay: ageDisplay,
             content: { mainContent },
             hostApp: nil,
             // Remote sessions live on claude.ai, not in a macOS app — use a
@@ -129,6 +129,10 @@ public struct RemoteClaudeCodeRowView: View {
             return repoColor
         }
         return .orange
+    }
+
+    private var ageDisplay: SessionAgeDisplay {
+        SessionAgeDisplay(timestamp: session.lastEventAt, yesterdayStyle: yesterdayStyle)
     }
 
     private var statusKind: StatusKind {

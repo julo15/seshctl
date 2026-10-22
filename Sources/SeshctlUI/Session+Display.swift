@@ -172,7 +172,7 @@ public struct SessionAgeDisplay {
         }
     }
 
-    enum AgeBucket {
+    public enum AgeBucket: Sendable {
         case today, yesterday, older
         var displayName: String {
             switch self {

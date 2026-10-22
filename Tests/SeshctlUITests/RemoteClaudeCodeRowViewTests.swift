@@ -136,6 +136,22 @@ struct StatusKindColorTests {
         #expect(StatusKind.canceled.color == .red)
     }
 
+    @Test("neutral gray kinds dim with age")
+    func neutralKindsDimWithAge() {
+        for kind in [StatusKind.idle, .completed, .offline] {
+            #expect(kind.color(age: .today) == .gray)
+            #expect(kind.color(age: .yesterday) == .gray.opacity(0.6))
+            #expect(kind.color(age: .older) == .gray.opacity(0.35))
+        }
+    }
+
+    @Test("colored kinds ignore age")
+    func coloredKindsIgnoreAge() {
+        for kind in [StatusKind.working, .waiting, .canceled, .stale] {
+            #expect(kind.color(age: .older) == kind.color)
+        }
+    }
+
     @Test("only ended sessions render hollow")
     func onlyEndedSessionsAreHollow() {
         #expect(StatusKind.completed.isHollow)

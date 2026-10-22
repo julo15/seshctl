@@ -10,15 +10,18 @@ import SwiftUI
 /// the animations on status transitions.
 public struct AnimatedStatusDot: View {
     public let kind: StatusKind
+    /// Recency bucket of the session; dims the neutral gray kinds.
+    public let age: SessionAgeDisplay.AgeBucket
     @State private var isPulsing = false
     @State private var isBlinking = false
 
-    public init(kind: StatusKind) {
+    public init(kind: StatusKind, age: SessionAgeDisplay.AgeBucket = .today) {
         self.kind = kind
+        self.age = age
     }
 
     public var body: some View {
-        let color = kind.color
+        let color = kind.color(age: age)
         ZStack {
             if kind.isPulsing {
                 Circle()

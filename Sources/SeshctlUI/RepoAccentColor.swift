@@ -19,7 +19,7 @@ public func repoAccentColor(for name: String?) -> Color? {
 
 /// Curated 10-color dark-mode palette. Hues chosen to stay clear of
 /// existing color semantics on a session row:
-///   - status dots (orange/blue/green/red)   — AnimatedStatusDot, StatusKind
+///   - status dots (green/orange/gray/red)   — AnimatedStatusDot, StatusKind
 ///   - assistant role (#937CBF purple)       — RoleColors.assistantPurple
 ///   - unread pill (orange)                  — UnreadPill
 ///
