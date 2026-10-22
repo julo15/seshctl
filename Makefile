@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help build build-release bundle sign make-dmg dist appcast publish publish-docs publish-release install cert-setup run-app run-cli test test-core test-ui clean resolve kill-build install-vscode install-cursor uninstall
+.PHONY: help build build-release bundle icon sign make-dmg dist appcast publish publish-docs publish-release install cert-setup run-app run-cli test test-core test-ui clean resolve kill-build install-vscode install-cursor uninstall
 
 # Colors
 CYAN   := \033[36m
@@ -26,6 +26,7 @@ help:
 	@echo ""
 	@printf "  $(DIM)setup$(RESET)\n"
 	@printf "  $(CYAN)%-14s$(RESET) %s\n" "cert-setup" "Create the Seshctl Self-Signed code-signing identity (one-time)"
+	@printf "  $(CYAN)%-14s$(RESET) %s\n" "icon" "Regenerate Resources/AppIcon.icns from AppIcon.svg"
 	@printf "  $(CYAN)%-14s$(RESET) %s\n" "install-vscode" "Build + install VS Code extension"
 	@printf "  $(CYAN)%-14s$(RESET) %s\n" "install-cursor" "Build + install Cursor extension"
 	@echo ""
@@ -55,6 +56,11 @@ build-release:
 
 bundle:
 	bash scripts/build-app-bundle.sh
+
+# Not chained into `bundle` — the .icns is committed so a checkout without
+# librsvg can still build. Re-run only when Resources/AppIcon.svg changes.
+icon:
+	bash scripts/make-icon.sh
 
 sign:
 	bash scripts/sign-app.sh

@@ -475,7 +475,9 @@ public enum FirstLaunchInstaller {
             "session-start.sh", "user-prompt.sh", "pre-tool-use.sh",
             "post-tool-use.sh", "notification.sh", "stop.sh", "session-end.sh",
         ]
-        static let codexScriptNames = ["session-start.sh", "user-prompt.sh", "stop.sh"]
+        static let codexScriptNames = [
+            "session-start.sh", "user-prompt.sh", "stop.sh", "session-end.sh",
+        ]
         static let cursorScriptNames = [
             "session-start.sh", "user-prompt.sh", "after-agent-response.sh",
             "stop.sh", "session-end.sh",
@@ -501,11 +503,15 @@ public enum FirstLaunchInstaller {
             ]
         }
 
+        /// `SessionEnd` arrived in a later Codex release than the rest. Before
+        /// it existed, Codex rows relied on `Stop` plus stale-PID reaping and
+        /// left ghosts whenever a terminal was closed hard.
         static func codexEntries(for paths: Paths) -> [Entry] {
             [
                 .init(event: "SessionStart", matcher: "", command: "\(paths.codexHooksDir)/session-start.sh"),
                 .init(event: "UserPromptSubmit", matcher: "", command: "\(paths.codexHooksDir)/user-prompt.sh"),
                 .init(event: "Stop", matcher: "", command: "\(paths.codexHooksDir)/stop.sh"),
+                .init(event: "SessionEnd", matcher: "", command: "\(paths.codexHooksDir)/session-end.sh"),
             ]
         }
 

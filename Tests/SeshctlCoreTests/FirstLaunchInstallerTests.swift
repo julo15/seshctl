@@ -282,7 +282,7 @@ struct FirstLaunchInstallerTests {
         let codexSettings = try loadJSONObject(at: paths.codexSettingsFile)
         let codexHooks = codexSettings["hooks"] as? [String: Any]
         #expect(codexHooks != nil)
-        for event in ["SessionStart", "UserPromptSubmit", "Stop"] {
+        for event in ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"] {
             #expect(codexHooks?[event] != nil, "missing codex hook event: \(event)")
         }
 

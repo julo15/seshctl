@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="aTile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3B2E6E"/>
+      <stop offset="55%" stop-color="#2A1F52"/>
+      <stop offset="100%" stop-color="#181233"/>
+    </linearGradient>
+    <linearGradient id="aLive" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7CF5C4"/>
+      <stop offset="100%" stop-color="#33C9E8"/>
+    </linearGradient>
+    <radialGradient id="aGlow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%" stop-color="#7CF5C4" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#7CF5C4" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1024" height="1024" rx="230" fill="url(#aTile)"/>
+  <rect width="1024" height="1024" rx="230" fill="none" stroke="#ffffff" stroke-opacity="0.10" stroke-width="6"/>
+
+  <!-- glow behind the live row -->
+  <ellipse cx="512" cy="742" rx="420" ry="190" fill="url(#aGlow)"/>
+
+  <!-- Three stacked session rows, back to front, the front one live.
+       Back-row opacities are deliberately high (0.32 / 0.55): at 32px in
+       Cmd+Tab anything dimmer sinks into the tile gradient and the stack
+       reads as a single bar. -->
+  <rect x="268" y="250" width="488" height="118" rx="59" fill="#ffffff" fill-opacity="0.32"/>
+  <rect x="222" y="418" width="580" height="128" rx="64" fill="#ffffff" fill-opacity="0.55"/>
+  <rect x="176" y="600" width="672" height="188" rx="94" fill="url(#aLive)"/>
+
+  <!-- Status dot on the live row. Sized to survive downscaling — at r=46 it
+       degraded to an indistinct speck at 32px. -->
+  <circle cx="298" cy="694" r="58" fill="#16233C"/>
+</svg>

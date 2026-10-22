@@ -27,6 +27,7 @@ Seshctl ships as a self-signed `.app` bundle in a DMG. There is exactly one inst
 | Target | What |
 |---|---|
 | `make bundle` | Assemble `dist/Seshctl.app` from SwiftPM build (no signing) |
+| `make icon` | Regenerate `Resources/AppIcon.icns` from `AppIcon.svg` (needs `rsvg-convert`) |
 | `make sign` | Sign `dist/Seshctl.app` with the self-signed cert |
 | `make make-dmg` | Create `dist/Seshctl-<VERSION>.dmg` |
 | `make dist` | Full pipeline: `bundle → sign → make-dmg` |
@@ -184,6 +185,14 @@ Surfaces to touch when adding a new tool:
 - The CLI and Database are tool-agnostic except for the `SessionTool` raw string. Don't branch on `tool` in `seshctl-cli` unless it's genuinely tool-specific (e.g. the Cursor lazy-create path in `Update`/`End` keyed on `--conversation-id`).
 - Exhaustive `switch`es over `SessionTool` are the safety net: never add `default:` cases.
 
+### Codex gates hooks behind a trust prompt
+
+Codex (verified against codex-cli 0.145.0) will not run a hook until the user has trusted it. On the next launch after seshctl installs or changes its hooks, Codex shows a **Hooks need review** screen — `Trust all and continue` / `Review hooks` / `Continue without trusting (hooks won't run)` — and until the user accepts, Codex sessions silently never reach seshctl. There is a `--dangerously-bypass-hook-trust` flag; don't reach for it on the user's behalf.
+
+Trust is content-sensitive: Codex distinguishes `New hook - review required` from `Modified since last trusted - review required`. `writeHookScripts` rewrites every deployed script on every install, so **any change to `hookGuardBlock` re-triggers the prompt for every Codex user**, not just changes to `hooks/codex/*.sh`. Budget for that when touching the guard.
+
+Codex's event set is PreToolUse, PermissionRequest, PostToolUse, PreCompact, PostCompact, SessionStart, SessionEnd, SubagentStart, SubagentStop, Stop, UserPromptSubmit. seshctl registers SessionStart, UserPromptSubmit, Stop, and SessionEnd.
+
 ## Claude Hook Status Transitions
 
 The local session status comes entirely from `hooks/claude/*.sh`:
@@ -254,6 +263,14 @@ For what `bridgedLocalIds` means and how `TranscriptBridgeScanner` derives it (j
 **Consumer-side collapse for the recap slot.** `awaySummariesById` and `latestAssistantById` both feed the row's `awaySummary:` slot via a single `??` expression at the row-construction sites in `SessionListView` and `SessionTreeView`: `viewModel.awaySummariesById[id] ?? viewModel.latestAssistantById[id]`. The display chain (`Session+Display.swift previewContent(awaySummary:)`) is unchanged. The two scanners are mutually exclusive in practice: `awaySummariesById[id]` is non-nil only when no user/assistant turn followed the recap, and `latestAssistantById[id]` is non-nil only when an assistant text turn is the most recent non-`away_summary` event. If both ever hold a value simultaneously (theoretical race), `away_summary` wins via `??`, preserving today's behavior.
 
 **To add a new transcript-derived signal:** add a sibling pure-Foundation scanner in `SeshctlCore`, mirror `transcriptAwaySummaryCache` / `cachedAwaySummary(for:)` / `pruneTranscriptAwaySummaryCache(keepingPaths:)` on `SessionListViewModel`, plumb a new `@Published` map keyed by `session.id`, and consume by lookup from the row view. Don't branch on `tool` outside the cached helper — the Claude-only guard sits inside `cachedAwaySummary(for:)` / `cachedLatestAssistant(for:)` so non-Claude tools never hit the filesystem.
+
+## App Icon
+
+`Resources/AppIcon.svg` is the source of truth. `scripts/make-icon.sh` renders it through `rsvg-convert` into a full iconset and runs `iconutil` to produce `Resources/AppIcon.icns`, which **is committed** so `make bundle` works on a machine without librsvg. Regenerate by re-running the script when the SVG changes; never hand-edit the `.icns`.
+
+`Info.plist`'s `CFBundleIconFile` names it and `scripts/build-app-bundle.sh` copies it to `Contents/Resources/`. All three have to agree — the app shipped with no icon at all for a while, which is why Cmd+Tab rendered a blank tile.
+
+The menu bar glyph is drawn programmatically in `AppDelegate.statusBarIcon()` rather than shipped as an asset: the bundle is assembled by a shell script, not Xcode, so there's no asset catalog for a multi-scale image. It's a template image, which keeps **only the alpha channel** — macOS discards the color and re-tints per light/dark menu bar. That constrains the art: the back rows recede via reduced alpha rather than a lighter color, and the status dot is punched out with an even-odd winding rule, because painting it in a background color would render as opaque black.
 
 ## Editor Integrations
 
