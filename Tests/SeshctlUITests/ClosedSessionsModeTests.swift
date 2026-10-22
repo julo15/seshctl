@@ -138,4 +138,139 @@ struct ClosedSessionsModeTests {
 
         #expect(Set(listedIds(vm)) == [live.id, closed.id])
     }
+
+    // MARK: - Esc / q
+
+    @Test("Esc backs out of c before the panel closes")
+    @MainActor
+    func backOutLeavesCFirst() throws {
+        let (db, _, _) = try makeDatabase()
+        let vm = makeViewModel(db)
+        vm.enterRecentsMode()
+
+        #expect(vm.backOutOfRecentsMode(), "first press leaves c")
+        #expect(!vm.isRecentsMode)
+        #expect(!vm.backOutOfRecentsMode(), "second press has nothing to back out of, so the panel closes")
+    }
+
+    // MARK: - Cloud rows
+
+    private func remote(id: String, connected: Bool) -> RemoteClaudeCodeSession {
+        RemoteClaudeCodeSession(
+            id: id,
+            title: "cloud \(id)",
+            model: "claude-opus-4-6[1m]",
+            repoUrl: nil,
+            branches: [],
+            status: "active",
+            workerStatus: "idle",
+            connectionStatus: connected ? "connected" : "disconnected",
+            lastEventAt: Date(),
+            createdAt: Date(),
+            unread: false
+        )
+    }
+
+    @MainActor
+    private func listedRemoteIds(_ vm: SessionListViewModel) -> [String] {
+        vm.orderedRows.compactMap { row in
+            if case .remote(let remote) = row { return remote.id }
+            return nil
+        }
+    }
+
+    @Test("c lists disconnected cloud sessions but never connected ones")
+    @MainActor
+    func cloudRowsOnlyWhenDisconnected() throws {
+        let (db, _, _) = try makeDatabase()
+        try db.upsertRemoteClaudeCodeSessions([remote(id: "live", connected: true), remote(id: "gone", connected: false)])
+        let vm = makeViewModel(db)
+
+        vm.enterRecentsMode()
+
+        #expect(listedRemoteIds(vm) == ["gone"], "a connected cloud session is live, not closed")
+    }
+
+    @Test("The source filter applies inside c")
+    @MainActor
+    func sourceFilterAppliesInC() throws {
+        let (db, _, closed) = try makeDatabase()
+        try db.upsertRemoteClaudeCodeSessions([remote(id: "gone", connected: false)])
+        let vm = makeViewModel(db)
+        vm.enterRecentsMode()
+
+        vm.sourceFilter = .localOnly
+        #expect(listedIds(vm) == [closed.id])
+        #expect(listedRemoteIds(vm).isEmpty)
+
+        vm.sourceFilter = .remoteOnly
+        #expect(listedIds(vm).isEmpty)
+        #expect(listedRemoteIds(vm) == ["gone"])
+    }
+
+    // MARK: - Ordering, titles, mode isolation
+
+    @Test("Closed rows are newest first even with the order frozen")
+    @MainActor
+    func orderIsRecencyWhileFrozen() throws {
+        let db = try SeshctlDatabase.temporary()
+        var ids: [String] = []
+        for pid in 1...3 {
+            let s = try db.startSession(tool: .claude, directory: "/tmp/\(pid)", pid: pid, conversationId: "c\(pid)")
+            try db.endSession(pid: pid, tool: .claude)
+            try db.dbPool.write {
+                try $0.execute(sql: "UPDATE sessions SET updated_at = ? WHERE id = ?",
+                               arguments: [Date(timeIntervalSince1970: Double(1000 + pid)), s.id])
+            }
+            ids.append(s.id)
+        }
+        let vm = makeViewModel(db)
+        vm.setOrderFrozen(true)
+
+        vm.enterRecentsMode()
+
+        #expect(listedIds(vm) == ids.reversed())
+    }
+
+    @Test("Closed rows older than the newest 50 still get titles in c")
+    @MainActor
+    func titlesReachPastTheNewest50() throws {
+        let path = (NSTemporaryDirectory() as NSString).appendingPathComponent("\(UUID().uuidString).jsonl")
+        try #"{"type":"ai-title","aiTitle":"Old but titled"}"#.write(toFile: path, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let db = try SeshctlDatabase.temporary()
+        let old = try db.startSession(tool: .claude, directory: "/tmp/old", pid: 9000, conversationId: "old")
+        try db.updateSession(pid: 9000, tool: .claude, transcriptPath: path)
+        try db.endSession(pid: 9000, tool: .claude)
+        try db.dbPool.write {
+            try $0.execute(sql: "UPDATE sessions SET updated_at = ? WHERE id = ?",
+                           arguments: [Date(timeIntervalSince1970: 1), old.id])
+        }
+        for pid in 1...55 {
+            try db.startSession(tool: .claude, directory: "/tmp/\(pid)", pid: pid, conversationId: "n\(pid)")
+        }
+        let vm = makeViewModel(db)
+        #expect(!vm.sessions.contains { $0.id == old.id }, "precondition: outside the newest 50")
+
+        vm.enterRecentsMode()
+
+        #expect(vm.titlesById[old.id] == "Old but titled")
+    }
+
+    @Test("v and the group-jump keys do nothing in c")
+    @MainActor
+    func treeKeysAreInertInC() throws {
+        let (db, _, closed) = try makeDatabase()
+        let vm = makeViewModel(db)
+        vm.toggleViewMode()
+        #expect(vm.isTreeMode, "precondition: tree mode saved on")
+        vm.enterRecentsMode()
+
+        vm.toggleViewMode()
+        #expect(vm.isTreeMode, "v would flip the saved preference with nothing visible")
+
+        vm.jumpToNextGroup()
+        #expect(vm.selectedSession?.id == closed.id, "tree group jumps must not move the c selection")
+    }
 }

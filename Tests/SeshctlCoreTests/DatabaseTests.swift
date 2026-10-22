@@ -1134,4 +1134,25 @@ struct DatabaseTests {
         #expect(recents.count == 1)
         #expect(recents[0].conversationId == "conv-1")
     }
+
+    @Test("reopenableOnly drops rows with no conversation id before the limit")
+    func recentsReopenableOnlyFiltersBeforeLimit() throws {
+        let db = try SeshctlDatabase.temporary()
+        try db.startSession(tool: .claude, directory: "/tmp/resumable", pid: 1, conversationId: "conv-1")
+        try db.endSession(pid: 1, tool: .claude)
+        // Newer rows with nothing to resume, enough to fill a limit of 2.
+        for pid in 2...3 {
+            try db.startSession(tool: .claude, directory: "/tmp/anon-\(pid)", pid: pid)
+            try db.endSession(pid: pid, tool: .claude)
+        }
+        try db.dbPool.write {
+            try $0.execute(sql: "UPDATE sessions SET updated_at = ? WHERE conversation_id = 'conv-1'",
+                           arguments: [Date(timeIntervalSince1970: 1)])
+        }
+
+        let recents = try db.listRecentSessions(limit: 2, reopenableOnly: true)
+
+        #expect(recents.map(\.conversationId) == ["conv-1"])
+        #expect(try db.listRecentSessions(limit: 2).count == 2, "the default still keeps them")
+    }
 }

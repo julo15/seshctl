@@ -672,13 +672,15 @@ public struct SeshctlDatabase: Sendable {
     /// conversation once without deleting anything.
     ///
     /// A row with no conversation id partitions on its own primary key, so it
-    /// always survives.
+    /// always survives — unless `reopenableOnly` is set. That drops rows with
+    /// no conversation id (nothing to hand to the agent's resume command)
+    /// *before* the limit, so they can't crowd resumable rows out of it.
     ///
     /// A conversation that is running again is excluded outright. Its closed
     /// row describes the previous run of a session the user can already see in
     /// the live list, so offering to reopen it would open a second copy of
     /// something already on screen.
-    public func listRecentSessions(limit: Int = 100) throws -> [Session] {
+    public func listRecentSessions(limit: Int = 100, reopenableOnly: Bool = false) throws -> [Session] {
         let activeStatuses = [
             SessionStatus.idle.rawValue,
             SessionStatus.working.rawValue,
@@ -693,6 +695,7 @@ public struct SeshctlDatabase: Sendable {
                     ) AS twin_rank
                     FROM sessions
                     WHERE status NOT IN (?, ?, ?)
+                      AND (? = 0 OR COALESCE(conversation_id, '') != '')
                       AND NOT EXISTS (
                           SELECT 1 FROM sessions AS live
                           WHERE live.conversation_id IS NOT NULL
@@ -704,7 +707,8 @@ public struct SeshctlDatabase: Sendable {
                 WHERE twin_rank = 1
                 ORDER BY updated_at DESC
                 LIMIT ?
-                """, arguments: StatementArguments(activeStatuses + activeStatuses + [limit]))
+                """, arguments: StatementArguments(
+                    activeStatuses + [reopenableOnly] + activeStatuses + [limit]))
         }
     }
 

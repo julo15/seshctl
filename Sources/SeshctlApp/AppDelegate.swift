@@ -524,11 +524,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 vm.cancelMarkAllRead()
             } else if vm.pendingForkSessionId != nil {
                 vm.cancelFork()
-            } else if vm.isRecentsMode {
-                // Back out one level, like cancelling a pending confirmation,
-                // before the same key closes the panel.
-                vm.exitRecentsMode()
-            } else {
+            } else if !vm.backOutOfRecentsMode() {
+                // Backing out of `c` takes one press, like cancelling a pending
+                // confirmation, before the same key closes the panel.
                 dismissPanel()
             }
         default:

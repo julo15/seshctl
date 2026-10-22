@@ -206,6 +206,12 @@ public final class SessionListViewModel: ObservableObject {
     /// loaded while `isRecentsMode` is on, so the live list pays nothing.
     @Published public private(set) var recentSessions: [Session] = []
 
+    /// Resolved transcript paths for `c` rows outside the newest-50
+    /// `sessions`, so titles can be scanned for them. Cached for as long as
+    /// the view is open: a closed session's transcript doesn't move, and
+    /// resolving can glob `~/.claude/projects/`. `nil` = resolved, not found.
+    private var closedTranscriptPaths: [String: String?] = [:]
+
     /// Source filter. `didSet` persists to UserDefaults (not `@AppStorage`
     /// for the same reason as `isTreeMode`).
     @Published public var sourceFilter: SourceFilter {
@@ -314,7 +320,10 @@ public final class SessionListViewModel: ObservableObject {
             }
             sessions = try database.listSessions(limit: 50)
             if isRecentsMode {
-                recentSessions = try Self.reopenable(database.listRecentSessions())
+                // Assign only on change: a fresh array every 2s would
+                // re-render the list even when nothing closed.
+                let latest = try database.listRecentSessions(reopenableOnly: true)
+                if latest != recentSessions { recentSessions = latest }
             }
             remoteSessions = try database.listRemoteClaudeCodeSessions()
             var unread = Set(sessions.filter { session in
@@ -393,18 +402,35 @@ public final class SessionListViewModel: ObservableObject {
             }
             latestAssistantById = latest
             pruneTranscriptLatestAssistantCache(keepingPaths: livePaths)
+            // The `c` view reaches past the newest 50 `sessions`; title its
+            // older rows too, from whatever budget the live rows leave.
+            var titlePaths = resolvedPathsBySessionId
+            var titleSessions = sessions
+            if isRecentsMode {
+                let known = Set(sessions.map(\.id))
+                for session in recentSessions where session.tool == .claude && !known.contains(session.id) {
+                    if closedTranscriptPaths[session.id] == nil {
+                        closedTranscriptPaths[session.id] = .some(
+                            TranscriptParser.resolveExistingTranscript(for: session, projectsRoot: projectsRoot)?.path)
+                    }
+                    if let path = closedTranscriptPaths[session.id] ?? nil {
+                        titlePaths[session.id] = path
+                        titleSessions.append(session)
+                    }
+                }
+            }
             // Sessions arrive most-recent first, so a cold cache spends its
             // per-refresh read budget on the rows at the top of the list.
             var titles: [String: String] = [:]
             var titleBudget = titleScanBytesPerRefresh
-            for session in sessions {
-                guard let path = resolvedPathsBySessionId[session.id] else { continue }
+            for session in titleSessions {
+                guard let path = titlePaths[session.id] else { continue }
                 if let title = cachedTitle(for: session, transcriptPath: path, budget: &titleBudget) {
                     titles[session.id] = title
                 }
             }
             titlesById = titles
-            pruneTranscriptTitleCache(keepingPaths: livePaths)
+            pruneTranscriptTitleCache(keepingPaths: Array(titlePaths.values))
             pruneTranscriptBridgeCache(keepingPaths: livePaths)
             // Re-pin `selectedIndex` to the previously-selected row's new
             // position. If the row vanished (closed + filtered out of
@@ -645,14 +671,11 @@ public final class SessionListViewModel: ObservableObject {
                 .filter { !bridgedRemoteIds.contains($0.id) }
                 .map { .remote($0) }
             : []
-        return sortedForDisplay(local + remote)
-    }
-
-    /// Rows the `c` view can actually reopen. A row with no conversation id
-    /// has nothing to hand to the agent's resume command, and they aren't
-    /// rare. They stay reachable through `/`.
-    nonisolated static func reopenable(_ sessions: [Session]) -> [Session] {
-        sessions.filter { !($0.conversationId ?? "").isEmpty }
+        // Plain recency, not `sortedForDisplay`: the frozen order snapshots
+        // only the newest 50 `sessions`, so closed rows beyond them would
+        // count as "unseen" and sort above newer ones. Closed rows don't
+        // change under the user anyway, which is what freezing guards against.
+        return (local + remote).sorted { $0.sortTimestamp > $1.sortTimestamp }
     }
 
     public func toggleRecentsMode() {
@@ -664,7 +687,7 @@ public final class SessionListViewModel: ObservableObject {
         pendingForkSessionId = nil
         pendingMarkAllRead = false
         isRecentsMode = true
-        recentSessions = (try? Self.reopenable(database.listRecentSessions())) ?? []
+        refresh()
         selectedIndex = orderedRows.isEmpty ? -1 : 0
     }
 
@@ -672,7 +695,17 @@ public final class SessionListViewModel: ObservableObject {
         guard isRecentsMode else { return }
         isRecentsMode = false
         recentSessions = []
+        closedTranscriptPaths = [:]
         selectedIndex = orderedRows.isEmpty ? -1 : 0
+    }
+
+    /// Esc / `q` in the list: leave the `c` view if it's open. Returns false
+    /// when there was nothing to back out of, so the caller closes the panel.
+    @discardableResult
+    public func backOutOfRecentsMode() -> Bool {
+        guard isRecentsMode else { return false }
+        exitRecentsMode()
+        return true
     }
 
     /// Ordered rows the view renders. Matches `filteredRows`; retained as
@@ -903,6 +936,9 @@ public final class SessionListViewModel: ObservableObject {
     /// Falls back to index 0 when the prior row isn't in the new ordering,
     /// or `-1` when the new ordering is empty.
     public func toggleViewMode() {
+        // The `c` view overrides tree mode, so toggling here would flip the
+        // saved preference with nothing visible to show for it.
+        guard !isRecentsMode else { return }
         pendingKillSessionId = nil
         pendingForkSessionId = nil
         pendingMarkAllRead = false
@@ -958,7 +994,7 @@ public final class SessionListViewModel: ObservableObject {
         pendingKillSessionId = nil
         pendingForkSessionId = nil
         pendingMarkAllRead = false
-        guard isTreeMode else { return }
+        guard isTreeMode, !isRecentsMode else { return }
         // Explicit no-op when there's no current selection — callers may invoke
         // this before any row has been selected, and we shouldn't silently
         // clobber the `-1` sentinel.
@@ -999,7 +1035,7 @@ public final class SessionListViewModel: ObservableObject {
         pendingKillSessionId = nil
         pendingForkSessionId = nil
         pendingMarkAllRead = false
-        guard isTreeMode else { return }
+        guard isTreeMode, !isRecentsMode else { return }
         // Explicit no-op when there's no current selection — preserve the `-1`
         // sentinel rather than landing on the first group.
         guard selectedIndex >= 0 else { return }

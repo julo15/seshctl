@@ -230,7 +230,7 @@ public struct SessionListView: View {
                                     .id(rowViewIdentity(for: row))
                             }
 
-                            if activeCount == 0 && !ordered.isEmpty {
+                            if activeCount == 0 && !ordered.isEmpty && !viewModel.isRecentsMode {
                                 sectionHeader("Recent")
                                     .padding(.top, -4) // adjust since ForEach won't insert it
                             }
