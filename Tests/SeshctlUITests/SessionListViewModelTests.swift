@@ -334,9 +334,9 @@ struct SessionListViewModelTests {
         #expect(vm.pendingKillSessionId == nil)
     }
 
-    @Test("requestKill does nothing for session without PID")
+    @Test("requestKill on a session without PID offers to remove the row")
     @MainActor
-    func requestKillNoPidNoop() throws {
+    func requestKillNoPidRemovesRow() throws {
         let db = try SeshctlDatabase.temporary()
         let session = try db.startSession(tool: .claude, directory: "/tmp/kill", pid: 5555)
 
@@ -352,7 +352,48 @@ struct SessionListViewModelTests {
         vm.refresh()
 
         vm.requestKill()
+        #expect(vm.pendingKillSessionId == session.id)
+        #expect(vm.pendingKillRemovesRow)
+
+        vm.confirmKill()
+        #expect(try db.getSession(id: session.id)?.status == .stale)
         #expect(vm.pendingKillSessionId == nil)
+        #expect(!vm.pendingKillRemovesRow)
+    }
+
+    @Test("requestKill on a live process offers to kill it, not remove the row")
+    @MainActor
+    func requestKillLiveProcess() throws {
+        let db = try SeshctlDatabase.temporary()
+        try db.startSession(tool: .claude, directory: "/tmp/kill", pid: 5555)
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.isProcessAlive = { _ in true }
+        vm.refresh()
+
+        vm.requestKill()
+        #expect(vm.pendingKillSessionId != nil)
+        #expect(!vm.pendingKillRemovesRow)
+    }
+
+    /// The Codex case: the recorded PID is gone (or a zombie), so SIGTERM
+    /// would do nothing and the row stayed active forever.
+    @Test("confirmKill on a dead process ends the row instead of signalling")
+    @MainActor
+    func confirmKillDeadProcessEndsRow() throws {
+        let db = try SeshctlDatabase.temporary()
+        let session = try db.startSession(tool: .codex, directory: "/tmp/kill", pid: 5555)
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.isProcessAlive = { _ in false }
+        vm.refresh()
+
+        vm.requestKill()
+        #expect(vm.pendingKillRemovesRow)
+        vm.confirmKill()
+
+        #expect(try db.getSession(id: session.id)?.status == .stale)
+        #expect(!vm.sessions.contains { $0.id == session.id && $0.isActive })
     }
 
     @Test("cancelKill clears pendingKillSessionId")

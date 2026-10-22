@@ -193,6 +193,8 @@ Trust is content-sensitive: Codex distinguishes `New hook - review required` fro
 
 Codex's event set is PreToolUse, PermissionRequest, PostToolUse, PreCompact, PostCompact, SessionStart, SessionEnd, SubagentStart, SubagentStop, Stop, UserPromptSubmit. seshctl registers SessionStart, UserPromptSubmit, Stop, and SessionEnd.
 
+**Codex's `$PPID` is not the session's process.** Codex's app-server mode (0.163+, `source: vscode` in the rollout's `session_meta`) runs hooks from a long-lived worker under `codex app-server daemon`, so the PID the hooks record is that shared worker, not the per-session `codex` process. While the worker lives, the stale reaper can't end the session; `SessionEnd` is what ends it. When the worker dies the daemon never reaps it, so it lingers as a zombie, and `kill(pid, 0)` reports zombies as alive. All liveness checks go through `ProcessLiveness.isAlive`, which treats zombies as dead. Use it rather than a bare `kill(pid, 0)`. `x` on an active row with no live process ends the row (`stale`) rather than sending a SIGTERM that can't land.
+
 ## Claude Hook Status Transitions
 
 The local session status comes entirely from `hooks/claude/*.sh`:

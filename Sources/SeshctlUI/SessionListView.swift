@@ -335,7 +335,7 @@ public struct SessionListView: View {
             // Footer
             HStack {
                 if viewModel.pendingKillSessionId != nil {
-                    Text("kill process? y/n")
+                    Text(viewModel.pendingKillRemovesRow ? "remove row? y/n" : "kill process? y/n")
                         .foregroundStyle(.red)
                 } else if viewModel.pendingForkSessionId != nil {
                     Text("fork session? y/n")

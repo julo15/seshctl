@@ -792,6 +792,29 @@ struct DatabaseTests {
         #expect(session.status == .idle)
     }
 
+    @Test("endSession(id:) ends the matching active row")
+    func endSessionById() throws {
+        let db = try SeshctlDatabase.temporary()
+        let target = try db.startSession(tool: .codex, directory: "/tmp", pid: 1234)
+        let other = try db.startSession(tool: .codex, directory: "/tmp", pid: 5678)
+
+        try db.endSession(id: target.id, status: .stale)
+
+        #expect(try db.getSession(id: target.id)?.status == .stale)
+        #expect(try db.getSession(id: other.id)?.status == .idle)
+    }
+
+    @Test("endSession(id:) leaves an already-ended row alone")
+    func endSessionByIdAlreadyEnded() throws {
+        let db = try SeshctlDatabase.temporary()
+        let session = try db.startSession(tool: .codex, directory: "/tmp", pid: 1234)
+        try db.endSession(pid: 1234, tool: .codex)
+
+        try db.endSession(id: session.id, status: .stale)
+
+        #expect(try db.getSession(id: session.id)?.status == .completed)
+    }
+
     @Test("endSession(conversationId:tool:) sets status to completed by default")
     func endSessionByConversationId() throws {
         let db = try SeshctlDatabase.temporary()
