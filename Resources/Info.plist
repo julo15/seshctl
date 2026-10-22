@@ -10,6 +10,12 @@
 	<string>Seshctl</string>
 	<key>CFBundleExecutable</key>
 	<string>SeshctlApp</string>
+	<!-- Names Contents/Resources/AppIcon.icns, generated from
+	     Resources/AppIcon.svg by scripts/make-icon.sh and copied in by
+	     scripts/build-app-bundle.sh. Without this the Dock and the Cmd+Tab
+	     switcher render a blank tile. -->
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleVersion</key>
