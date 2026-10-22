@@ -163,6 +163,19 @@ struct RemoteClaudeCodeSessionTests {
         #expect(session.webUrl.absoluteString == "https://claude.ai/code/session_abc123")
     }
 
+    @Test("desktopUrl builds the claude:// deep link from the API id")
+    func desktopUrlComputed() {
+        let session = makeSession(id: "cse_abc123")
+        #expect(session.desktopUrl?.absoluteString == "claude://code/cse_abc123")
+    }
+
+    @Test("desktopUrl is nil for an id that fails validation")
+    func desktopUrlNilForInvalidId() {
+        #expect(makeSession(id: "cse_a/b").desktopUrl == nil)
+        #expect(makeSession(id: "cse_a?x=1").desktopUrl == nil)
+        #expect(makeSession(id: "").desktopUrl == nil)
+    }
+
     // MARK: - isUnread (local read-receipt override)
 
     @Test("isUnread is false when API says not unread")
