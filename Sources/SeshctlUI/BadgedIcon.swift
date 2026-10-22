@@ -14,6 +14,12 @@ import SwiftUI
 /// This view is introduced here but not yet wired into row views; Units
 /// 5 and 6 swap call sites in `SessionRowView` / `RemoteClaudeCodeRowView`.
 struct BadgedIcon: View {
+    /// Default badge diameter. `ResultRowLayout` sizes its icon slot from
+    /// this so badged and bare icons line up.
+    static let defaultBadgeSize: CGFloat = 14
+    /// How far the badge sticks out past the base image's trailing and
+    /// bottom edges.
+    static func overhang(badgeSize: CGFloat) -> CGFloat { badgeSize * 0.25 }
     /// Caller-provided base image. Use `Image(nsImage:)` for host app
     /// icons or `Image(systemName:)` for SF Symbols (e.g. globe).
     let base: Image
@@ -26,7 +32,7 @@ struct BadgedIcon: View {
     /// 10pt in commit 8449f8a so the monogram letter (`X` / `G`) and
     /// the Claude mark stay legible at this site without antialiasing
     /// mush.
-    var badgeSize: CGFloat = 14
+    var badgeSize: CGFloat = BadgedIcon.defaultBadgeSize
     /// Unified VoiceOver label for the composite element. Construct via
     /// `Session.accessibilityLabel(hostApp:agent:)`.
     let accessibilityLabel: String
@@ -42,13 +48,13 @@ struct BadgedIcon: View {
                 // bottom-right *corner* of the base — a small overlap
                 // beyond the icon's edge reads as a sticker rather than
                 // an inset shape.
-                .offset(x: badgeSize * 0.25, y: badgeSize * 0.25)
+                .offset(x: Self.overhang(badgeSize: badgeSize), y: Self.overhang(badgeSize: badgeSize))
         }
         // Reserve space for the badge overhang so the composite's bounding
         // box matches what the layout sees. Without this, the trailing
         // offset would clip against neighboring views.
-        .padding(.trailing, badgeSize * 0.25)
-        .padding(.bottom, badgeSize * 0.25)
+        .padding(.trailing, Self.overhang(badgeSize: badgeSize))
+        .padding(.bottom, Self.overhang(badgeSize: badgeSize))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
     }

@@ -58,6 +58,9 @@ public struct RemoteClaudeCodeRowView: View {
     /// session has no assistant turn — either way the row falls through to
     /// `.reply(title)`. See `RemoteClaudeCodeSession.previewContent(awaySummary:)`.
     public let awaySummary: String?
+    /// The session's model, shown as a pill left of the icon. Sourced from
+    /// `SessionListViewModel.modelPill(for:)`.
+    public let modelPill: ModelPill?
     /// How yesterday-bucket timestamps render in the row's age slot — see
     /// `SessionAgeDisplay.YesterdayStyle`. Driven by the parent view: the
     /// time-sorted inbox passes `.timeOfDay`, the repo-grouped tree view
@@ -76,6 +79,7 @@ public struct RemoteClaudeCodeRowView: View {
         hostApp: HostAppInfo? = nil,
         showAgentBadge: Bool = true,
         awaySummary: String? = nil,
+        modelPill: ModelPill? = nil,
         yesterdayStyle: SessionAgeDisplay.YesterdayStyle = .date
     ) {
         self.session = session
@@ -86,6 +90,7 @@ public struct RemoteClaudeCodeRowView: View {
         self.hostApp = hostApp
         self.showAgentBadge = showAgentBadge
         self.awaySummary = awaySummary
+        self.modelPill = modelPill
         self.yesterdayStyle = yesterdayStyle
     }
 
@@ -110,7 +115,8 @@ public struct RemoteClaudeCodeRowView: View {
             // marks the agent on the bare globe.
             hostAppBadge: showAgentBadge && hostApp == nil ? AgentBadgeSpec.forRemote(model: session.model) : nil,
             iconAccessibilityLabel: Session.accessibilityLabel(hostApp: hostApp, agent: .claude),
-            isUnread: isUnread
+            isUnread: isUnread,
+            modelPill: modelPill
         )
         // Stale-row dimming lives at the row-opacity tier (R12a). Line-1
         // italic is reserved for R3's userPrompt/statusHint cases — which

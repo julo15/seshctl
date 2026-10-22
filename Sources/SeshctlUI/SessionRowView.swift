@@ -38,6 +38,9 @@ public struct SessionRowView: View {
     /// layout expands the selected row to show its message on its own
     /// lines; the other layouts ignore it (the list paints the highlight).
     var isSelected: Bool = false
+    /// The session's model, shown as a pill left of the host-app icon.
+    /// Sourced from `SessionListViewModel.modelPill(for:)`.
+    var modelPill: ModelPill? = nil
     /// How yesterday-bucket timestamps render in the row's age slot — see
     /// `SessionAgeDisplay.YesterdayStyle`. Driven by the parent view: the
     /// time-sorted inbox passes `.timeOfDay`, the repo-grouped tree view
@@ -56,7 +59,7 @@ public struct SessionRowView: View {
     @AppStorage(AppearanceDefaults.repoAccentBarKey) private var repoAccentBarEnabled: Bool = AppearanceDefaults.repoAccentBarDefault
     @AppStorage(AppearanceDefaults.rowLayoutKey) private var rowLayout: RowLayout = AppearanceDefaults.rowLayoutDefault
 
-    public init(session: Session, hostApp: HostAppInfo, isUnread: Bool = false, isBridged: Bool = false, showCloudAffordances: Bool = false, showAgentBadge: Bool = true, awaySummary: String? = nil, title: String? = nil, isSelected: Bool = false, yesterdayStyle: SessionAgeDisplay.YesterdayStyle = .date, onDetail: (() -> Void)? = nil, onOpenWeb: (() -> Void)? = nil) {
+    public init(session: Session, hostApp: HostAppInfo, isUnread: Bool = false, isBridged: Bool = false, showCloudAffordances: Bool = false, showAgentBadge: Bool = true, awaySummary: String? = nil, title: String? = nil, isSelected: Bool = false, modelPill: ModelPill? = nil, yesterdayStyle: SessionAgeDisplay.YesterdayStyle = .date, onDetail: (() -> Void)? = nil, onOpenWeb: (() -> Void)? = nil) {
         self.session = session
         self.hostApp = hostApp
         self.isUnread = isUnread
@@ -66,6 +69,7 @@ public struct SessionRowView: View {
         self.awaySummary = awaySummary
         self.title = title
         self.isSelected = isSelected
+        self.modelPill = modelPill
         self.yesterdayStyle = yesterdayStyle
         self.onDetail = onDetail
         self.onOpenWeb = onOpenWeb
@@ -87,7 +91,8 @@ public struct SessionRowView: View {
             onDetail: onDetail,
             hostAppBadge: showAgentBadge ? AgentBadgeSpec.forAgent(session.tool) : nil,
             iconAccessibilityLabel: Session.accessibilityLabel(hostApp: hostApp, agent: session.tool),
-            isUnread: isUnread
+            isUnread: isUnread,
+            modelPill: modelPill
         )
     }
 
