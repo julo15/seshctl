@@ -754,4 +754,97 @@ struct SessionActionTests {
         // No "make new tab" script ran — that's coordinator-specific behavior.
         #expect(!env.executedScripts.contains { $0.contains("make new tab") })
     }
+
+    // MARK: - Claude desktop app deep link
+
+    @Test("openRemote opens the claude:// deep link when the desktop app is installed")
+    @MainActor
+    func openRemoteUsesDesktopAppWhenInstalled() {
+        let env = MockSystemEnvironment()
+        env.appBundleURLs[ClaudeDesktopApp.bundleId] = URL(fileURLWithPath: "/Applications/Claude.app")
+        env.runningApps = ["com.google.Chrome"]
+        let coordinator = RemoteBrowserCoordinator()
+        let url = URL(string: "https://claude.ai/code/session_xyz")!
+        var dismissed = false
+
+        SessionAction.execute(
+            target: .openRemote(url),
+            markRead: { _ in },
+            rememberFocused: { _ in },
+            dismiss: { dismissed = true },
+            environment: env,
+            remoteBrowserCoordinator: coordinator
+        )
+
+        #expect(dismissed)
+        #expect(env.openedURLs == [URL(string: "claude://code/session_xyz")!])
+        // Neither the coordinator nor BrowserController ran any AppleScript.
+        #expect(env.executedScripts.isEmpty)
+    }
+
+    @Test("openRemote uses the desktop app without a coordinator too")
+    @MainActor
+    func openRemoteUsesDesktopAppWithoutCoordinator() {
+        let env = MockSystemEnvironment()
+        env.appBundleURLs[ClaudeDesktopApp.bundleId] = URL(fileURLWithPath: "/Applications/Claude.app")
+        env.runningApps = ["com.google.Chrome"]
+        let url = URL(string: "https://claude.ai/code/session_xyz")!
+
+        SessionAction.execute(
+            target: .openRemote(url),
+            markRead: { _ in },
+            rememberFocused: { _ in },
+            dismiss: {},
+            environment: env,
+            remoteBrowserCoordinator: nil
+        )
+
+        #expect(env.openedURLs == [URL(string: "claude://code/session_xyz")!])
+        #expect(env.executedScripts.isEmpty)
+    }
+
+    @Test("openRemote falls back to the browser when the desktop app is not installed")
+    @MainActor
+    func openRemoteFallsBackToBrowserWhenDesktopAppMissing() {
+        let env = MockSystemEnvironment()
+        // No appBundleURLs entry for ClaudeDesktopApp.bundleId → not installed.
+        env.runningApps = ["com.google.Chrome"]
+        env.appleScriptOutputProvider = { _ in "found" }
+        let url = URL(string: "https://claude.ai/code/session_xyz")!
+
+        SessionAction.execute(
+            target: .openRemote(url),
+            markRead: { _ in },
+            rememberFocused: { _ in },
+            dismiss: {},
+            environment: env,
+            remoteBrowserCoordinator: nil
+        )
+
+        // The browser focus probe ran and matched an existing tab, so nothing
+        // was opened — and certainly no claude:// URL.
+        #expect(!env.executedScripts.isEmpty)
+        #expect(env.openedURLs.isEmpty)
+    }
+
+    @Test("openRemote falls back to the browser when the URL has no valid session id")
+    @MainActor
+    func openRemoteFallsBackToBrowserForUnrecognizedURL() {
+        let env = MockSystemEnvironment()
+        env.appBundleURLs[ClaudeDesktopApp.bundleId] = URL(fileURLWithPath: "/Applications/Claude.app")
+        env.runningApps = []
+        let url = URL(string: "https://claude.ai/code/not-a-session")!
+
+        SessionAction.execute(
+            target: .openRemote(url),
+            markRead: { _ in },
+            rememberFocused: { _ in },
+            dismiss: {},
+            environment: env,
+            remoteBrowserCoordinator: nil
+        )
+
+        // BrowserController fell through to opening the original https URL.
+        #expect(env.openedURLs == [url])
+    }
 }
