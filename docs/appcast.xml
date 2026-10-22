@@ -3,6 +3,46 @@
     <channel>
         <title>Seshctl</title>
         <item>
+            <title>0.6.0</title>
+            <pubDate>Thu, 22 Oct 2026 01:17:47 -0400</pubDate>
+            <sparkle:version>8</sparkle:version>
+            <sparkle:shortVersionString>0.6.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h1>Seshctl 0.6.0</h1>
+
+<h2>Session titles and a compact row layout</h2>
+
+<p>Rows now lead with the short title Claude Code writes for each session (its AI-generated title, falling back to a custom title), so you can tell sessions apart at a glance instead of reading branch names. The new default <strong>compact</strong> layout shows one line per session — title, repo-colored checkout folder, and the latest message — and expands the keyboard-selected row to show up to three lines of the message. Read titles dim, so bright white marks what&rsquo;s unread.</p>
+
+<p><strong>Settings → Appearance → Row layout</strong> is now a three-way picker: Compact, Stacked, or Two-column. If you&rsquo;d switched the old stacked toggle off, you keep two-column.</p>
+
+<h2>Status dots that mean something</h2>
+
+<ul>
+<li><strong>Green, pulsing</strong> — the agent is working.</li>
+<li><strong>Amber, with a ping ring</strong> — the agent is waiting on you (a permission prompt, a question, or a plan to approve). This is now the loudest state on the list.</li>
+<li><strong>Gray</strong> — idle. Gray dots fade for yesterday&rsquo;s and older sessions, so today&rsquo;s stand out.</li>
+<li><strong>Hollow gray ring</strong> — the session has ended.</li>
+</ul>
+
+
+<p>Waiting is also more accurate. Questions and plan approvals show amber immediately instead of a few seconds later, background subagents no longer flip a waiting session back to working, and the dot returns to green as soon as you answer. Idle dots no longer keep pulsing after a session stops.</p>
+
+<h2>Fixes</h2>
+
+<ul>
+<li><strong>Bridged sessions pair again.</strong> Claude Code changed the transcript record that links a <code>/remote-control</code> session to its claude.ai twin, and every bridged pair had silently split into two rows. Both record shapes are now recognized. New: press <strong>w</strong> (or click the row&rsquo;s cloud glyph) to open the claude.ai side; Enter still focuses the terminal.</li>
+<li><strong>Remote rows show their latest message.</strong> Reconnect events had buried every remote session&rsquo;s last reply, so remote rows were blank.</li>
+<li><strong>Smoother panel with large transcripts.</strong> Transcript scans now read only what they need — newest-first, or only newly appended bytes — instead of re-reading 15 MB+ files on every refresh, which made the panel lag on open and close.</li>
+<li><strong>Transcript view:</strong> links open in your browser, Cmd+C / Cmd+A work on selected text, Cmd+F opens find, and reopening the panel within a few minutes returns to the transcript you were reading.</li>
+<li><strong>Codex:</strong> Seshctl now writes Codex&rsquo;s renamed <code>[features].hooks</code> flag (migrating the deprecated <code>codex_hooks</code> key), scoped to the <code>[features]</code> section so it never touches other tools' settings.</li>
+<li>The empty-state message no longer pushes the header to the middle of the panel.</li>
+</ul>
+
+]]></description>
+            <enclosure url="https://github.com/julo15/seshctl/releases/download/v0.6.0/Seshctl-0.6.0.dmg" length="38659590" type="application/octet-stream" sparkle:edSignature="6ppoP69Vb8Z15CV1xip+vVPT3RXJvd07j+v4VTe/Uo3zDP4nS5uBgyx6f/LkWvay+BIc089osYb2TOUfGUC/Bg=="/>
+        </item>
+        <item>
             <title>0.5.1</title>
             <pubDate>Wed, 27 May 2026 21:49:32 -0400</pubDate>
             <sparkle:version>7</sparkle:version>
@@ -79,22 +119,6 @@
 
 ]]></description>
             <enclosure url="https://github.com/julo15/seshctl/releases/download/v0.5.0/Seshctl-0.5.0.dmg" length="38486924" type="application/octet-stream" sparkle:edSignature="mi0Yw61vz0PORYmrwN6io3uWviqrG+ZCccdJyABkcrbQIlPlvHblVTEzHE1E0HVQAHTPFnwgFa6ZTwoW+5k7AA=="/>
-        </item>
-        <item>
-            <title>0.4.1</title>
-            <pubDate>Thu, 21 May 2026 11:56:33 -0400</pubDate>
-            <sparkle:version>5</sparkle:version>
-            <sparkle:shortVersionString>0.4.1</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h1>Seshctl 0.4.1</h1>
-
-<p>Smoke-test release for the Sparkle auto-update flow.</p>
-
-<p>No functional changes vs 0.4.0 — this release exists to verify that an installed 0.4.0 build detects the new appcast entry, downloads the signed DMG, verifies the EdDSA signature, swaps <code>/Applications/Seshctl.app</code>, and relaunches cleanly at 0.4.1.</p>
-
-<p>If you&rsquo;re seeing this prompt: the loop works end-to-end.</p>
-]]></description>
-            <enclosure url="https://github.com/julo15/seshctl/releases/download/v0.4.1/Seshctl-0.4.1.dmg" length="11683207" type="application/octet-stream" sparkle:edSignature="KvICFnFVyB9/Ah+EHavHi2OH/voV1fGXw6+tl748owNQo7ieJeIwz6WqH9y+G4pORT2EG1FELIc9i6+MZzi4AQ=="/>
         </item>
     </channel>
 </rss>
