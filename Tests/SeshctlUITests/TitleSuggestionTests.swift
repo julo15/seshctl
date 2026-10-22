@@ -9,7 +9,7 @@ struct TitleSuggestionTests {
     @MainActor
     private func makeViewModel(_ db: SeshctlDatabase, titles: [String] = ["Alpha", "Beta", "Gamma"]) -> SessionListViewModel {
         let vm = SessionListViewModel(database: db, enableGC: false, defaults: UserDefaults(suiteName: "titles-\(UUID().uuidString)")!)
-        vm.titleSuggestionGenerator = { _, _ in titles }
+        vm.titleSuggestionGenerator = { _ in titles }
         vm.refresh()
         return vm
     }

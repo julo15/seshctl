@@ -30,6 +30,9 @@ public enum ShellRunner {
         if let currentDirectory {
             process.currentDirectoryURL = currentDirectory
         }
+        // No caller feeds input. An inherited stdin can make a CLI wait for
+        // it: `claude -p` pauses 3s before giving up on a non-TTY stdin.
+        process.standardInput = FileHandle.nullDevice
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
         process.standardOutput = stdoutPipe

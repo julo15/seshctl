@@ -10,35 +10,52 @@ struct TitleSuggesterTests {
     private func ask(_ text: String) -> ConversationTurn { .userMessage(text: text, timestamp: t0) }
     private func reply(_ text: String) -> ConversationTurn { .assistantMessage(text: text, toolCalls: [], timestamp: t0) }
 
-    @Test("The prompt carries the last 10 asks, the latest reply and the current title")
+    @Test("The prompt carries the last 10 asks and the last 3 replies")
     func promptIsRecencyBiased() throws {
         let turns = (1...12).flatMap { [ask("ask \($0)"), reply("reply \($0)")] }
 
-        let prompt = try #require(TitleSuggester.prompt(turns: turns, currentTitle: "Assess patoms PRs"))
+        let prompt = try #require(TitleSuggester.prompt(turns: turns))
 
         #expect(!prompt.contains("- ask 2\n"), "older asks fall out of the window")
         #expect(prompt.contains("- ask 3\n"))
         #expect(prompt.contains("- ask 12"))
-        #expect(prompt.contains("Latest assistant reply:\nreply 12"))
-        #expect(!prompt.contains("reply 11"), "only the latest reply")
-        #expect(prompt.contains("Current title: Assess patoms PRs"))
+        #expect(!prompt.contains("- reply 9\n"))
+        #expect(prompt.contains("- reply 10\n- reply 11\n- reply 12"))
         #expect(prompt.contains("task it is on NOW"))
+    }
+
+    @Test("Messages the user didn't type stay out of the window")
+    func skipsNonTypedMessages() throws {
+        let turns = [
+            ask("real request one"),
+            ask("Base directory for this skill: /Users/x/.claude/skills/review-gate\n\nRun a review"),
+            ask("<task-notification> <task-id>abc</task-id>"),
+            ask("[Image: source: /tmp/images/1.png]"),
+            ask("[Image #1] aren't we done with this?"),
+        ]
+
+        let prompt = try #require(TitleSuggester.prompt(turns: turns))
+
+        #expect(prompt.contains("- real request one\n- aren't we done with this?"))
+        #expect(!prompt.contains("skill"))
+        #expect(!prompt.contains("task-id"))
+        #expect(!prompt.contains("Image"))
     }
 
     @Test("Long turns are trimmed and whitespace collapsed")
     func longTurnsAreTrimmed() throws {
         let long = String(repeating: "word ", count: 200)
-        let prompt = try #require(TitleSuggester.prompt(turns: [ask("multi\n\nline   ask"), reply(long)], currentTitle: nil))
+        let prompt = try #require(TitleSuggester.prompt(turns: [ask("multi\n\nline   ask"), reply(long)]))
 
         #expect(prompt.contains("- multi line ask"))
         #expect(prompt.contains("\u{2026}"))
-        #expect(!prompt.contains("Current title"), "no title line without a title")
     }
 
     @Test("No user request, no prompt")
     func noAskNoPrompt() {
-        #expect(TitleSuggester.prompt(turns: [reply("hello")], currentTitle: "x") == nil)
-        #expect(TitleSuggester.prompt(turns: [ask("   ")], currentTitle: nil) == nil)
+        #expect(TitleSuggester.prompt(turns: [reply("hello")]) == nil)
+        #expect(TitleSuggester.prompt(turns: [ask("   ")]) == nil)
+        #expect(TitleSuggester.prompt(turns: [ask("<task-notification>x")]) == nil)
     }
 
     @Test("Candidates are cleaned, deduped and capped at three")

@@ -4,12 +4,18 @@ import Foundation
 /// doing *now*. Claude Code's own `ai-title` is written once from the opening
 /// prompt, so a long session that moved on keeps a title for its first task.
 ///
-/// **Recency-biased material.** The prompt gets the user's last few requests
-/// (short, and where intent lives), the latest assistant reply, and the
-/// current title as background, and is told to title only the task the
-/// session is on now. The tail of a long session is mostly "yes" and "merge",
-/// so the last few turns alone would title whatever the final reply happened
-/// to discuss.
+/// **Recency-biased material.** The prompt gets the user's last few typed
+/// requests (short, and where intent lives) and the last few assistant
+/// replies (which name what the work is), and is told to title only the task
+/// the session is on now. The tail of a long session is mostly "yes" and
+/// "merge", so the last few turns alone would title whatever the final reply
+/// happened to discuss.
+///
+/// The current title is deliberately left out: given Claude's stale
+/// `ai-title` as background, Haiku kept titling the session's first task.
+/// Messages the user didn't type (skill bodies, task notifications, image
+/// paths) are filtered out, since they crowded real requests out of the
+/// window.
 ///
 /// **Three candidates per run.** About one generation in three comes back
 /// garbled, and a run costs ~6s, so asking for three at once lets the user
@@ -21,33 +27,31 @@ public enum TitleSuggester {
     /// How many recent user requests go into the prompt.
     static let recentAskCount = 10
     static let askCharacterLimit = 300
-    static let replyCharacterLimit = 800
+    static let recentReplyCount = 3
+    static let replyCharacterLimit = 400
     static let candidateCount = 3
     static let maxWords = 8
     static let maxCharacters = 64
 
     // MARK: - Material
 
-    /// The prompt for `turns`, or nil when the session has no user request to
-    /// describe.
-    public static func prompt(turns: [ConversationTurn], currentTitle: String?) -> String? {
+    /// The prompt for `turns`, or nil when the session has no typed user
+    /// request to describe.
+    public static func prompt(turns: [ConversationTurn]) -> String? {
         let asks = turns.compactMap { turn -> String? in
             guard case .userMessage(let text, _) = turn else { return nil }
-            return condense(text, limit: askCharacterLimit)
+            return typedRequest(text).flatMap { condense($0, limit: askCharacterLimit) }
         }.suffix(recentAskCount)
         guard !asks.isEmpty else { return nil }
 
-        let reply = turns.reversed().lazy.compactMap { turn -> String? in
+        let replies = turns.compactMap { turn -> String? in
             guard case .assistantMessage(let text, _, _) = turn else { return nil }
             return condense(text, limit: replyCharacterLimit)
-        }.first
+        }.suffix(recentReplyCount)
 
         var sections = ["Recent user requests, oldest first:\n" + asks.map { "- \($0)" }.joined(separator: "\n")]
-        if let currentTitle = condense(currentTitle ?? "", limit: 120) {
-            sections.insert("Current title: \(currentTitle)", at: 0)
-        }
-        if let reply {
-            sections.append("Latest assistant reply:\n\(reply)")
+        if !replies.isEmpty {
+            sections.append("Latest assistant replies, oldest first:\n" + replies.map { "- \($0)" }.joined(separator: "\n"))
         }
 
         return """
@@ -60,11 +64,29 @@ public enum TitleSuggester {
         - One title per line, \(candidateCount) lines, nothing else.
         - At most \(maxWords) words each.
         - Describe the task, not the conversation. No "user asks" or "discussion of".
+        - Name the feature or problem being worked on, not workflow steps like commit, PR, review or merge.
         - No numbering, quotation marks, trailing periods or markdown.
 
         ---
         \(sections.joined(separator: "\n\n"))
         """
+    }
+
+    /// Prefixes of `user` records Claude Code writes on the user's behalf:
+    /// skill bodies, background-task notifications, slash-command echoes,
+    /// image attachments.
+    static let nonTypedPrefixes = [
+        "<task-notification>", "<command-", "<local-command", "<system-reminder>",
+        "Base directory for this skill:", "(Re-invocation", "Caveat:", "[Image: source:",
+    ]
+
+    /// The text the user typed, with `[Image #N]` placeholders removed, or
+    /// nil when the record isn't something the user typed.
+    static func typedRequest(_ text: String) -> String? {
+        let cleaned = text.replacingOccurrences(of: #"\[Image #\d+\]"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty, !nonTypedPrefixes.contains(where: cleaned.hasPrefix) else { return nil }
+        return cleaned
     }
 
     /// Trim one turn to a prompt-sized excerpt, collapsing whitespace, or nil
