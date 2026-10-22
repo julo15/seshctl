@@ -2976,6 +2976,77 @@ struct SessionListViewModelTests {
         #expect(vm.orderedRows.first?.id == vm.localOrderedSessions.first?.id)
     }
 
+    @Test("setOrderFrozen(false) lets a visible panel re-sort by recency")
+    @MainActor
+    func unfreezeWhileVisibleResorts() throws {
+        let db = try SeshctlDatabase.temporary()
+        try db.startSession(tool: .gemini, directory: "/tmp/b", pid: 2222)
+        Thread.sleep(forTimeInterval: 0.01)
+        try db.startSession(tool: .claude, directory: "/tmp/a", pid: 1111)
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.panelDidShow()
+        defer { vm.panelDidHide() }
+        vm.setOrderFrozen(false)
+
+        Thread.sleep(forTimeInterval: 0.01)
+        try db.updateSession(pid: 2222, tool: .gemini, ask: "hi", status: .idle)
+        vm.refresh()
+
+        #expect(vm.localOrderedSessions.first?.pid == 2222)
+        #expect(vm.orderedRows.first?.id == vm.localOrderedSessions.first?.id)
+    }
+
+    @Test("setOrderFrozen(true) snapshots the order it sees at that moment")
+    @MainActor
+    func refreezeSnapshotsCurrentOrder() throws {
+        let db = try SeshctlDatabase.temporary()
+        try db.startSession(tool: .gemini, directory: "/tmp/b", pid: 2222)
+        Thread.sleep(forTimeInterval: 0.01)
+        try db.startSession(tool: .claude, directory: "/tmp/a", pid: 1111)
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.panelDidShow()
+        defer { vm.panelDidHide() }
+        vm.setOrderFrozen(false)
+
+        // While unfrozen, B moves to the top.
+        Thread.sleep(forTimeInterval: 0.01)
+        try db.updateSession(pid: 2222, tool: .gemini, ask: "hi", status: .idle)
+        vm.refresh()
+        vm.setOrderFrozen(true)
+        let frozen = vm.orderedRows.map(\.id)
+
+        // Now A gets newer activity, but the order holds.
+        Thread.sleep(forTimeInterval: 0.01)
+        try db.updateSession(pid: 1111, tool: .claude, ask: "hi", status: .idle)
+        vm.refresh()
+
+        #expect(vm.orderedRows.map(\.id) == frozen)
+        #expect(vm.localOrderedSessions.first?.pid == 1111)
+    }
+
+    @Test("setOrderFrozen(true) while already frozen keeps the original snapshot")
+    @MainActor
+    func refreezeIsIdempotent() throws {
+        let db = try SeshctlDatabase.temporary()
+        try db.startSession(tool: .gemini, directory: "/tmp/b", pid: 2222)
+        Thread.sleep(forTimeInterval: 0.01)
+        try db.startSession(tool: .claude, directory: "/tmp/a", pid: 1111)
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.panelDidShow()
+        defer { vm.panelDidHide() }
+        let before = vm.orderedRows.map(\.id)
+
+        Thread.sleep(forTimeInterval: 0.01)
+        try db.updateSession(pid: 2222, tool: .gemini, ask: "hi", status: .idle)
+        vm.refresh()
+        vm.setOrderFrozen(true)
+
+        #expect(vm.orderedRows.map(\.id) == before)
+    }
+
     @Test("panelDidShow stamps lastPanelShownAt to ~now")
     @MainActor
     func panelDidShowStampsTimestamp() throws {

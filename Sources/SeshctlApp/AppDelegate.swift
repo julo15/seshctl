@@ -218,6 +218,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.viewModel?.panelDidHide()
             }
 
+            // Rows reorder only while the panel isn't in use. A transient
+            // panel is in use for as long as it's shown; a pinned one goes
+            // live again whenever it sits unfocused and unhovered.
+            panelRef.onInteractionChange = { [weak self, weak panelRef] in
+                guard let panelRef, panelRef.isVisible else { return }
+                self?.viewModel?.setOrderFrozen(panelRef.isInUse)
+            }
+
             // Apply the persisted "Keep panel open" mode before the panel is
             // ever shown, so a pinned panel doesn't flash at `.floating` level.
             reconcileKeepOpenMode(atLaunch: true)
