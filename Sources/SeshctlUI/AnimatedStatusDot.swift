@@ -76,11 +76,12 @@ private struct DotBody: View {
                 )
                 .scaleEffect(kind.isPulsing ? (isPulsing ? 1.15 : 0.85) : 1.0)
         }
-        // drawingGroup rasterizes into the ZStack's bounds. Without a fixed
-        // frame, kinds with no 22pt halo get an 8x8 buffer that clips the
-        // scaled dot, glow, and ping ring into a square. Safe for layout:
+        // drawingGroup rasterizes into the ZStack's bounds, so the frame must
+        // fit the largest effect: the working halo (22pt x 1.8 ≈ 40pt).
+        // Without it, kinds with no halo get an 8x8 buffer that clips the
+        // dot, glow, and ping ring into a square. Safe for layout:
         // ResultRowLayout hosts the dot as an overlay.
-        .frame(width: 28, height: 28)
+        .frame(width: 40, height: 40)
         .drawingGroup()
         .onAppear { startAnimations() }
     }

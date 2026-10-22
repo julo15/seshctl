@@ -24,7 +24,7 @@ import SeshctlCore
 ///   `claude.ai` text label as a recognition safety net alongside the
 ///   badge — Phase 2 removes the label.
 /// - Status dot: derived via `StatusKind.forRemote(...)`. The shared
-///   `AnimatedStatusDot` renders pulse / ping / solid / dim per
+///   `AnimatedStatusDot` renders pulse / ping / solid / hollow / dim per
 ///   `StatusKind`'s decisions.
 /// - Stale rows dim at the row-opacity tier (per R12a): the body picks up
 ///   `.opacity(0.6)` when `isStale` so the dimming reads as inactive-row

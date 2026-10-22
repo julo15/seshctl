@@ -1,5 +1,5 @@
 #!/bin/bash
-# Claude Code PreToolUse hook → seshctl-cli update (working)
+# Claude Code PreToolUse hook → seshctl-cli update (working / waiting)
 # Fires before each tool call, ensuring the session shows as working.
 # Uses --skip-git to avoid expensive git subprocess calls.
 set -euo pipefail
@@ -14,19 +14,31 @@ LOG_DIR="$HOME/.local/share/seshctl/logs"
 mkdir -p "$LOG_DIR"
 echo "$(date -u '+%Y-%m-%dT%H:%M:%S') $SESSION_ID PRE_TOOL_USE $TOOL_NAME${AGENT_ID:+ agent=$AGENT_ID}" >> "$LOG_DIR/hooks.log"
 
-# Subagent tool calls share the parent's session and PID. The parent's own
-# Agent call already marked the session working, so skip them — otherwise a
-# background subagent flips a waiting session (e.g. an open question) back
-# to working.
-if [ -n "$AGENT_ID" ]; then
-  exit 0
-fi
+# Present while a blocking tool (below) waits on the user. Cleared by
+# post-tool-use.sh once answered, and by stop / user-prompt / session-end.
+STATE_DIR="$HOME/.local/share/seshctl/state"
+AWAITING_MARKER="$STATE_DIR/claude-awaiting-user-${SESSION_ID//[^A-Za-z0-9_-]/}"
 
-# These tools block on the user, so show waiting immediately rather than
-# working until Claude Code's Notification hook fires seconds later.
-STATUS=working
 case "$TOOL_NAME" in
-  AskUserQuestion|ExitPlanMode) STATUS=waiting ;;
+  # Tools that block on the user: show waiting immediately rather than
+  # working until Claude Code's Notification hook fires seconds later.
+  AskUserQuestion|ExitPlanMode)
+    STATUS=waiting
+    mkdir -p "$STATE_DIR"
+    touch "$AWAITING_MARKER"
+    ;;
+  *)
+    STATUS=working
+    if [ -e "$AWAITING_MARKER" ]; then
+      # Subagent tool calls share the parent's session and PID. A background
+      # subagent must not flip a session waiting on the user back to working.
+      if [ -n "$AGENT_ID" ]; then
+        exit 0
+      fi
+      # The main session moved on, so the question was resolved.
+      rm -f "$AWAITING_MARKER"
+    fi
+    ;;
 esac
 
 seshctl-cli update \

@@ -17,9 +17,9 @@ public enum StatusKind: Equatable, Sendable {
     case idle
     /// Local: session ended normally. Hollow gray ring, no animation.
     case completed
-    /// Remote: worker disconnected (claude.ai can't reach it). Solid gray,
-    /// no animation. Distinct from `.completed` semantically even though they
-    /// render identically today (hollow gray ring).
+    /// Remote: worker disconnected (claude.ai can't reach it). Hollow gray
+    /// ring, no animation. Distinct from `.completed` semantically even though
+    /// they render identically today.
     case offline
     /// Canceled — solid red (local only today).
     case canceled

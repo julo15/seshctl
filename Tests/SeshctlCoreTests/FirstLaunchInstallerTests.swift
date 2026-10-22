@@ -206,12 +206,12 @@ struct FirstLaunchInstallerTests {
             #expect(fm.fileExists(atPath: p), "missing codex hook: \(name)")
         }
 
-        // 6. ~/.claude/settings.json has 6 expected event entries pointing into temp HOME
+        // 6. ~/.claude/settings.json has 7 expected event entries pointing into temp HOME
         let claudeSettings = try loadJSONObject(at: paths.claudeSettingsFile)
         let claudeHooks = claudeSettings["hooks"] as? [String: Any]
         #expect(claudeHooks != nil)
         let expectedClaudeEvents = ["SessionStart", "UserPromptSubmit", "PreToolUse",
-                                    "Notification", "Stop", "SessionEnd"]
+                                    "PostToolUse", "Notification", "Stop", "SessionEnd"]
         for event in expectedClaudeEvents {
             #expect(claudeHooks?[event] != nil, "missing claude hook event: \(event)")
             let groups = (claudeHooks?[event] as? [[String: Any]]) ?? []
@@ -264,7 +264,7 @@ struct FirstLaunchInstallerTests {
 
         let claudeSettings = try loadJSONObject(at: paths.claudeSettingsFile)
         for event in ["SessionStart", "UserPromptSubmit", "PreToolUse",
-                      "Notification", "Stop", "SessionEnd"] {
+                      "PostToolUse", "Notification", "Stop", "SessionEnd"] {
             #expect(countSeshctlGroups(in: claudeSettings, event: event) == 1,
                     "duplicate seshctl group for claude \(event)")
         }

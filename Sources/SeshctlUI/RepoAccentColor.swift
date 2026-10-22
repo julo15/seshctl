@@ -23,6 +23,10 @@ public func repoAccentColor(for name: String?) -> Color? {
 ///   - assistant role (#937CBF purple)       — RoleColors.assistantPurple
 ///   - unread pill (orange)                  — UnreadPill
 ///
+/// The waiting dot's amber (#FFA500) is deliberately close to the unread
+/// orange — it was picked by eye for vibrancy, and the dot and pill sit far
+/// apart on the row. Keep repo accents clear of both.
+///
 /// Saturation ~0.45–0.60 and brightness ~0.78–0.88 keep the tints
 /// readable on a dark background without overpowering the
 /// semibold-monospaced repo name.
