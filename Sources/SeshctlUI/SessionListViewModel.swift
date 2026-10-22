@@ -86,10 +86,12 @@ public final class SessionListViewModel: ObservableObject {
     /// Pruned by `pruneTranscriptLatestAssistantCache(keepingPaths:)` on each
     /// refresh.
     private var transcriptLatestAssistantCache: [String: (mtime: Date, text: String?)] = [:]
-    /// Per-transcript cache: `path → (mtime, title)`. Mirrors
-    /// `transcriptAwaySummaryCache` for session titles. Pruned by
+    /// Per-transcript scan state for session titles: `path → State`. Unlike
+    /// the mtime caches above, this resumes from the byte offset already
+    /// scanned, so an actively-growing transcript costs only its appended
+    /// bytes per refresh (see `TranscriptTitleScanner`). Pruned by
     /// `pruneTranscriptTitleCache(keepingPaths:)` on each refresh.
-    private var transcriptTitleCache: [String: (mtime: Date, title: String?)] = [:]
+    private var transcriptTitleCache: [String: TranscriptTitleScanner.State] = [:]
     @Published public private(set) var recallResults: [RecallResult] = []
     @Published public private(set) var isRecallSearching: Bool = false
     @Published public private(set) var recallIndexingDone: Int?
@@ -954,21 +956,18 @@ public final class SessionListViewModel: ObservableObject {
         return text
     }
 
-    /// Scan the session's transcript for its Claude Code title, re-using a
-    /// previous result when the transcript's mtime hasn't advanced. Mirrors
-    /// `cachedAwaySummary(for:transcriptPath:)`. Non-Claude tools return nil
-    /// — only Claude Code writes `ai-title` / `custom-title` records.
+    /// Scan the session's transcript for its Claude Code title, resuming
+    /// from where the previous scan of this path stopped. Non-Claude tools
+    /// return nil — only Claude Code writes `ai-title` / `custom-title`
+    /// records.
     fileprivate func cachedTitle(for session: Session, transcriptPath path: String) -> String? {
         guard session.tool == .claude else { return nil }
-        let mtime = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
-        if let mtime, let cached = transcriptTitleCache[path], cached.mtime == mtime {
-            return cached.title
+        guard let state = TranscriptTitleScanner.scan(transcriptPath: path, resuming: transcriptTitleCache[path]) else {
+            transcriptTitleCache.removeValue(forKey: path)
+            return nil
         }
-        let title = TranscriptTitleScanner.extractTitle(transcriptPath: path)
-        if let mtime {
-            transcriptTitleCache[path] = (mtime, title)
-        }
-        return title
+        transcriptTitleCache[path] = state
+        return state.title
     }
 
     /// Drop cache entries for transcripts whose owning session is no longer

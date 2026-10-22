@@ -89,4 +89,83 @@ struct TranscriptTitleScannerTests {
     func missingFile() {
         #expect(TranscriptTitleScanner.extractTitle(transcriptPath: "/tmp/does-not-exist-\(UUID().uuidString).jsonl") == nil)
     }
+
+    // MARK: - Incremental scanning
+
+    private func tempPath() -> String {
+        (NSTemporaryDirectory() as NSString).appendingPathComponent("\(UUID().uuidString).jsonl")
+    }
+
+    private func append(_ text: String, to path: String) throws {
+        let handle = try #require(FileHandle(forWritingAtPath: path))
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(text.utf8))
+    }
+
+    @Test("resumed scan picks up only appended records and advances the offset")
+    func resumesFromOffset() throws {
+        let path = tempPath()
+        let first = #"{"type":"user"}"# + "\n" + #"{"type":"custom-title","customTitle":"m5: qbk"}"# + "\n"
+        try first.write(toFile: path, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let s1 = try #require(TranscriptTitleScanner.scan(transcriptPath: path, resuming: nil))
+        #expect(s1.title == "m5: qbk")
+        #expect(s1.offset == UInt64(first.utf8.count))
+
+        try append(#"{"type":"ai-title","aiTitle":"Booking flow"}"# + "\n", to: path)
+        let s2 = try #require(TranscriptTitleScanner.scan(transcriptPath: path, resuming: s1))
+        #expect(s2.title == "Booking flow")
+        #expect(s2.customTitle == "m5: qbk")
+    }
+
+    @Test("resumed scan keeps prior titles when nothing new was appended")
+    func unchangedFileKeepsState() throws {
+        let path = tempPath()
+        try (#"{"type":"ai-title","aiTitle":"Stable"}"# + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let s1 = try #require(TranscriptTitleScanner.scan(transcriptPath: path, resuming: nil))
+        let s2 = try #require(TranscriptTitleScanner.scan(transcriptPath: path, resuming: s1))
+        #expect(s2 == s1)
+    }
+
+    @Test("a partial trailing line is left for the next scan")
+    func partialLineDeferred() throws {
+        let path = tempPath()
+        let complete = #"{"type":"user"}"# + "\n"
+        try (complete + #"{"type":"ai-title","aiTi"#).write(toFile: path, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let s1 = try #require(TranscriptTitleScanner.scan(transcriptPath: path, resuming: nil))
+        #expect(s1.title == nil)
+        #expect(s1.offset == UInt64(complete.utf8.count))
+
+        try append(#"tle":"Finished line"}"# + "\n", to: path)
+        let s2 = try #require(TranscriptTitleScanner.scan(transcriptPath: path, resuming: s1))
+        #expect(s2.title == "Finished line")
+    }
+
+    @Test("a file shorter than the saved offset is rescanned from scratch")
+    func truncatedFileRescans() throws {
+        let path = tempPath()
+        try (#"{"type":"ai-title","aiTitle":"Old title, long line padding"}"# + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let s1 = try #require(TranscriptTitleScanner.scan(transcriptPath: path, resuming: nil))
+
+        try (#"{"type":"ai-title","aiTitle":"New"}"# + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        let s2 = try #require(TranscriptTitleScanner.scan(transcriptPath: path, resuming: s1))
+        #expect(s2.title == "New")
+    }
+
+    @Test("multiple title records on adjacent lines are all applied in order")
+    func adjacentRecords() {
+        let transcript = """
+        {"type":"ai-title","aiTitle":"One"}
+        {"type":"ai-title","aiTitle":"Two"}
+        {"type":"custom-title","customTitle":"Three"}
+        """
+        #expect(TranscriptTitleScanner.extractTitle(transcript: transcript) == "Two")
+    }
 }
