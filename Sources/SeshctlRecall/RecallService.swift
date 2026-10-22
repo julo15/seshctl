@@ -422,7 +422,11 @@ final actor RecallStack {
         case .claude:
             return "claude --resume \(entry.sessionID)"
         case .codex:
-            return "codex --resume \(entry.sessionID)"
+            // `resume` is a subcommand, not a flag. `codex --resume <id>` is
+            // rejected. Verified against `codex resume --help`, which
+            // documents `codex resume [OPTIONS] [SESSION_ID] [PROMPT]`.
+            // Matches `TerminalController.buildResumeCommand`.
+            return "codex resume \(entry.sessionID)"
         case .gemini:
             return "gemini"
         case .cursor:
