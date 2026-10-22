@@ -71,12 +71,13 @@ public final class SessionListViewModel: ObservableObject {
     /// (`awaySummariesById[id] ?? latestAssistantById[id]`) into the existing
     /// `previewContent(awaySummary:)` slot — no new display branch.
     @Published public private(set) var latestAssistantById: [String: String] = [:]
-    /// Claude Code's short session title (`ai-title`, falling back to
-    /// `custom-title`) per local Claude session, keyed by `session.id`.
-    /// Sessions without a title are absent (the row falls back to the branch,
-    /// then the folder). Computed in `refresh()` via `TranscriptTitleScanner`,
-    /// with `transcriptTitleCache` resuming each transcript from the byte
-    /// offset already scanned.
+    /// Short session title per local session, keyed by `session.id`. Claude
+    /// Code titles (`ai-title`, falling back to `custom-title`) come from the
+    /// transcript via `TranscriptTitleScanner`, with `transcriptTitleCache`
+    /// resuming each transcript from the byte offset already scanned. Codex
+    /// titles come from Codex's shared thread-name index via
+    /// `CodexThreadNameIndex` (`codexThreadNameCache`). Sessions without a
+    /// title are absent (the row falls back to the branch, then the folder).
     @Published public private(set) var titlesById: [String: String] = [:]
     /// Display name of the model each local Claude or Codex session last
     /// used (e.g. `"Opus 5.5"`), keyed by `session.id`, for the row's model
@@ -112,6 +113,11 @@ public final class SessionListViewModel: ObservableObject {
     /// `transcriptLatestAssistantCache`. Pruned by
     /// `pruneTranscriptModelCache(keepingPaths:)` on each refresh.
     private var transcriptModelCache: [String: (mtime: Date, model: String?)] = [:]
+    /// Scan state per Codex `session_index.jsonl`: `index path → State`. One
+    /// index names every thread under a Codex home, so this is keyed by the
+    /// index rather than per session, and resumes from the byte offset
+    /// already scanned. Rebuilt each refresh from the indexes still in use.
+    private var codexThreadNameCache: [String: CodexThreadNameIndex.State] = [:]
     /// Root that transcript resolution falls back to when a session's stored
     /// path is stale (`~/.claude/projects` in production; a temp dir in tests).
     private let projectsRoot: URL
@@ -120,6 +126,8 @@ public final class SessionListViewModel: ObservableObject {
     /// onto pruning: a cache keyed or pruned on the wrong path silently turns
     /// every refresh back into a full rescan.
     var titleCachePaths: Set<String> { Set(transcriptTitleCache.keys) }
+    /// Codex index paths currently held in the thread-name cache. Test-only.
+    var codexThreadNameCachePaths: Set<String> { Set(codexThreadNameCache.keys) }
     @Published public private(set) var recallResults: [RecallResult] = []
     @Published public private(set) var isRecallSearching: Bool = false
     @Published public private(set) var recallIndexingDone: Int?
@@ -422,14 +430,21 @@ public final class SessionListViewModel: ObservableObject {
             var titleSessions = sessions
             if isRecentsMode {
                 let known = Set(sessions.map(\.id))
-                for session in recentSessions where session.tool == .claude && !known.contains(session.id) {
-                    if closedTranscriptPaths[session.id] == nil {
-                        closedTranscriptPaths[session.id] = .some(
-                            TranscriptParser.resolveExistingTranscript(for: session, projectsRoot: projectsRoot)?.path)
-                    }
-                    if let path = closedTranscriptPaths[session.id] ?? nil {
-                        titlePaths[session.id] = path
+                for session in recentSessions where !known.contains(session.id) {
+                    switch session.tool {
+                    case .claude:
+                        if closedTranscriptPaths[session.id] == nil {
+                            closedTranscriptPaths[session.id] = .some(
+                                TranscriptParser.resolveExistingTranscript(for: session, projectsRoot: projectsRoot)?.path)
+                        }
+                        if let path = closedTranscriptPaths[session.id] ?? nil {
+                            titlePaths[session.id] = path
+                            titleSessions.append(session)
+                        }
+                    case .codex:
                         titleSessions.append(session)
+                    case .gemini, .cursor:
+                        break
                     }
                 }
             }
@@ -437,19 +452,31 @@ public final class SessionListViewModel: ObservableObject {
             // per-refresh read budget on the rows at the top of the list.
             var titles: [String: String] = [:]
             var titleBudget = titleScanBytesPerRefresh
+            var codexIndexes: [String: CodexThreadNameIndex.State?] = [:]
             for session in titleSessions {
-                guard let path = titlePaths[session.id] else { continue }
-                if let title = cachedTitle(for: session, transcriptPath: path, budget: &titleBudget) {
-                    titles[session.id] = title
+                let title: String?
+                switch session.tool {
+                case .claude:
+                    guard let path = titlePaths[session.id] else { continue }
+                    title = cachedTitle(for: session, transcriptPath: path, budget: &titleBudget)
+                case .codex:
+                    title = codexThreadName(for: session, scanned: &codexIndexes)
+                case .gemini, .cursor:
+                    title = nil
                 }
+                if let title { titles[session.id] = title }
             }
             titlesById = titles
             pruneTranscriptTitleCache(keepingPaths: Array(titlePaths.values))
+            // Only indexes some listed session used this refresh survive.
+            codexThreadNameCache = codexIndexes.compactMapValues { $0 }
             // Models for the pill. Claude paths are already resolved above
             // (live rows plus the `c` view's older ones); Codex rows use the
             // stored rollout path, which the hooks record verbatim.
             var modelPaths = titlePaths
-            var modelSessions = titleSessions
+            // Codex rows are added below with their rollout path, so leave out
+            // the ones `titleSessions` carries rather than scan them twice.
+            var modelSessions = titleSessions.filter { $0.tool != .codex }
             for session in sessions + (isRecentsMode ? recentSessions : []) where session.tool == .codex {
                 guard modelPaths[session.id] == nil, let path = session.transcriptPath,
                       FileManager.default.fileExists(atPath: path) else { continue }
@@ -1297,6 +1324,28 @@ public final class SessionListViewModel: ObservableObject {
         let start = previous.map { $0.offset <= state.offset ? $0.offset : 0 } ?? 0
         budget -= Int(state.offset - start)
         return state.title
+    }
+
+    /// The Codex thread name for `session`, from the `session_index.jsonl`
+    /// beside its rollout. Each index is scanned at most once per refresh:
+    /// `scanned` collects this refresh's states (nil = no index to read),
+    /// resuming from `codexThreadNameCache`, and becomes the new cache. A
+    /// failed read of an index that scanned before keeps its last state, so
+    /// one bad read doesn't blank the titles and force a rescan from zero.
+    fileprivate func codexThreadName(
+        for session: Session,
+        scanned: inout [String: CodexThreadNameIndex.State?]
+    ) -> String? {
+        guard let conversationId = session.conversationId,
+              let rolloutPath = session.transcriptPath,
+              let indexPath = CodexThreadNameIndex.indexPath(forRolloutPath: rolloutPath)
+        else { return nil }
+        if scanned.index(forKey: indexPath) == nil {
+            let previous = codexThreadNameCache[indexPath]
+            let state = CodexThreadNameIndex.scan(indexPath: indexPath, resuming: previous)
+            scanned[indexPath] = .some(state ?? (FileManager.default.fileExists(atPath: indexPath) ? previous : nil))
+        }
+        return scanned[indexPath]??.names[conversationId]
     }
 
     /// Drop cache entries for transcripts whose owning session is no longer
