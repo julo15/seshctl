@@ -14,6 +14,13 @@ extension KeyboardShortcuts.Name {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: FloatingPanel?
+    /// When this launch finished. Activations within `launchActivationGrace`
+    /// of it are the launch's own (including at login), and must not open the
+    /// panel over whatever the user is doing at boot. Time-boxed rather than
+    /// "the first activation", so a launch that never activates the app can't
+    /// swallow the user's first real Cmd+Tab instead.
+    private var launchedAt = Date.distantPast
+    nonisolated static let launchActivationGrace: TimeInterval = 2
     private var viewModel: SessionListViewModel?
     private var connectionStore: ClaudeCodeConnectionStore?
     private var navigationState = NavigationState()
@@ -74,7 +81,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var updaterController: SPUStandardUpdaterController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Hide dock icon
+        launchedAt = Date()
+        // Menu-bar agent by default: no Dock icon, no Cmd+Tab entry. Matches
+        // `LSUIElement` in Info.plist. `reconcileKeepOpenMode()` switches to
+        // `.regular` while "Keep panel open" is on — see
+        // `activationPolicy(keepOpen:)`.
         NSApp.setActivationPolicy(.accessory)
 
         // First-launch installer. Only triggered when running from a `.app`
@@ -206,6 +217,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.viewModel?.recordPanelClose()
                 self?.viewModel?.panelDidHide()
             }
+
+            // Apply the persisted "Keep panel open" mode before the panel is
+            // ever shown, so a pinned panel doesn't flash at `.floating` level.
+            reconcileKeepOpenMode(atLaunch: true)
         } catch {
             let alert = NSAlert()
             alert.messageText = "Seshctl failed to start"
@@ -237,11 +252,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Cursor companion extension if they want it.
             IntegrationsWindowController.shared.showWindow(nil)
         } else {
-            panel?.toggle()
-            viewModel?.applyInboxAwareResetIfNeeded()
-            viewModel?.panelDidShow()
-            viewModel?.resetSelection()
+            showPanel()
         }
+    }
+
+    /// Whether acting on a session (focus / resume / fork / open remote) should
+    /// also dismiss the panel. Pure + static to match `shouldPreserveDetail`.
+    ///
+    /// Transient mode says yes: picking a session means "take me there", and the
+    /// Spotlight-style panel gets out of the way. A *pinned* panel says no — a
+    /// dashboard that vanishes every time you jump to a session isn't a
+    /// dashboard. Explicit dismissals (Esc, `q`, the hotkey) are unaffected;
+    /// they route through `dismissPanel()` directly.
+    nonisolated static func shouldAutoDismissAfterAction(keepOpen: Bool) -> Bool {
+        !keepOpen
+    }
+
+    /// Auto-dismiss hook handed to `SessionAction.execute`. Distinct from
+    /// `dismissPanel()` so a pinned panel survives the action.
+    private func dismissPanelAfterAction() {
+        guard Self.shouldAutoDismissAfterAction(keepOpen: panel?.keepOpen ?? false) else { return }
+        dismissPanel()
     }
 
     private func dismissPanel() {
@@ -252,27 +283,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func togglePanel() {
-        panel?.toggle()
+        // Keep-open mode: the panel normally sits visible on another screen
+        // without key focus, so the hotkey's job is to bring it forward. Hiding
+        // is reserved for when it already has focus — otherwise Cmd+Shift+S
+        // could never reach a panel the user can see but isn't typing into.
+        guard let panel else { return }
+        switch Self.toggleAction(keepOpen: panel.keepOpen, isVisible: panel.isVisible, isKey: panel.isKeyWindow) {
+        case .focus:
+            NSApp.activate(ignoringOtherApps: true)
+            panel.makeKeyAndOrderFront(nil)
+        case .hide:
+            viewModel?.exitSearch()
+            dismissPanel()
+        case .show:
+            showPanel()
+        }
+    }
+
+    enum PanelToggleAction: Equatable { case show, hide, focus }
+
+    /// What the hotkey / status item does to the panel. Pure + static for
+    /// testing. A pinned panel normally sits visible on another screen without
+    /// key focus, so the toggle brings it forward; hiding is reserved for when
+    /// it already has focus — otherwise the hotkey could never reach a panel
+    /// the user can see but isn't typing into.
+    nonisolated static func toggleAction(keepOpen: Bool, isVisible: Bool, isKey: Bool) -> PanelToggleAction {
+        guard isVisible else { return .show }
+        return (keepOpen && !isKey) ? .focus : .hide
+    }
+
+    /// Shared with the status item's Show/Hide title so the label never says
+    /// "Hide" for a pinned panel the toggle would only bring forward.
+    private var toggleWouldHide: Bool {
+        guard let panel else { return false }
+        return Self.toggleAction(keepOpen: panel.keepOpen, isVisible: panel.isVisible, isKey: panel.isKeyWindow) == .hide
+    }
+
+    /// The one path that brings a hidden panel up — hotkey, status item, Dock
+    /// click, Cmd+Tab and the keep-open toggle all land here. Show-only, never
+    /// a toggle: activating an app must never be the gesture that hides it.
+    private func showPanel() {
+        guard let panel, !panel.isVisible else { return }
+        panel.centerOnScreen()
+        panel.makeKeyAndOrderFront(nil)
         viewModel?.exitSearch()
-        if panel?.isVisible == true {
-            viewModel?.applyInboxAwareResetIfNeeded()
-            viewModel?.panelDidShow()
-            viewModel?.resetSelection()
-            // Return to list when reopening — but keep an open transcript (and
-            // its scroll position, which the persistent panel view retains) if
-            // the panel is reopened soon after closing. This makes "open a link
-            // from a transcript, read it, come back" land you where you were
-            // rather than at the list. Beyond the window, a reopen is treated
-            // as a fresh glance and resets to the list.
-            let cameRightBack = Self.shouldPreserveDetail(
-                lastCloseAt: lastPanelCloseAt, now: Date(), window: Self.detailPreserveWindow)
-            if navigationState.screen == .detail && !cameRightBack {
-                navigationState.backToList()
-            }
-        } else {
-            lastPanelCloseAt = Date()
-            viewModel?.recordPanelClose()
-            viewModel?.panelDidHide()
+        viewModel?.applyInboxAwareResetIfNeeded()
+        viewModel?.panelDidShow()
+        viewModel?.resetSelection()
+        // Return to list when reopening — but keep an open transcript (and
+        // its scroll position, which the persistent panel view retains) if
+        // the panel is reopened soon after closing. This makes "open a link
+        // from a transcript, read it, come back" land you where you were
+        // rather than at the list. Beyond the window, a reopen is treated
+        // as a fresh glance and resets to the list.
+        let cameRightBack = Self.shouldPreserveDetail(
+            lastCloseAt: lastPanelCloseAt, now: Date(), window: Self.detailPreserveWindow)
+        if navigationState.screen == .detail && !cameRightBack {
+            navigationState.backToList()
         }
     }
 
@@ -422,7 +489,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     target: .forkSession(session),
                     markRead: { vm.markSessionRead($0) },
                     rememberFocused: { vm.rememberFocusedSession($0) },
-                    dismiss: { [weak self] in self?.dismissPanel() },
+                    dismiss: { [weak self] in self?.dismissPanelAfterAction() },
                     remoteBrowserCoordinator: remoteBrowserCoordinator
                 )
             }
@@ -699,13 +766,90 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             target: target,
             markRead: { vm.markSessionRead($0) },
             rememberFocused: { vm.rememberFocusedSession($0) },
-            dismiss: { [weak self] in self?.dismissPanel() },
+            dismiss: { [weak self] in self?.dismissPanelAfterAction() },
             remoteBrowserCoordinator: remoteBrowserCoordinator
         )
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    // MARK: - Activation → panel
+
+    /// Dock icon and Cmd+Tab entry only while the panel is pinned. A pinned
+    /// panel is an ordinary window you want to switch back to; the transient
+    /// panel already has the hotkey and the menu bar, and everyone who never
+    /// pins it keeps a pure menu-bar app. Pure + static for testing.
+    nonisolated static func activationPolicy(keepOpen: Bool) -> NSApplication.ActivationPolicy {
+        keepOpen ? .regular : .accessory
+    }
+
+    /// In `.regular` mode Seshctl is a Dock / Cmd+Tab citizen, but it owns no
+    /// ordinary window: the session list lives in a non-activating
+    /// `FloatingPanel`. Without this hook, switching to Seshctl would activate
+    /// an app that displays nothing at all. Activation *is* the request to show
+    /// the panel. In `.accessory` mode activation only comes from our own
+    /// windows and alerts, so this does nothing.
+    ///
+    /// Cases that activate the app for their own reasons and must not drag the
+    /// panel up with them:
+    /// - **Launch.** The app activates when opened, including at login. Popping
+    ///   the panel over whatever the user is doing at boot is hostile, so
+    ///   activations within `launchActivationGrace` of launch are ignored.
+    /// - **Modal alerts.** The install and uninstall flows each call
+    ///   `NSApp.activate` before `runModal`; the panel sits at `.floating`
+    ///   level and would cover the alert it was raised for.
+    /// - **Any other window of ours** — Editor Integrations, Sparkle's update
+    ///   prompt — which activates the app when shown.
+    func applicationDidBecomeActive(_ notification: Notification) {
+        let respond = Self.shouldShowPanelOnActivation(
+            isRegular: NSApp.activationPolicy() == .regular,
+            sinceLaunch: Date().timeIntervalSince(launchedAt),
+            hasModal: NSApp.modalWindow != nil,
+            hasOtherWindow: hasOtherVisibleWindow()
+        )
+        if respond { showOrFocusPanel() }
+    }
+
+    /// Clicking the Dock icon. `hasVisibleWindows` is unreliable here (a pinned
+    /// panel is visible but non-activating), so decide from the panel itself.
+    /// An explicit Dock click wins over our other windows and the launch grace.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        let respond = Self.shouldShowPanelOnActivation(
+            isRegular: NSApp.activationPolicy() == .regular,
+            sinceLaunch: .infinity,
+            hasModal: NSApp.modalWindow != nil,
+            hasOtherWindow: false
+        )
+        if respond { showOrFocusPanel() }
+        return true
+    }
+
+    /// Whether an app activation should show or focus the panel. Pure + static
+    /// for testing; see `applicationDidBecomeActive` for why each case opts out.
+    nonisolated static func shouldShowPanelOnActivation(
+        isRegular: Bool, sinceLaunch: TimeInterval, hasModal: Bool, hasOtherWindow: Bool
+    ) -> Bool {
+        isRegular && sinceLaunch >= launchActivationGrace && !hasModal && !hasOtherWindow
+    }
+
+    /// Activation means "take me to Seshctl": show a hidden panel, or give
+    /// keyboard focus to a pinned one that's visible but unfocused.
+    private func showOrFocusPanel() {
+        guard let panel else { return }
+        if panel.isVisible {
+            if !panel.isKeyWindow { panel.makeKeyAndOrderFront(nil) }
+        } else {
+            showPanel()
+        }
+    }
+
+    /// A visible window other than the panel that could take focus — Editor
+    /// Integrations, Sparkle's update prompt. Status-bar windows can't become
+    /// main, so they don't count.
+    private func hasOtherVisibleWindow() -> Bool {
+        NSApp.windows.contains { $0 !== panel && $0.isVisible && $0.canBecomeMain }
     }
 
     // MARK: - First-launch installer
@@ -817,7 +961,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "Install")
         alert.addButton(withTitle: "Quit")
 
-        // Ensure the alert can come to front for an .accessory-policy app.
+        // Ensure the alert comes to front even when Seshctl is not the active app.
         NSApp.activate(ignoringOtherApps: true)
 
         let response = alert.runModal()
@@ -1001,7 +1145,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // hop to the MainActor for Swift 6 concurrency checking.
             Task { @MainActor [weak self] in
                 self?.reconcileStatusItemVisibility()
+                self?.reconcileKeepOpenMode()
             }
+        }
+    }
+
+    /// Push the "Keep panel open" and "Always in front" preferences into the
+    /// panel and the activation policy. Idempotent — it rides the same
+    /// catch-all defaults notification as the status item, which fires for
+    /// every preference change. `atLaunch` suppresses the show-on-enable, so
+    /// the launch path alone decides whether the panel appears (it stays
+    /// hidden after a fresh install, for the Accessibility prompt).
+    private func reconcileKeepOpenMode(atLaunch: Bool = false) {
+        let prefs = UserDefaults.standard
+        func flag(_ key: String, default fallback: Bool) -> Bool {
+            prefs.object(forKey: key) == nil ? fallback : prefs.bool(forKey: key)
+        }
+        let keepOpen = flag(AppearanceDefaults.keepPanelOpenKey,
+                            default: AppearanceDefaults.keepPanelOpenDefault)
+        let alwaysInFront = flag(AppearanceDefaults.panelAlwaysInFrontKey,
+                                 default: AppearanceDefaults.panelAlwaysInFrontDefault)
+        // Panel mode before activation policy: dropping to `.accessory` can
+        // take key focus from the panel, and a panel still flagged keep-open at
+        // that moment would stay up, unfocused and floating, instead of
+        // dismissing like a transient panel.
+        if let panel, panel.keepOpen != keepOpen || panel.alwaysInFront != alwaysInFront {
+            panel.setWindowMode(keepOpen: keepOpen, alwaysInFront: alwaysInFront)
+            // Turning the mode on while the panel is hidden is a request to see
+            // it: the setting is only reachable from the panel's own settings
+            // popover, so the user is looking at it right now.
+            if keepOpen, !panel.isVisible, !atLaunch {
+                showPanel()
+            }
+        }
+        let policy = Self.activationPolicy(keepOpen: keepOpen)
+        if NSApp.activationPolicy() != policy {
+            NSApp.setActivationPolicy(policy)
         }
     }
 
@@ -1066,7 +1245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         checkbox.state = .off
         confirm.accessoryView = checkbox
 
-        // Ensure the alert can come to front for an .accessory-policy app.
+        // Ensure the alert comes to front even when Seshctl is not the active app.
         NSApp.activate(ignoringOtherApps: true)
 
         let response = confirm.runModal()
@@ -1133,7 +1312,7 @@ extension AppDelegate: NSMenuDelegate {
         // Keep the toggle item's title in sync with the current panel state.
         // The panel hides itself on click-outside (FloatingPanel.resignKey)
         // so its visibility is the right source of truth here.
-        toggleItem?.title = (panel?.isVisible == true) ? "Hide Seshctl" : "Show Seshctl"
+        toggleItem?.title = toggleWouldHide ? "Hide Seshctl" : "Show Seshctl"
     }
 }
 

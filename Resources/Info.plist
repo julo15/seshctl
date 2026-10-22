@@ -26,6 +26,9 @@
 	<string>6.0</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
+	<!-- Menu-bar agent by default. AppDelegate switches to the regular
+	     activation policy (Dock icon + Cmd+Tab) only while "Keep panel open"
+	     is on; see AppDelegate.activationPolicy(keepOpen:). -->
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>

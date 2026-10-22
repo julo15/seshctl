@@ -489,7 +489,9 @@ struct FirstLaunchInstallerTests {
             }
         }
 
-        // LSUIElement should be a Bool == true.
+        // LSUIElement should be a Bool == true: a menu-bar agent by default.
+        // The Dock icon appears only while the panel is pinned, switched at
+        // runtime by `AppDelegate.activationPolicy(keepOpen:)`.
         let uiElement = dict["LSUIElement"]
         if let b = uiElement as? Bool {
             #expect(b == true, "LSUIElement should be true")
