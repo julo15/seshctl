@@ -18,11 +18,12 @@ import SeshctlCore
 ///   `showCloudAffordances` so users without a claude.ai connection don't
 ///   see cloud chrome — though in practice remote rows only render when the
 ///   user has connected, so this defaults to `true`.
-/// - Right side: `globe` SF Symbol + Claude corner badge via
-///   `BadgedIcon`, with the unified `Globe, Claude` accessibility label
-///   from `Session.accessibilityLabel(hostApp:agent:)`. Phase 1 keeps the
-///   `claude.ai` text label as a recognition safety net alongside the
-///   badge — Phase 2 removes the label.
+/// - Right side: the Claude desktop app's icon when it's installed
+///   (`hostApp`, from `HostAppResolver.claudeDesktopApp()`), since Enter
+///   opens the session there; no corner badge, which would repeat it.
+///   Without the app, a `globe` SF Symbol + Claude corner badge via
+///   `BadgedIcon`, since Enter opens claude.ai in the browser. The cloud
+///   glyph on line 2 is what marks the row as remote either way.
 /// - Status dot: derived via `StatusKind.forRemote(...)`. The shared
 ///   `AnimatedStatusDot` renders pulse / ping / solid / hollow / dim per
 ///   `StatusKind`'s decisions.
@@ -43,6 +44,9 @@ public struct RemoteClaudeCodeRowView: View {
     /// `true` — but the parameter exists so callers can suppress the glyph
     /// in preview / test contexts and so the gating contract is explicit.
     public let showCloudAffordances: Bool
+    /// The Claude desktop app, when installed: rendered in the icon slot in
+    /// place of the globe. `nil` keeps the globe + badge.
+    public let hostApp: HostAppInfo?
     /// Whether to render the agent-kind corner badge over the globe glyph.
     /// Suppressed when the visible row list only contains a single agent
     /// kind. Mirrors the same flag on `SessionRowView`; driven by
@@ -69,6 +73,7 @@ public struct RemoteClaudeCodeRowView: View {
         isUnread: Bool = false,
         isStale: Bool = false,
         showCloudAffordances: Bool = true,
+        hostApp: HostAppInfo? = nil,
         showAgentBadge: Bool = true,
         awaySummary: String? = nil,
         yesterdayStyle: SessionAgeDisplay.YesterdayStyle = .date
@@ -78,6 +83,7 @@ public struct RemoteClaudeCodeRowView: View {
         self.isUnread = isUnread
         self.isStale = isStale
         self.showCloudAffordances = showCloudAffordances
+        self.hostApp = hostApp
         self.showAgentBadge = showAgentBadge
         self.awaySummary = awaySummary
         self.yesterdayStyle = yesterdayStyle
@@ -88,10 +94,10 @@ public struct RemoteClaudeCodeRowView: View {
             status: { AnimatedStatusDot(kind: statusKind, age: ageDisplay.bucket) },
             ageDisplay: ageDisplay,
             content: { mainContent },
-            hostApp: nil,
-            // Remote sessions live on claude.ai, not in a macOS app — use a
-            // neutral globe glyph so we don't imply a specific browser.
-            hostAppSystemSymbol: "globe",
+            hostApp: hostApp,
+            // Without the Claude desktop app the session opens on claude.ai —
+            // use a neutral globe glyph so we don't imply a specific browser.
+            hostAppSystemSymbol: hostApp == nil ? "globe" : nil,
             // Accent bar doubles as the unread marker. When per-repo
             // coloring is on, paint the bar with the repo's hashed accent;
             // when it's off, fall back to neutral orange so unread rows
@@ -100,8 +106,10 @@ public struct RemoteClaudeCodeRowView: View {
             // recede regardless of unread state.
             accentColor: unreadAccentColor,
             onDetail: nil,
-            hostAppBadge: showAgentBadge ? AgentBadgeSpec.forRemote(model: session.model) : nil,
-            iconAccessibilityLabel: Session.accessibilityLabel(hostApp: nil, agent: .claude),
+            // The Claude app icon already says "Claude"; the badge only
+            // marks the agent on the bare globe.
+            hostAppBadge: showAgentBadge && hostApp == nil ? AgentBadgeSpec.forRemote(model: session.model) : nil,
+            iconAccessibilityLabel: Session.accessibilityLabel(hostApp: hostApp, agent: .claude),
             isUnread: isUnread
         )
         // Stale-row dimming lives at the row-opacity tier (R12a). Line-1
