@@ -88,6 +88,13 @@ public final class SessionListViewModel: ObservableObject {
     /// cloud. A row whose model differs from its agent's usual one gets a
     /// highlighted pill. See `isUnusualModel(_:tool:)`.
     @Published public private(set) var usualModelByTool: [SessionTool: String] = [:]
+    /// Title suggestions requested with `t`, keyed by `session.id`. Absent
+    /// when none were asked for or they were picked or dismissed.
+    @Published public private(set) var titleSuggestionsById: [String: TitleSuggestionState] = [:]
+    /// Produces title candidates for a session, given its current title.
+    /// Blocks for several seconds (it runs `claude -p`), so it's called off
+    /// the main actor. Replaced in tests.
+    var titleSuggestionGenerator: @Sendable (Session, String?) -> [String]
     /// Per-transcript cache: `path → (mtime, cseId)`. Lets `refresh()` skip
     /// re-reading a live Claude transcript when its file mtime hasn't
     /// advanced. Bounded by `sessions.count` on each refresh (entries for
@@ -237,6 +244,9 @@ public final class SessionListViewModel: ObservableObject {
     public init(database: SeshctlDatabase, refreshInterval: TimeInterval = 2.0, enableGC: Bool = true, focusMemoryWindow: TimeInterval = 30, defaults: UserDefaults = .standard, projectsRoot: URL = TranscriptParser.defaultProjectsRoot) {
         self.database = database
         self.projectsRoot = projectsRoot
+        self.titleSuggestionGenerator = { session, currentTitle in
+            Self.suggestTitles(for: session, currentTitle: currentTitle, projectsRoot: projectsRoot)
+        }
         self.refreshInterval = refreshInterval
         self.enableGC = enableGC
         self.focusMemoryWindow = focusMemoryWindow
@@ -440,6 +450,16 @@ public final class SessionListViewModel: ObservableObject {
             for session in titleSessions {
                 guard let path = titlePaths[session.id] else { continue }
                 if let title = cachedTitle(for: session, transcriptPath: path, budget: &titleBudget) {
+                    titles[session.id] = title
+                }
+            }
+            // A title the user picked with `t` beats Claude's own, on every
+            // row of that conversation, including Codex rows Claude never titles.
+            if let picked = try? database.conversationTitles(), !picked.isEmpty {
+                for session in sessions + (isRecentsMode ? recentSessions : []) {
+                    guard let conversationId = session.conversationId,
+                          let title = picked[ConversationTitleKey(conversationId: conversationId, tool: session.tool)]
+                    else { continue }
                     titles[session.id] = title
                 }
             }
@@ -1272,6 +1292,73 @@ public final class SessionListViewModel: ObservableObject {
         return model != usual
     }
 
+    // MARK: - Title suggestions (`t`)
+
+    /// Ask for three titles for the selected session, describing what it's
+    /// doing now. The row shows "Titling…" until they arrive; the user can
+    /// keep navigating meanwhile. A no-op on rows that can't be retitled
+    /// (cloud rows, tools without a transcript, no conversation id) and
+    /// while a request for the row is already running.
+    public func requestTitleSuggestions() {
+        guard let session = selectedSession,
+              session.tool == .claude || session.tool == .codex,
+              session.conversationId?.isEmpty == false
+        else { return }
+        if case .loading = titleSuggestionsById[session.id] { return }
+        titleSuggestionsById[session.id] = .loading
+        let generate = titleSuggestionGenerator
+        let currentTitle = titlesById[session.id]
+        Task { [weak self] in
+            let titles = await Task.detached { generate(session, currentTitle) }.value
+            guard let self, self.titleSuggestionsById[session.id] == .loading else { return }
+            self.titleSuggestionsById[session.id] = titles.isEmpty ? .failed : .ready(titles)
+        }
+    }
+
+    /// Save suggestion `index` (0-based) as the selected row's conversation
+    /// title. Returns false when the selected row has no such suggestion, so
+    /// the key falls through.
+    @discardableResult
+    public func pickTitleSuggestion(_ index: Int) -> Bool {
+        guard let session = selectedSession,
+              case .ready(let titles) = titleSuggestionsById[session.id],
+              titles.indices.contains(index),
+              let conversationId = session.conversationId
+        else { return false }
+        do {
+            try database.setConversationTitle(conversationId: conversationId, tool: session.tool, title: titles[index])
+        } catch {
+            self.error = error.localizedDescription
+            return true
+        }
+        titleSuggestionsById[session.id] = nil
+        refresh()
+        return true
+    }
+
+    /// Discard the selected row's suggestions (or its pending request).
+    /// Returns false when it has none, so Esc goes on to its other jobs.
+    @discardableResult
+    public func dismissTitleSuggestions() -> Bool {
+        guard let id = selectedSession?.id, titleSuggestionsById[id] != nil else { return false }
+        titleSuggestionsById[id] = nil
+        return true
+    }
+
+    /// The default generator: parse the session's transcript, build the
+    /// prompt and run Haiku. Returns no titles on any failure.
+    nonisolated static func suggestTitles(for session: Session, currentTitle: String?, projectsRoot: URL) -> [String] {
+        let url: URL? = session.tool == .claude
+            ? TranscriptParser.resolveExistingTranscript(for: session, projectsRoot: projectsRoot)
+            : session.transcriptPath.map { URL(fileURLWithPath: $0) }
+        guard let url, let data = try? Data(contentsOf: url),
+              let turns = try? TranscriptParser.parse(data: data, tool: session.tool),
+              let prompt = TitleSuggester.prompt(turns: turns, currentTitle: currentTitle),
+              let cli = TitleSuggester.resolveClaudeCLI()
+        else { return [] }
+        return TitleSuggester.generate(prompt: prompt, cli: cli)
+    }
+
     /// Bytes of transcript the title scanner may read per `refresh()`, shared
     /// across sessions. Resumed scans read only appended bytes, so this only
     /// bites on a cold cache: the 50 listed transcripts can total 100 MB+
@@ -1640,4 +1727,11 @@ public final class SessionListViewModel: ObservableObject {
             }
         }
     }
+}
+
+/// Where a row's `t` request stands.
+public enum TitleSuggestionState: Equatable, Sendable {
+    case loading
+    case ready([String])
+    case failed
 }

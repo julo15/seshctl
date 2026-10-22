@@ -22,10 +22,14 @@ public enum ShellRunner {
     /// is terminated after `timeout` seconds; SIGTERM is given 0.5s to flush
     /// before we give up. Returns nil if the executable couldn't launch or the
     /// timeout fired (partial output is discarded in both cases).
-    public static func run(path: String, args: [String], timeout: TimeInterval) -> Result? {
+    /// `currentDirectory` sets the child's working directory; nil inherits ours.
+    public static func run(path: String, args: [String], timeout: TimeInterval, currentDirectory: URL? = nil) -> Result? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = args
+        if let currentDirectory {
+            process.currentDirectoryURL = currentDirectory
+        }
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
         process.standardOutput = stdoutPipe

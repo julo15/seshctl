@@ -239,6 +239,19 @@ public struct SeshctlDatabase: Sendable {
                 columns: ["agent"])
         }
 
+        // Titles the user picked with `t`. Keyed by conversation, not session
+        // row, because every resume creates a new row and a per-row title
+        // would vanish on the next reopen.
+        migrator.registerMigration("v15_create_conversation_titles") { db in
+            try db.create(table: "conversation_titles") { t in
+                t.column("conversation_id", .text).notNull()
+                t.column("tool", .text).notNull()
+                t.column("title", .text).notNull()
+                t.column("updated_at", .double).notNull()
+                t.primaryKey(["conversation_id", "tool"])
+            }
+        }
+
         try migrator.migrate(dbPool)
     }
 
@@ -720,6 +733,35 @@ public struct SeshctlDatabase: Sendable {
     }
 
     /// Mark a session as read by setting last_read_at to now.
+    // MARK: - Conversation Titles
+
+    /// Store the title the user picked for a conversation, replacing any
+    /// earlier pick.
+    public func setConversationTitle(conversationId: String, tool: SessionTool, title: String, at date: Date = Date()) throws {
+        try dbPool.write { db in
+            try db.execute(
+                sql: """
+                INSERT INTO conversation_titles (conversation_id, tool, title, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(conversation_id, tool) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at
+                """,
+                arguments: [conversationId, tool.rawValue, title, date.timeIntervalSince1970])
+        }
+    }
+
+    /// Every picked title, keyed by `ConversationTitleKey`. Small (one row per
+    /// conversation the user retitled), so it's read whole on each refresh.
+    public func conversationTitles() throws -> [ConversationTitleKey: String] {
+        try dbPool.read { db in
+            var titles: [ConversationTitleKey: String] = [:]
+            for row in try Row.fetchAll(db, sql: "SELECT conversation_id, tool, title FROM conversation_titles") {
+                guard let tool = SessionTool(rawValue: row["tool"]) else { continue }
+                titles[ConversationTitleKey(conversationId: row["conversation_id"], tool: tool)] = row["title"]
+            }
+            return titles
+        }
+    }
+
     public func markSessionRead(id: String) throws {
         try dbPool.write { db in
             try db.execute(
@@ -838,5 +880,16 @@ public struct SeshctlDatabase: Sendable {
         try dbPool.write { db in
             try db.execute(sql: "DELETE FROM remote_claude_code_sessions")
         }
+    }
+}
+
+/// Identifies a conversation across the session rows its resumes create.
+public struct ConversationTitleKey: Hashable, Sendable {
+    public let conversationId: String
+    public let tool: SessionTool
+
+    public init(conversationId: String, tool: SessionTool) {
+        self.conversationId = conversationId
+        self.tool = tool
     }
 }

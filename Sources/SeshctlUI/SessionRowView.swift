@@ -41,6 +41,9 @@ public struct SessionRowView: View {
     /// The session's model, shown as a pill left of the host-app icon.
     /// Sourced from `SessionListViewModel.modelPill(for:)`.
     var modelPill: ModelPill? = nil
+    /// A `t` request for this row, shown on a line under its content.
+    /// Sourced from `SessionListViewModel.titleSuggestionsById`.
+    var titleSuggestion: TitleSuggestionState? = nil
     /// How yesterday-bucket timestamps render in the row's age slot — see
     /// `SessionAgeDisplay.YesterdayStyle`. Driven by the parent view: the
     /// time-sorted inbox passes `.timeOfDay`, the repo-grouped tree view
@@ -59,7 +62,7 @@ public struct SessionRowView: View {
     @AppStorage(AppearanceDefaults.repoAccentBarKey) private var repoAccentBarEnabled: Bool = AppearanceDefaults.repoAccentBarDefault
     @AppStorage(AppearanceDefaults.rowLayoutKey) private var rowLayout: RowLayout = AppearanceDefaults.rowLayoutDefault
 
-    public init(session: Session, hostApp: HostAppInfo, isUnread: Bool = false, isBridged: Bool = false, showCloudAffordances: Bool = false, showAgentBadge: Bool = true, awaySummary: String? = nil, title: String? = nil, isSelected: Bool = false, modelPill: ModelPill? = nil, yesterdayStyle: SessionAgeDisplay.YesterdayStyle = .date, onDetail: (() -> Void)? = nil, onOpenWeb: (() -> Void)? = nil) {
+    public init(session: Session, hostApp: HostAppInfo, isUnread: Bool = false, isBridged: Bool = false, showCloudAffordances: Bool = false, showAgentBadge: Bool = true, awaySummary: String? = nil, title: String? = nil, isSelected: Bool = false, modelPill: ModelPill? = nil, titleSuggestion: TitleSuggestionState? = nil, yesterdayStyle: SessionAgeDisplay.YesterdayStyle = .date, onDetail: (() -> Void)? = nil, onOpenWeb: (() -> Void)? = nil) {
         self.session = session
         self.hostApp = hostApp
         self.isUnread = isUnread
@@ -70,6 +73,7 @@ public struct SessionRowView: View {
         self.title = title
         self.isSelected = isSelected
         self.modelPill = modelPill
+        self.titleSuggestion = titleSuggestion
         self.yesterdayStyle = yesterdayStyle
         self.onDetail = onDetail
         self.onOpenWeb = onOpenWeb
@@ -79,7 +83,14 @@ public struct SessionRowView: View {
         ResultRowLayout(
             status: { AnimatedStatusDot(kind: session.status.statusKind, age: ageDisplay.bucket) },
             ageDisplay: ageDisplay,
-            content: { mainContent },
+            content: {
+                VStack(alignment: .leading, spacing: 6) {
+                    mainContent
+                    if let titleSuggestion {
+                        TitleSuggestionView(state: titleSuggestion)
+                    }
+                }
+            },
             hostApp: hostApp,
             // Accent bar doubles as the unread marker. When per-repo
             // coloring is on, paint the bar with the repo's accent. When

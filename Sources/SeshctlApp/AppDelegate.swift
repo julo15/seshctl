@@ -486,6 +486,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 openSelectedOnWeb(vm: vm)
             }
         // x — kill session process
+        // t — ask for three titles describing what the session is doing now
+        case (_, "t"):
+            if vm.pendingKillSessionId == nil && !vm.pendingMarkAllRead && vm.pendingForkSessionId == nil {
+                vm.requestTitleSuggestions()
+            }
+        // 1–3 — use a suggested title (only when the selected row has them)
+        case (_, "1"):
+            vm.pickTitleSuggestion(0)
+        case (_, "2"):
+            vm.pickTitleSuggestion(1)
+        case (_, "3"):
+            vm.pickTitleSuggestion(2)
         case (_, "x"):
             if vm.pendingKillSessionId == nil && !vm.pendingMarkAllRead && vm.pendingForkSessionId == nil {
                 vm.requestKill()
@@ -524,6 +536,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 vm.cancelMarkAllRead()
             } else if vm.pendingForkSessionId != nil {
                 vm.cancelFork()
+            } else if vm.dismissTitleSuggestions() {
+                // Discarding the selected row's title suggestions takes the press.
             } else if !vm.backOutOfRecentsMode() {
                 // Backing out of `c` takes one press, like cancelling a pending
                 // confirmation, before the same key closes the panel.

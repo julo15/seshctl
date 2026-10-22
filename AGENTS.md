@@ -260,6 +260,16 @@ For how `bridgedLocalIds` fits alongside the other transcript-derived row signal
 - **Ordering is plain recency,** not `sortedForDisplay`: the frozen order only snapshots the newest 50 `sessions`.
 - **Reset on every panel show** (`AppDelegate.showPanel`), and Esc/`q` leave the mode before they close the panel.
 
+## Title Suggestions (`t`)
+
+`t` asks Claude Haiku for three titles describing what the selected session is doing **now**; `1`–`3` saves one, Esc discards them. Claude Code's `ai-title` is written once from the opening prompt, so a long session keeps a title for its first task — this is the user-initiated fix. There's no automatic titling.
+
+- **Recency-biased material** (`TitleSuggester.prompt`): the last 10 user requests, the latest assistant reply, and the current title as background, with an instruction to title only the current task. The tail of a session is mostly "yes" and "merge", so feeding just the last few turns titles whatever the final reply discussed.
+- **Three candidates per run**: measured at ~6s per run, and about one in three came back garbled, so the user picks instead of retrying.
+- **Stored per conversation** in `conversation_titles` (`conversation_id` + `tool`), not on the session row: every resume creates a new row, and a per-row title would vanish on the next reopen. In `refresh()` a picked title overrides the scanned `ai-title` on every row of that conversation, Codex included.
+- **The run stays out of the user's history.** `claude -p --model haiku --setting-sources project --no-session-persistence`, from an empty temp directory: no user settings means seshctl's own hooks don't fire, so the run never becomes a row, and nothing lands in `~/.claude/projects` or `/resume`. Don't switch to `--bare`: it skips hooks too, but only accepts `ANTHROPIC_API_KEY`, not a subscription login.
+- `generate` blocks, so `requestTitleSuggestions()` runs it in a detached task; the row shows "Titling…" (`TitleSuggestionView`) and the user can keep navigating. Tests swap `titleSuggestionGenerator`.
+
 ## Transcript-Derived Row Signals
 
 Five row signals are derived by scanning the live JSONL transcript on each ~2s refresh: `bridgedLocalIds` (via `TranscriptBridgeScanner` → `transcriptBridgeCache`), `awaySummariesById` (via `TranscriptAwaySummaryScanner` → `transcriptAwaySummaryCache`), `latestAssistantById` (via `TranscriptLatestAssistantScanner` → `transcriptLatestAssistantCache`), `titlesById` (via `TranscriptTitleScanner` → `transcriptTitleCache`), and `modelsById` (via `TranscriptModelScanner` → `transcriptModelCache`). All five live in `SessionListViewModel.refresh()`.

@@ -1155,4 +1155,19 @@ struct DatabaseTests {
         #expect(recents.map(\.conversationId) == ["conv-1"])
         #expect(try db.listRecentSessions(limit: 2).count == 2, "the default still keeps them")
     }
+
+    @Test("A conversation title is stored per conversation and tool, and replaced on re-pick")
+    func conversationTitlesUpsert() throws {
+        let db = try SeshctlDatabase.temporary()
+        try db.setConversationTitle(conversationId: "c1", tool: .claude, title: "First")
+        try db.setConversationTitle(conversationId: "c1", tool: .codex, title: "Codex one")
+        try db.setConversationTitle(conversationId: "c1", tool: .claude, title: "Second")
+
+        let titles = try db.conversationTitles()
+
+        #expect(titles == [
+            ConversationTitleKey(conversationId: "c1", tool: .claude): "Second",
+            ConversationTitleKey(conversationId: "c1", tool: .codex): "Codex one",
+        ])
+    }
 }
