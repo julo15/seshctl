@@ -43,8 +43,8 @@ Press **Cmd+Shift+S** to toggle the session panel.
 - **j / k** or **Arrow keys** — navigate sessions
 - **gg** — jump to top
 - **G** — jump to bottom
-- **Enter** — focus the selected session's terminal (or open a cloud-only session on claude.ai)
-- **w** — open the selected session on claude.ai. On a bridged row this picks the web half of the pair instead of the terminal
+- **Enter** — focus the selected session's terminal (or open a cloud-only session in the Claude desktop app, or on claude.ai if the app isn't installed)
+- **w** — open the selected session in the Claude desktop app (or on claude.ai if the app isn't installed). On a bridged row this picks the web half of the pair instead of the terminal
 - **f** — fork the selected Claude session into a new branched session in a new tab (then **y** to confirm, **n** to cancel)
 - **o** — open session detail view
 - **x** — kill session process (then **y** to confirm, **n** to cancel)
@@ -85,9 +85,9 @@ A CLI session started with `/remote-control` is *bridged* — it exists both in 
 Either half is one keystroke away:
 
 - **Enter** focuses the local terminal.
-- **w** opens the session on claude.ai. Clicking the row's cloud glyph does the same thing.
+- **w** opens the session on claude.ai. Clicking the row's cloud glyph does the same thing. If the Claude desktop app is installed, the session opens there instead of in a browser (see [Browsers](#browsers)).
 
-Unbridged rows ignore **w** — a local-only session has nothing to open on the web, and a cloud-only row already opens on claude.ai with Enter.
+Unbridged rows ignore **w** — a local-only session has nothing to open on the web, and a cloud-only row already opens with Enter.
 
 Accounts with Google-only sign-in: add an email/password or passkey on claude.ai first, then use that here.
 
@@ -97,7 +97,7 @@ Accounts with Google-only sign-in: add an email/password or passkey on claude.ai
 
 | Tool | Hooks | Transcript | Notes |
 |---|---|---|---|
-| Claude Code | Full | Full | Bridged claude.ai sessions show as a single row with a cloud glyph; **Enter** opens the terminal, **w** opens claude.ai |
+| Claude Code | Full | Full | Bridged claude.ai sessions show as a single row with a cloud glyph; **Enter** opens the terminal, **w** opens claude.ai (in the Claude desktop app when it's installed) |
 | Codex | Full | Full | Hooks stay inert until you approve them once — see [Codex hook trust](#codex-hook-trust) |
 | Cursor (1.7+) | Full | None | Workspace focus works out of the box; chat-thread focus needs the bundled companion extension (auto-installed from the in-app **Editor Integrations** window) |
 | Gemini | None | None | CLI-only tracking via `seshctl-cli start --tool gemini` |
@@ -165,7 +165,9 @@ env -i HOME=$HOME PATH=$PATH /Applications/cmux.app/Contents/Resources/bin/cmux 
 
 ### Browsers
 
-Seshctl reuses a single tab when flipping between remote Claude sessions across these browsers (falls back to opening a new tab in your default browser if no match is found).
+If the [Claude desktop app](https://claude.ai/download) is installed, remote Claude sessions (Enter on a cloud row, **w** on a bridged row) open inside it instead of a browser. This uses an undocumented `claude://` deep link, so a future desktop update could break it; uninstalling the app restores the browser behavior below.
+
+Without the desktop app, Seshctl reuses a single tab when flipping between remote Claude sessions across these browsers (falls back to opening a new tab in your default browser if no match is found).
 
 | Browser | Focus existing tab | Notes |
 |---|---|---|

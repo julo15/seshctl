@@ -905,6 +905,15 @@ public final class SessionListViewModel: ObservableObject {
         lastFocusedAt = Date()
     }
 
+    /// Remember the currently selected row, whatever its type. Used by the
+    /// actions that bypass `SessionAction`'s local-only `rememberFocused`
+    /// closure — Enter on a remote row and the open-on-web paths — so a quick
+    /// reopen lands back on that row instead of the top of the list.
+    public func rememberSelectedRow() {
+        guard let row = selectedRow else { return }
+        rememberFocusedRow(row)
+    }
+
     /// Scan the session's transcript for a bridged cse_id (see
     /// `TranscriptBridgeScanner` for the event shapes it recognizes), re-using a
     /// previous result when the transcript's mtime hasn't advanced. Non-Claude

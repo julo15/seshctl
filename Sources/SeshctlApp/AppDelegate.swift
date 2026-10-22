@@ -178,6 +178,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 onOpenWeb: { [weak self] session in
                     guard let self, let remote = vm.bridgedRemote(for: session) else { return }
                     vm.markSessionRead(session)
+                    // Remember the clicked row, not `rememberSelectedRow()` —
+                    // a click can land on a row other than the selected one.
+                    vm.rememberFocusedSession(session)
                     self.dispatch(.openRemote(remote.webUrl), vm: vm)
                 },
                 onOpenRecallDetail: { [weak nav] result, session in
@@ -659,6 +662,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func openSelectedOnWeb(vm: SessionListViewModel) {
         guard let url = vm.selectedWebUrl else { return }
         vm.markSelectedRowRead()
+        vm.rememberSelectedRow()
         dispatch(.openRemote(url), vm: vm)
     }
 
@@ -673,6 +677,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // mark-read closure, so remote rows must be marked read here
             // rather than by `dispatch`.
             vm.markSelectedRowRead()
+            // `.openRemote` never calls the local-typed `rememberFocused`
+            // closure, so remember the row here for a quick reopen.
+            vm.rememberSelectedRow()
             target = .openRemote(remote.webUrl)
         } else if let session = vm.selectedSession {
             target = session.isActive ? .activeSession(session) : .inactiveSession(session)

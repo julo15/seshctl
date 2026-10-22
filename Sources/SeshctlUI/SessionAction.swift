@@ -184,9 +184,17 @@ public enum SessionAction {
         }
     }
 
-    /// Open a remote (cloud) Claude Code session. If a `RemoteBrowserCoordinator`
-    /// is provided, route through it so successive flips between sessions
-    /// reuse a single managed tab. Otherwise fall back to the stateless
+    /// Open a remote (cloud) Claude Code session.
+    ///
+    /// When the Claude desktop app is installed and `url` is a claude.ai
+    /// session URL, open `claude://code/<id>` via `env.openURL` instead — the
+    /// app switches its single window to the session, so no browser tabs pile
+    /// up. The deep link is undocumented (see `ClaudeDesktopApp`), so the
+    /// browser path below stays the fallback.
+    ///
+    /// Otherwise, if a `RemoteBrowserCoordinator` is provided, route through
+    /// it so successive flips between sessions reuse a single managed tab.
+    /// Otherwise fall back to the stateless
     /// `BrowserController.focusOrOpen` (Phase 1 behavior — focus existing tab
     /// or open a new one in the default browser).
     ///
@@ -204,6 +212,12 @@ public enum SessionAction {
         remoteBrowserCoordinator: RemoteBrowserCoordinator? = nil
     ) {
         dismiss()
+        let env = environment ?? TerminalController.environment
+        if env.appBundleURL(forBundleId: ClaudeDesktopApp.bundleId) != nil,
+           let desktopURL = ClaudeDesktopApp.sessionURL(fromWebURL: url) {
+            env.openURL(desktopURL)
+            return
+        }
         if let coordinator = remoteBrowserCoordinator {
             MainActor.assumeIsolated {
                 coordinator.openOrFocus(url: url, environment: environment)
