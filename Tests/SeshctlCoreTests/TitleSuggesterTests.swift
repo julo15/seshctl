@@ -58,31 +58,28 @@ struct TitleSuggesterTests {
         #expect(TitleSuggester.prompt(turns: [ask("<task-notification>x")]) == nil)
     }
 
-    @Test("Candidates are cleaned, deduped and capped at three")
-    func parsesCandidates() {
-        let raw = "\u{1B}]0;claude\u{07}1. \"Right-align the model pill\"\n2) **Fix icon slot width**.\n\n- right-align the model pill\n• Tighten chevron spacing\n4. Fourth one"
-
-        #expect(TitleSuggester.parseCandidates(raw) == [
-            "Right-align the model pill",
-            "Fix icon slot width",
-            "Tighten chevron spacing",
-        ])
+    @Test("The title is the first usable line, cleaned up")
+    func parsesTitle() {
+        #expect(TitleSuggester.parseTitle("\u{1B}]0;claude\u{07}1. \"Right-align the model pill\".\nSecond idea") == "Right-align the model pill")
+        #expect(TitleSuggester.parseTitle("\n- **Fix icon slot width**!") == "Fix icon slot width")
+        #expect(TitleSuggester.parseTitle("\u{201C}Tighten chevron spacing.\u{201D}") == "Tighten chevron spacing", "punctuation inside the quotes too")
+        #expect(TitleSuggester.parseTitle("  \n\"\"") == nil)
     }
 
-    @Test("Overlong candidates are cut to eight words")
+    @Test("Overlong titles are cut to eight words")
     func capsWords() {
-        #expect(TitleSuggester.parseCandidates("one two three four five six seven eight nine ten") == ["one two three four five six seven eight"])
+        #expect(TitleSuggester.parseTitle("one two three four five six seven eight nine ten") == "one two three four five six seven eight")
     }
 
     @Test("generate runs Haiku without user settings or persistence, from a scratch directory")
     func generateArguments() {
         var captured: (args: [String], directory: URL?)?
-        let titles = TitleSuggester.generate(prompt: "P", cli: URL(fileURLWithPath: "/bin/claude")) { _, args, _, directory in
+        let title = TitleSuggester.generate(prompt: "P", cli: URL(fileURLWithPath: "/bin/claude")) { _, args, _, directory in
             captured = (args, directory)
-            return ShellRunner.Result(stdout: "A\nB\nC", stderr: "", status: 0)
+            return ShellRunner.Result(stdout: "Model pill", stderr: "", status: 0)
         }
 
-        #expect(titles == ["A", "B", "C"])
+        #expect(title == "Model pill")
         let args = captured?.args ?? []
         #expect(args.contains("--no-session-persistence"))
         #expect(args.contains("--setting-sources") && args.contains("project"))
@@ -91,12 +88,12 @@ struct TitleSuggesterTests {
         #expect(captured?.directory != nil)
     }
 
-    @Test("A failed run gives no titles")
+    @Test("A failed run gives no title")
     func generateFailure() {
         let cli = URL(fileURLWithPath: "/bin/claude")
         #expect(TitleSuggester.generate(prompt: "P", cli: cli) { _, _, _, _ in
             ShellRunner.Result(stdout: "A", stderr: "quota", status: 1)
-        }.isEmpty)
-        #expect(TitleSuggester.generate(prompt: "P", cli: cli) { _, _, _, _ in nil }.isEmpty)
+        } == nil)
+        #expect(TitleSuggester.generate(prompt: "P", cli: cli) { _, _, _, _ in nil } == nil)
     }
 }

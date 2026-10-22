@@ -486,18 +486,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 openSelectedOnWeb(vm: vm)
             }
         // x — kill session process
-        // t — ask for three titles describing what the session is doing now
+        // t — suggest a title describing what the session is doing now
         case (_, "t"):
             if vm.pendingKillSessionId == nil && !vm.pendingMarkAllRead && vm.pendingForkSessionId == nil {
                 vm.requestTitleSuggestions()
             }
-        // 1–3 — use a suggested title (only when the selected row has them)
-        case (_, "1"):
-            vm.pickTitleSuggestion(0)
-        case (_, "2"):
-            vm.pickTitleSuggestion(1)
-        case (_, "3"):
-            vm.pickTitleSuggestion(2)
         case (_, "x"):
             if vm.pendingKillSessionId == nil && !vm.pendingMarkAllRead && vm.pendingForkSessionId == nil {
                 vm.requestKill()
@@ -518,8 +511,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     dismiss: { [weak self] in self?.dismissPanelAfterAction() },
                     remoteBrowserCoordinator: remoteBrowserCoordinator
                 )
+            } else {
+                vm.acceptTitleSuggestion()
             }
-        // n — cancel kill, mark all read, or fork
+        // n — cancel kill, mark all read, fork, or a suggested title
         case (_, "n"):
             if vm.pendingKillSessionId != nil {
                 vm.cancelKill()
@@ -527,6 +522,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 vm.cancelMarkAllRead()
             } else if vm.pendingForkSessionId != nil {
                 vm.cancelFork()
+            } else {
+                vm.dismissTitleSuggestions()
             }
         // q or Escape — cancel kill/mark all read/fork or close panel
         case (_, "q"), (53, _):

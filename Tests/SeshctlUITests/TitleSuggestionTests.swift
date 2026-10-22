@@ -7,9 +7,9 @@ import Testing
 @Suite("Title suggestions")
 struct TitleSuggestionTests {
     @MainActor
-    private func makeViewModel(_ db: SeshctlDatabase, titles: [String] = ["Alpha", "Beta", "Gamma"]) -> SessionListViewModel {
+    private func makeViewModel(_ db: SeshctlDatabase, title: String? = "Alpha") -> SessionListViewModel {
         let vm = SessionListViewModel(database: db, enableGC: false, defaults: UserDefaults(suiteName: "titles-\(UUID().uuidString)")!)
-        vm.titleSuggestionGenerator = { _ in titles }
+        vm.titleSuggestionGenerator = { _ in title }
         vm.refresh()
         return vm
     }
@@ -22,7 +22,7 @@ struct TitleSuggestionTests {
         }
     }
 
-    @Test("t shows Titling…, then three candidates")
+    @Test("t shows Titling…, then the suggested title")
     @MainActor
     func requestShowsCandidates() async throws {
         let db = try SeshctlDatabase.temporary()
@@ -33,10 +33,10 @@ struct TitleSuggestionTests {
         #expect(vm.titleSuggestionsById[session.id] == .loading)
         await waitForSuggestions(vm, id: session.id)
 
-        #expect(vm.titleSuggestionsById[session.id] == .ready(["Alpha", "Beta", "Gamma"]))
+        #expect(vm.titleSuggestionsById[session.id] == .ready("Alpha"))
     }
 
-    @Test("Picking saves the title for the conversation, across resumes and restarts")
+    @Test("y saves the title for the conversation, across resumes and restarts")
     @MainActor
     func pickPersistsPerConversation() async throws {
         let db = try SeshctlDatabase.temporary()
@@ -45,18 +45,18 @@ struct TitleSuggestionTests {
         vm.requestTitleSuggestions()
         await waitForSuggestions(vm, id: first.id)
 
-        #expect(vm.pickTitleSuggestion(1))
-        #expect(vm.titlesById[first.id] == "Beta")
+        #expect(vm.acceptTitleSuggestion())
+        #expect(vm.titlesById[first.id] == "Alpha")
         #expect(vm.titleSuggestionsById[first.id] == nil)
 
         // Resume: a new row for the same conversation, in a fresh app launch.
         try db.endSession(pid: 1, tool: .claude)
         let resumed = try db.startSession(tool: .claude, directory: "/tmp/a", pid: 2, conversationId: "conv-a")
         let relaunched = makeViewModel(db)
-        #expect(relaunched.titlesById[resumed.id] == "Beta")
+        #expect(relaunched.titlesById[resumed.id] == "Alpha")
     }
 
-    @Test("A picked title also names Codex rows, which Claude never titles")
+    @Test("An accepted title also names Codex rows, which Claude never titles")
     @MainActor
     func codexRowsGetTitles() async throws {
         let db = try SeshctlDatabase.temporary()
@@ -65,12 +65,12 @@ struct TitleSuggestionTests {
         vm.requestTitleSuggestions()
         await waitForSuggestions(vm, id: session.id)
 
-        vm.pickTitleSuggestion(0)
+        vm.acceptTitleSuggestion()
 
         #expect(vm.titlesById[session.id] == "Alpha")
     }
 
-    @Test("Esc discards the suggestions and keeps the current title")
+    @Test("n or Esc declines the suggestion and keeps the current title")
     @MainActor
     func dismissKeepsTitle() async throws {
         let db = try SeshctlDatabase.temporary()
@@ -85,7 +85,7 @@ struct TitleSuggestionTests {
         #expect(!vm.dismissTitleSuggestions(), "nothing left, so Esc moves on to its other jobs")
     }
 
-    @Test("1–3 only act on the selected row's suggestions")
+    @Test("y only acts on the selected row's suggestion")
     @MainActor
     func pickIgnoresOtherRows() async throws {
         let db = try SeshctlDatabase.temporary()
@@ -97,23 +97,22 @@ struct TitleSuggestionTests {
         await waitForSuggestions(vm, id: top.id)
 
         vm.moveSelectionDown()
-        #expect(!vm.pickTitleSuggestion(0))
-        #expect(vm.titleSuggestionsById[top.id] != nil, "the other row's suggestions wait for it")
-        #expect(!vm.pickTitleSuggestion(5), "out of range")
+        #expect(!vm.acceptTitleSuggestion())
+        #expect(vm.titleSuggestionsById[top.id] != nil, "the other row's suggestion waits for it")
     }
 
-    @Test("No titles back shows a failure note")
+    @Test("No title back shows a failure note")
     @MainActor
     func failureState() async throws {
         let db = try SeshctlDatabase.temporary()
         let session = try db.startSession(tool: .claude, directory: "/tmp/a", pid: 1, conversationId: "conv-a")
-        let vm = makeViewModel(db, titles: [])
+        let vm = makeViewModel(db, title: nil)
 
         vm.requestTitleSuggestions()
         await waitForSuggestions(vm, id: session.id)
 
         #expect(vm.titleSuggestionsById[session.id] == .failed)
-        #expect(!vm.pickTitleSuggestion(0))
+        #expect(!vm.acceptTitleSuggestion())
     }
 
     @Test("Rows that can't be retitled ignore t")

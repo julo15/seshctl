@@ -89,11 +89,11 @@ public final class SessionListViewModel: ObservableObject {
     /// highlighted pill. See `isUnusualModel(_:tool:)`.
     @Published public private(set) var usualModelByTool: [SessionTool: String] = [:]
     /// Title suggestions requested with `t`, keyed by `session.id`. Absent
-    /// when none were asked for or they were picked or dismissed.
+    /// when none was asked for or it was accepted or declined.
     @Published public private(set) var titleSuggestionsById: [String: TitleSuggestionState] = [:]
-    /// Produces title candidates for a session. Blocks for a few seconds (it
+    /// Produces a title for a session, or nil. Blocks for a few seconds (it
     /// runs `claude -p`), so it's called off the main actor. Replaced in tests.
-    var titleSuggestionGenerator: @Sendable (Session) -> [String]
+    var titleSuggestionGenerator: @Sendable (Session) -> String?
     /// Per-transcript cache: `path → (mtime, cseId)`. Lets `refresh()` skip
     /// re-reading a live Claude transcript when its file mtime hasn't
     /// advanced. Bounded by `sessions.count` on each refresh (entries for
@@ -244,7 +244,7 @@ public final class SessionListViewModel: ObservableObject {
         self.database = database
         self.projectsRoot = projectsRoot
         self.titleSuggestionGenerator = { session in
-            Self.suggestTitles(for: session, projectsRoot: projectsRoot)
+            Self.suggestTitle(for: session, projectsRoot: projectsRoot)
         }
         self.refreshInterval = refreshInterval
         self.enableGC = enableGC
@@ -1293,9 +1293,9 @@ public final class SessionListViewModel: ObservableObject {
 
     // MARK: - Title suggestions (`t`)
 
-    /// Ask for three titles for the selected session, describing what it's
-    /// doing now. The row shows "Titling…" until they arrive; the user can
-    /// keep navigating meanwhile. A no-op on rows that can't be retitled
+    /// Ask for a title for the selected session, describing what it's doing
+    /// now. The row shows "Titling…" until it arrives; the user can keep
+    /// navigating meanwhile. A no-op on rows that can't be retitled
     /// (cloud rows, tools without a transcript, no conversation id) and
     /// while a request for the row is already running.
     public func requestTitleSuggestions() {
@@ -1307,24 +1307,22 @@ public final class SessionListViewModel: ObservableObject {
         titleSuggestionsById[session.id] = .loading
         let generate = titleSuggestionGenerator
         Task { [weak self] in
-            let titles = await Task.detached { generate(session) }.value
+            let title = await Task.detached { generate(session) }.value
             guard let self, self.titleSuggestionsById[session.id] == .loading else { return }
-            self.titleSuggestionsById[session.id] = titles.isEmpty ? .failed : .ready(titles)
+            self.titleSuggestionsById[session.id] = title.map { .ready($0) } ?? .failed
         }
     }
 
-    /// Save suggestion `index` (0-based) as the selected row's conversation
-    /// title. Returns false when the selected row has no such suggestion, so
-    /// the key falls through.
+    /// Save the selected row's suggested title as its conversation title.
+    /// Returns false when the selected row has no suggestion ready.
     @discardableResult
-    public func pickTitleSuggestion(_ index: Int) -> Bool {
+    public func acceptTitleSuggestion() -> Bool {
         guard let session = selectedSession,
-              case .ready(let titles) = titleSuggestionsById[session.id],
-              titles.indices.contains(index),
+              case .ready(let title) = titleSuggestionsById[session.id],
               let conversationId = session.conversationId
         else { return false }
         do {
-            try database.setConversationTitle(conversationId: conversationId, tool: session.tool, title: titles[index])
+            try database.setConversationTitle(conversationId: conversationId, tool: session.tool, title: title)
         } catch {
             self.error = error.localizedDescription
             return true
@@ -1334,7 +1332,7 @@ public final class SessionListViewModel: ObservableObject {
         return true
     }
 
-    /// Discard the selected row's suggestions (or its pending request).
+    /// Decline the selected row's suggestion (or drop its pending request).
     /// Returns false when it has none, so Esc goes on to its other jobs.
     @discardableResult
     public func dismissTitleSuggestions() -> Bool {
@@ -1344,8 +1342,8 @@ public final class SessionListViewModel: ObservableObject {
     }
 
     /// The default generator: parse the session's transcript, build the
-    /// prompt and run Haiku. Returns no titles on any failure.
-    nonisolated static func suggestTitles(for session: Session, projectsRoot: URL) -> [String] {
+    /// prompt and run Haiku. Returns nil on any failure.
+    nonisolated static func suggestTitle(for session: Session, projectsRoot: URL) -> String? {
         let url: URL? = session.tool == .claude
             ? TranscriptParser.resolveExistingTranscript(for: session, projectsRoot: projectsRoot)
             : session.transcriptPath.map { URL(fileURLWithPath: $0) }
@@ -1353,7 +1351,7 @@ public final class SessionListViewModel: ObservableObject {
               let turns = try? TranscriptParser.parse(data: data, tool: session.tool),
               let prompt = TitleSuggester.prompt(turns: turns),
               let cli = TitleSuggester.resolveClaudeCLI()
-        else { return [] }
+        else { return nil }
         return TitleSuggester.generate(prompt: prompt, cli: cli)
     }
 
@@ -1730,6 +1728,6 @@ public final class SessionListViewModel: ObservableObject {
 /// Where a row's `t` request stands.
 public enum TitleSuggestionState: Equatable, Sendable {
     case loading
-    case ready([String])
+    case ready(String)
     case failed
 }

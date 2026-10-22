@@ -52,7 +52,7 @@ Press **Cmd+Shift+S** to toggle the session panel.
 - **U** — mark all sessions as read (then **y** to confirm, **n** to cancel)
 - **r** — cycle the source filter: all → local only → cloud only → all
 - **v** — toggle list/tree view
-- **t** — suggest three titles for the selected session, describing what it's doing now (takes a few seconds). Press **1**–**3** to use one, **Esc** to keep the current title, **t** for new ones. A picked title sticks to the conversation across resumes and restarts. Runs Claude Haiku through your `claude` CLI, so it uses your Claude plan
+- **t** — suggest a title for the selected session, describing what it's doing now (takes a few seconds). Press **y** to use it, **n** or **Esc** to keep the current title, **t** for another. A picked title sticks to the conversation across resumes and restarts. Runs Claude Haiku through your `claude` CLI, so it uses your Claude plan
 - **c** — show closed sessions, one per conversation; **Enter** reopens the selected one, **/** narrows, **Esc** or **q** goes back (press again to close the panel)
 - **h / l** — in tree mode, jump to previous/next group
 - **/** — search/filter sessions

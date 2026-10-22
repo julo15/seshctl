@@ -1,7 +1,7 @@
 import Foundation
 
-/// Suggests titles for a session on request (`t`), describing what it is
-/// doing *now*. Claude Code's own `ai-title` is written once from the opening
+/// Suggests a title for a session on request (`t`), describing what it is
+/// doing *now*. The user accepts it with `y` or declines with `n`. Claude Code's own `ai-title` is written once from the opening
 /// prompt, so a long session that moved on keeps a title for its first task.
 ///
 /// **Recency-biased material.** The prompt gets the user's last few typed
@@ -17,10 +17,6 @@ import Foundation
 /// paths) are filtered out, since they crowded real requests out of the
 /// window.
 ///
-/// **Three candidates per run.** About one generation in three comes back
-/// garbled, and a run costs ~6s, so asking for three at once lets the user
-/// skip a bad one without paying for a retry.
-///
 /// The output cleanup and CLI lookup come from @patoms's #69.
 public enum TitleSuggester {
 
@@ -29,7 +25,6 @@ public enum TitleSuggester {
     static let askCharacterLimit = 300
     static let recentReplyCount = 3
     static let replyCharacterLimit = 400
-    static let candidateCount = 3
     static let maxWords = 8
     static let maxCharacters = 64
 
@@ -56,13 +51,12 @@ public enum TitleSuggester {
 
         return """
         Below is the recent part of a coding session between a user and an AI agent. \
-        The session may have moved through several tasks. Suggest \(candidateCount) \
-        short titles for the task it is on NOW, judging mainly by the most recent \
-        requests. Mention the original task only if it is still the focus.
+        The session may have moved through several tasks. Write a short title \
+        for the task it is on NOW, judging mainly by the most recent requests.
 
         Rules:
-        - One title per line, \(candidateCount) lines, nothing else.
-        - At most \(maxWords) words each.
+        - Reply with the title only, on one line.
+        - At most \(maxWords) words.
         - Describe the task, not the conversation. No "user asks" or "discussion of".
         - Name the feature or problem being worked on, not workflow steps like commit, PR, review or merge.
         - No numbering, quotation marks, trailing periods or markdown.
@@ -100,16 +94,10 @@ public enum TitleSuggester {
 
     // MARK: - Output
 
-    /// Up to three distinct titles from a raw CLI response.
-    public static func parseCandidates(_ raw: String) -> [String] {
-        var seen = Set<String>()
-        var titles: [String] = []
-        for line in stripEscapeSequences(raw).split(separator: "\n") {
-            guard let title = normalize(String(line)), seen.insert(title.lowercased()).inserted else { continue }
-            titles.append(title)
-            if titles.count == candidateCount { break }
-        }
-        return titles
+    /// The title in a raw CLI response: its first usable line, so a stray
+    /// preamble or second suggestion is ignored.
+    public static func parseTitle(_ raw: String) -> String? {
+        stripEscapeSequences(raw).split(separator: "\n").lazy.compactMap { normalize(String($0)) }.first
     }
 
     /// Clean one line into a title, or nil when nothing usable is left.
@@ -124,6 +112,9 @@ public enum TitleSuggester {
         }
         text = text.replacingOccurrences(of: "**", with: "")
 
+        // Punctuation can sit outside the quotes (`"Title".`) or inside them
+        // (`"Title."`), so strip it on both sides of the unquoting.
+        text = dropTrailingPunctuation(text)
         for quote in ["\"", "'", "\u{201C}", "\u{2018}", "`"] {
             let closing = ["\u{201C}": "\u{201D}", "\u{2018}": "\u{2019}"][quote] ?? quote
             if text.hasPrefix(quote), text.hasSuffix(closing), text.count > 1 {
@@ -131,10 +122,7 @@ public enum TitleSuggester {
                 break
             }
         }
-        while let last = text.last, ".!,;:".contains(last) {
-            text = String(text.dropLast())
-        }
-        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        text = dropTrailingPunctuation(text).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
 
         let words = text.split(separator: " ")
@@ -143,6 +131,14 @@ public enum TitleSuggester {
         }
         if text.count > maxCharacters {
             text = String(text.prefix(maxCharacters)).trimmingCharacters(in: .whitespaces) + "\u{2026}"
+        }
+        return text
+    }
+
+    static func dropTrailingPunctuation(_ text: String) -> String {
+        var text = text.trimmingCharacters(in: .whitespaces)
+        while let last = text.last, ".!,;:".contains(last) {
+            text = String(text.dropLast())
         }
         return text
     }
@@ -219,8 +215,8 @@ public enum TitleSuggester {
          "--setting-sources", "project", "--no-session-persistence", prompt]
     }
 
-    /// Run the model and return its candidates, or an empty array on any
-    /// failure (CLI missing, non-zero exit, timeout, unusable output).
+    /// Run the model and return its title, or nil on any failure (CLI
+    /// missing, non-zero exit, timeout, unusable output).
     /// Blocks for several seconds, so call it off the main actor.
     public static func generate(
         prompt: String,
@@ -229,12 +225,12 @@ public enum TitleSuggester {
         runner: (String, [String], TimeInterval, URL?) -> ShellRunner.Result? = { path, args, timeout, directory in
             ShellRunner.run(path: path, args: args, timeout: timeout, currentDirectory: directory)
         }
-    ) -> [String] {
+    ) -> String? {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("seshctl-titler", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         guard let result = runner(cli.path, arguments(prompt: prompt), timeout, directory),
               result.status == 0
-        else { return [] }
-        return parseCandidates(result.stdout)
+        else { return nil }
+        return parseTitle(result.stdout)
     }
 }
