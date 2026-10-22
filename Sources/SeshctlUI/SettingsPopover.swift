@@ -106,7 +106,7 @@ public struct SettingsPopover: View {
                     .toggleStyle(.switch)
                     .controlSize(.small)
                     .padding(.top, 4)
-                Text("Keeps the panel visible when you focus another window instead of dismissing it. Park it on a spare monitor as an always-on dashboard. The panel remembers its position and size either way, and can be resized by dragging its edges.")
+                Text("Keeps the panel visible when you focus another window instead of dismissing it. Park it on a spare monitor as an always-on dashboard. While on, Seshctl also appears in the Dock and Cmd+Tab. Resize the panel by dragging its edges.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

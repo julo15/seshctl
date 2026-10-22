@@ -3,8 +3,8 @@ import SwiftUI
 
 /// A floating NSPanel that behaves like Spotlight:
 /// - The panel window itself stays out of Mission Control and the window list.
-///   (The *app* is Cmd+Tab-reachable — `LSUIElement` is off and
-///   `AppDelegate.applicationDidBecomeActive` shows this panel on activation.)
+///   (While pinned, the *app* is Cmd+Tab-reachable — see
+///   `AppDelegate.activationPolicy(keepOpen:)`.)
 /// - Stays above other windows
 /// - Click outside to dismiss
 /// - Vim-style keyboard navigation (j/k, arrows, enter, esc)
@@ -61,10 +61,11 @@ final class FloatingPanel: NSPanel {
     /// Ignored while `keepOpen` is false — see `windowLevel(keepOpen:alwaysInFront:)`.
     private(set) var alwaysInFront = false
 
-    /// True when AppKit restored a previously saved frame at init, meaning the
-    /// user has parked this panel somewhere deliberate. `centerOnScreen()`
-    /// checks this so a show never overrides that choice.
-    private(set) var didRestoreSavedFrame = false
+    /// True once the panel has a position worth keeping: AppKit restored a
+    /// saved frame at init, or it has been centered once. `centerOnScreen()`
+    /// checks this so a pinned panel is never pulled away from where the user
+    /// parked it.
+    private(set) var hasPlacement = false
 
     init(rootView: some View) {
         super.init(
@@ -144,7 +145,7 @@ final class FloatingPanel: NSPanel {
         // subsequent move is written back. Order matters: naming the autosave
         // slot before restoring can persist the default centered frame over the
         // user's saved one.
-        didRestoreSavedFrame = setFrameUsingName(Self.frameAutosaveName)
+        hasPlacement = setFrameUsingName(Self.frameAutosaveName)
         setFrameAutosaveName(Self.frameAutosaveName)
     }
 
@@ -169,6 +170,12 @@ final class FloatingPanel: NSPanel {
     /// the next summon.
     static func panelAlpha(keepOpen: Bool, isKey: Bool) -> CGFloat {
         (keepOpen && !isKey) ? unfocusedAlpha : 1.0
+    }
+
+    /// Whether a show should leave the panel where it is. Pure + static so the
+    /// rule is unit-testable without a live window.
+    static func keepsPlacement(keepOpen: Bool, hasPlacement: Bool) -> Bool {
+        keepOpen && hasPlacement
     }
 
     /// Apply both panel settings at once. They jointly determine the window
@@ -198,26 +205,19 @@ final class FloatingPanel: NSPanel {
         alphaValue = target
     }
 
-    /// Center the panel on the active screen — but only when the user hasn't
-    /// already placed it. Once a frame has been saved, showing the panel must
-    /// respect it: re-centering is what drags a panel parked on a third monitor
-    /// back to whichever screen is currently active.
+    /// Center the panel on the active screen, keeping its (possibly
+    /// user-resized) size. Skipped only for a *pinned* panel that already has a
+    /// placement — re-centering is what would drag a panel parked on a spare
+    /// monitor back to the active screen. A transient panel always re-centers,
+    /// like Spotlight, so it follows you across displays.
     func centerOnScreen() {
-        guard !didRestoreSavedFrame else { return }
+        guard !Self.keepsPlacement(keepOpen: keepOpen, hasPlacement: hasPlacement) else { return }
         guard let screen = NSScreen.main else { return }
         let screenFrame = screen.visibleFrame
         let x = screenFrame.midX - frame.width / 2
         let y = screenFrame.midY - frame.height / 2
         setFrameOrigin(NSPoint(x: x, y: y))
-    }
-
-    func toggle() {
-        if isVisible {
-            orderOut(nil)
-        } else {
-            centerOnScreen()
-            makeKeyAndOrderFront(nil)
-        }
+        hasPlacement = true
     }
 
     /// Whether losing key focus should dismiss the panel. Pure + static so the

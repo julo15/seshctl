@@ -224,21 +224,40 @@ final class FloatingPanelTests: XCTestCase {
         )
     }
 
-    func test_centerOnScreenRespectsARestoredFrame() {
+    func test_onlyAPinnedPlacedPanelKeepsItsPlacement() {
+        XCTAssertTrue(FloatingPanel.keepsPlacement(keepOpen: true, hasPlacement: true))
+        XCTAssertFalse(FloatingPanel.keepsPlacement(keepOpen: true, hasPlacement: false),
+                       "A pinned panel with nowhere saved still needs centering once.")
+        XCTAssertFalse(FloatingPanel.keepsPlacement(keepOpen: false, hasPlacement: true),
+                       "The transient panel follows the active screen, like Spotlight.")
+        XCTAssertFalse(FloatingPanel.keepsPlacement(keepOpen: false, hasPlacement: false))
+    }
+
+    func test_transientPanelRecentersEvenAfterBeingMoved() throws {
+        let screen = try XCTUnwrap(NSScreen.main, "Test host needs a screen for the centering path.")
         let panel = FloatingPanel(rootView: EmptyView())
-        // A panel with no saved frame centers on the active screen; one that
-        // restored a frame must keep it, or every show drags a panel parked on
-        // a second monitor back to whichever screen is currently active.
-        guard panel.didRestoreSavedFrame else {
-            // No saved frame in this test environment — centering is allowed.
-            let before = panel.frame
-            panel.centerOnScreen()
-            XCTAssertNotNil(NSScreen.main, "Test host needs a screen for the centering path.")
-            XCTAssertEqual(panel.frame.size, before.size, "Centering should move the panel, not resize it.")
-            return
-        }
-        let parked = panel.frame
+        panel.setWindowMode(keepOpen: false, alwaysInFront: false)
         panel.centerOnScreen()
-        XCTAssertEqual(panel.frame, parked, "centerOnScreen must be a no-op once a saved frame was restored.")
+        let size = panel.frame.size
+        panel.setFrameOrigin(NSPoint(x: screen.visibleFrame.minX, y: screen.visibleFrame.minY))
+
+        panel.centerOnScreen()
+
+        XCTAssertEqual(panel.frame.midX, screen.visibleFrame.midX, accuracy: 1)
+        XCTAssertEqual(panel.frame.midY, screen.visibleFrame.midY, accuracy: 1)
+        XCTAssertEqual(panel.frame.size, size, "Centering should move the panel, not resize it.")
+    }
+
+    func test_pinnedPanelStaysWhereItWasParked() throws {
+        let screen = try XCTUnwrap(NSScreen.main, "Test host needs a screen for the centering path.")
+        let panel = FloatingPanel(rootView: EmptyView())
+        panel.setWindowMode(keepOpen: true, alwaysInFront: false)
+        panel.centerOnScreen()
+        let parked = NSPoint(x: screen.visibleFrame.minX + 10, y: screen.visibleFrame.minY + 10)
+        panel.setFrameOrigin(parked)
+
+        panel.centerOnScreen()
+
+        XCTAssertEqual(panel.frame.origin, parked, "Re-centering would drag a parked panel off its monitor.")
     }
 }

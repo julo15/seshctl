@@ -52,6 +52,19 @@ final class ReopenPreservationTests: XCTestCase {
         )
     }
 
+    // MARK: - Activation policy
+
+    func test_transientPanelKeepsAMenuBarOnlyApp() {
+        XCTAssertEqual(
+            AppDelegate.activationPolicy(keepOpen: false), .accessory,
+            "Users who never pin the panel must not get a Dock icon."
+        )
+    }
+
+    func test_pinnedPanelGetsDockAndCmdTab() {
+        XCTAssertEqual(AppDelegate.activationPolicy(keepOpen: true), .regular)
+    }
+
     func test_pinnedPanelSurvivesAction() {
         XCTAssertFalse(
             AppDelegate.shouldAutoDismissAfterAction(keepOpen: true),
