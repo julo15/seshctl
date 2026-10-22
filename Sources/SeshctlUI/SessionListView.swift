@@ -422,6 +422,7 @@ public struct SessionListView: View {
                 awaySummary: viewModel.awaySummariesById[session.id] ?? viewModel.latestAssistantById[session.id],
                 title: viewModel.titlesById[session.id],
                 isSelected: isSelected,
+                modelPill: viewModel.modelPill(for: session),
                 // List view has a Yesterday section header, so the per-row
                 // slot shows the more specific clock time for yesterday rows
                 // instead of repeating the day.
@@ -447,6 +448,7 @@ public struct SessionListView: View {
                 hostApp: hostAppResolver.claudeDesktopApp(),
                 showAgentBadge: showAgentBadge,
                 awaySummary: connectionStore.remoteAwaySummariesById[remote.id],
+                modelPill: viewModel.modelPill(for: remote),
                 yesterdayStyle: .timeOfDay
             )
         }

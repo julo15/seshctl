@@ -78,6 +78,16 @@ public final class SessionListViewModel: ObservableObject {
     /// with `transcriptTitleCache` resuming each transcript from the byte
     /// offset already scanned.
     @Published public private(set) var titlesById: [String: String] = [:]
+    /// Display name of the model each local Claude or Codex session last
+    /// used (e.g. `"Opus 5.5"`), keyed by `session.id`, for the row's model
+    /// pill. Absent when the transcript names no model. Computed in
+    /// `refresh()` via `TranscriptModelScanner`, cached per transcript mtime
+    /// in `transcriptModelCache`.
+    @Published public private(set) var modelsById: [String: String] = [:]
+    /// The most common model per agent across the listed rows, local and
+    /// cloud. A row whose model differs from its agent's usual one gets a
+    /// highlighted pill. See `isUnusualModel(_:tool:)`.
+    @Published public private(set) var usualModelByTool: [SessionTool: String] = [:]
     /// Per-transcript cache: `path → (mtime, cseId)`. Lets `refresh()` skip
     /// re-reading a live Claude transcript when its file mtime hasn't
     /// advanced. Bounded by `sessions.count` on each refresh (entries for
@@ -98,6 +108,10 @@ public final class SessionListViewModel: ObservableObject {
     /// bytes per refresh (see `TranscriptTitleScanner`). Pruned by
     /// `pruneTranscriptTitleCache(keepingPaths:)` on each refresh.
     private var transcriptTitleCache: [String: TranscriptTitleScanner.State] = [:]
+    /// Per-transcript cache: `path → (mtime, rawModel)`. Mirrors
+    /// `transcriptLatestAssistantCache`. Pruned by
+    /// `pruneTranscriptModelCache(keepingPaths:)` on each refresh.
+    private var transcriptModelCache: [String: (mtime: Date, model: String?)] = [:]
     /// Root that transcript resolution falls back to when a session's stored
     /// path is stale (`~/.claude/projects` in production; a temp dir in tests).
     private let projectsRoot: URL
@@ -431,6 +445,30 @@ public final class SessionListViewModel: ObservableObject {
             }
             titlesById = titles
             pruneTranscriptTitleCache(keepingPaths: Array(titlePaths.values))
+            // Models for the pill. Claude paths are already resolved above
+            // (live rows plus the `c` view's older ones); Codex rows use the
+            // stored rollout path, which the hooks record verbatim.
+            var modelPaths = titlePaths
+            var modelSessions = titleSessions
+            for session in sessions + (isRecentsMode ? recentSessions : []) where session.tool == .codex {
+                guard modelPaths[session.id] == nil, let path = session.transcriptPath,
+                      FileManager.default.fileExists(atPath: path) else { continue }
+                modelPaths[session.id] = path
+                modelSessions.append(session)
+            }
+            var models: [String: String] = [:]
+            for session in modelSessions {
+                guard let path = modelPaths[session.id],
+                      let raw = cachedModel(for: session, transcriptPath: path) else { continue }
+                models[session.id] = TranscriptModelScanner.displayName(for: raw)
+            }
+            if models != modelsById { modelsById = models }
+            pruneTranscriptModelCache(keepingPaths: Array(modelPaths.values))
+            let usual = Self.usualModels(
+                local: sessions.compactMap { session in models[session.id].map { (session.tool, $0) } },
+                remote: remoteSessions.map(\.model)
+            )
+            if usual != usualModelByTool { usualModelByTool = usual }
             pruneTranscriptBridgeCache(keepingPaths: livePaths)
             // Re-pin `selectedIndex` to the previously-selected row's new
             // position. If the row vanished (closed + filtered out of
@@ -1169,6 +1207,69 @@ public final class SessionListViewModel: ObservableObject {
             transcriptLatestAssistantCache[path] = (mtime, text)
         }
         return text
+    }
+
+    /// Scan the session's transcript for the model it last used, re-using a
+    /// previous result when the transcript's mtime hasn't advanced. Mirrors
+    /// `cachedLatestAssistant(for:transcriptPath:)`. Tools without a
+    /// transcript return nil inside the scanner, before touching the file.
+    fileprivate func cachedModel(for session: Session, transcriptPath path: String) -> String? {
+        let mtime = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+        if let mtime, let cached = transcriptModelCache[path], cached.mtime == mtime {
+            return cached.model
+        }
+        let model = TranscriptModelScanner.extractModel(transcriptPath: path, tool: session.tool)
+        if let mtime {
+            transcriptModelCache[path] = (mtime, model)
+        }
+        return model
+    }
+
+    /// Drop cache entries for transcripts whose owning session is no longer
+    /// listed. Mirrors `pruneTranscriptLatestAssistantCache`.
+    fileprivate func pruneTranscriptModelCache(keepingPaths paths: [String]) {
+        let live = Set(paths)
+        transcriptModelCache = transcriptModelCache.filter { live.contains($0.key) }
+    }
+
+    /// The most common display model per agent. Cloud sessions are all
+    /// Claude and count toward `.claude`. Ties go to the alphabetically first
+    /// name so the highlight doesn't flicker between refreshes.
+    nonisolated static func usualModels(
+        local: [(SessionTool, String)],
+        remote: [String]
+    ) -> [SessionTool: String] {
+        var counts: [SessionTool: [String: Int]] = [:]
+        for (tool, model) in local {
+            counts[tool, default: [:]][model, default: 0] += 1
+        }
+        for raw in remote where !raw.isEmpty {
+            counts[.claude, default: [:]][TranscriptModelScanner.displayName(for: raw), default: 0] += 1
+        }
+        return counts.compactMapValues { byModel in
+            byModel.max { a, b in a.value != b.value ? a.value < b.value : a.key > b.key }?.key
+        }
+    }
+
+    /// The model pill for a local row, or nil when its transcript names no
+    /// model.
+    public func modelPill(for session: Session) -> ModelPill? {
+        guard let name = modelsById[session.id] else { return nil }
+        return ModelPill(name: name, isUnusual: isUnusualModel(name, tool: session.tool))
+    }
+
+    /// The model pill for a cloud row. Every cloud session is Claude.
+    public func modelPill(for remote: RemoteClaudeCodeSession) -> ModelPill? {
+        guard !remote.model.isEmpty else { return nil }
+        let name = TranscriptModelScanner.displayName(for: remote.model)
+        return ModelPill(name: name, isUnusual: isUnusualModel(name, tool: .claude))
+    }
+
+    /// Whether `model` differs from the usual model for `tool`, which gets
+    /// the pill its highlight. A lone session is its agent's usual model.
+    public func isUnusualModel(_ model: String, tool: SessionTool) -> Bool {
+        guard let usual = usualModelByTool[tool] else { return false }
+        return model != usual
     }
 
     /// Bytes of transcript the title scanner may read per `refresh()`, shared

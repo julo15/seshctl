@@ -33,6 +33,16 @@ struct ResultRowLayout<Status: View, Content: View>: View {
     /// of the unread cluster (bold sender + bold preview + accent bar).
     /// Read rows leave this `false` so the time recedes to `.secondary`.
     var isUnread: Bool = false
+    /// The session's model, shown as a pill just left of the host-app icon.
+    /// Nil leaves no gap.
+    var modelPill: ModelPill? = nil
+
+    /// The 24pt icon plus `BadgedIcon`'s trailing overhang, so badged and
+    /// bare icons occupy the same width.
+    static var iconSlotWidth: CGFloat { 24 + BadgedIcon.overhang(badgeSize: BadgedIcon.defaultBadgeSize) }
+    /// Narrower than the 20pt hit box the chevron used to sit in, which
+    /// padded it well away from the icon.
+    static var chevronSlotWidth: CGFloat { 14 }
 
     var body: some View {
         // Top-aligned so the status dot, timestamp, accent bar, host icon
@@ -72,68 +82,82 @@ struct ResultRowLayout<Status: View, Content: View>: View {
 
             Spacer()
 
-            // Host app icon — always takes the same slot, even for rows
-            // without a host app (e.g., remote claude.ai sessions, which fall
-            // through to the `hostAppSystemSymbol` placeholder). When
-            // `hostAppBadge` is set, the icon is composited with an agent-kind
-            // corner badge via `BadgedIcon`; otherwise renders the bare image
-            // as before.
-            Group {
-                if let hostAppBadge {
-                    let baseImage: Image? = {
-                        if let hostApp {
-                            return Image(nsImage: hostApp.icon)
-                        } else if let hostAppSystemSymbol {
-                            return Image(systemName: hostAppSystemSymbol)
-                        } else {
-                            return nil
-                        }
-                    }()
-                    if let baseImage {
-                        BadgedIcon(
-                            base: baseImage,
-                            badge: hostAppBadge,
-                            accessibilityLabel: iconAccessibilityLabel ?? ""
-                        )
-                    } else {
-                        Color.clear
-                            .frame(width: 24, height: 24)
-                            .accessibilityHidden(true)
-                    }
-                } else {
-                    Group {
-                        if let hostApp {
-                            Image(nsImage: hostApp.icon)
-                                .resizable()
-                        } else if let hostAppSystemSymbol {
-                            Image(systemName: hostAppSystemSymbol)
-                                .font(.system(size: 18, weight: .regular))
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Color.clear
-                                .accessibilityHidden(true)
-                        }
-                    }
-                    .frame(width: 24, height: 24)
-                }
+            if let modelPill {
+                // Centered on the 24pt icon beside it rather than the row's
+                // first text line.
+                ModelPillView(pill: modelPill)
+                    .frame(height: 24)
             }
 
-            // Detail chevron — same fixed-width slot whether or not the row
-            // offers a detail action.
-            Group {
-                if let onDetail {
-                    Button(action: onDetail) {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.tertiary)
-                            .frame(width: 20, height: 20)
-                            .contentShape(Rectangle())
+            // Icon and chevron sit closer together than the row's 12pt
+            // spacing: they read as one trailing control.
+            HStack(alignment: .top, spacing: 2) {
+                // Host app icon — always takes the same slot, even for rows
+                // without a host app (e.g., remote claude.ai sessions, which fall
+                // through to the `hostAppSystemSymbol` placeholder). When
+                // `hostAppBadge` is set, the icon is composited with an agent-kind
+                // corner badge via `BadgedIcon`; otherwise renders the bare image
+                // as before. The slot is fixed at the badged width so a row
+                // without a badge keeps its icon, and the model pill beside it,
+                // in the same column.
+                Group {
+                    if let hostAppBadge {
+                        let baseImage: Image? = {
+                            if let hostApp {
+                                return Image(nsImage: hostApp.icon)
+                            } else if let hostAppSystemSymbol {
+                                return Image(systemName: hostAppSystemSymbol)
+                            } else {
+                                return nil
+                            }
+                        }()
+                        if let baseImage {
+                            BadgedIcon(
+                                base: baseImage,
+                                badge: hostAppBadge,
+                                accessibilityLabel: iconAccessibilityLabel ?? ""
+                            )
+                        } else {
+                            Color.clear
+                                .frame(width: 24, height: 24)
+                                .accessibilityHidden(true)
+                        }
+                    } else {
+                        Group {
+                            if let hostApp {
+                                Image(nsImage: hostApp.icon)
+                                    .resizable()
+                            } else if let hostAppSystemSymbol {
+                                Image(systemName: hostAppSystemSymbol)
+                                    .font(.system(size: 18, weight: .regular))
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Color.clear
+                                    .accessibilityHidden(true)
+                            }
+                        }
+                        .frame(width: 24, height: 24)
                     }
-                    .buttonStyle(.plain)
-                } else {
-                    Color.clear
-                        .frame(width: 20, height: 20)
-                        .accessibilityHidden(true)
+                }
+                .frame(width: Self.iconSlotWidth, alignment: .topLeading)
+
+                // Detail chevron — same fixed-width slot whether or not the row
+                // offers a detail action.
+                Group {
+                    if let onDetail {
+                        Button(action: onDetail) {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.tertiary)
+                                .frame(width: Self.chevronSlotWidth, height: 20)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Color.clear
+                            .frame(width: Self.chevronSlotWidth, height: 20)
+                            .accessibilityHidden(true)
+                    }
                 }
             }
         }

@@ -99,6 +99,7 @@ struct SessionTreeView: View {
                 awaySummary: viewModel.awaySummariesById[session.id] ?? viewModel.latestAssistantById[session.id],
                 title: viewModel.titlesById[session.id],
                 isSelected: isSelected,
+                modelPill: viewModel.modelPill(for: session),
                 // Tree view has no time-based section headers, so the age
                 // slot does the day-context work itself via relative-day
                 // shorthand ("1d") for yesterday.
@@ -124,6 +125,7 @@ struct SessionTreeView: View {
                 hostApp: hostAppResolver.claudeDesktopApp(),
                 showAgentBadge: showAgentBadge,
                 awaySummary: connectionStore.remoteAwaySummariesById[remote.id],
+                modelPill: viewModel.modelPill(for: remote),
                 yesterdayStyle: .relativeDay
             )
         }
