@@ -260,15 +260,11 @@ struct Update: ParsableCommand {
     }
 
     static func validateMatchers(pid: Int?, conversationId: String?) throws {
-        switch (pid, conversationId) {
-        case (nil, nil):
-            throw ValidationError("Provide exactly one of --pid or --conversation-id.")
-        case (.some, .some):
-            // PID is the matcher; conversation id is metadata written onto
-            // the matched row. Codex sends both on UserPromptSubmit.
-            break
-        default:
-            break
+        // Both together is fine: PID is the matcher and the conversation id is
+        // metadata written onto the matched row. Codex sends both on
+        // UserPromptSubmit.
+        guard pid != nil || conversationId != nil else {
+            throw ValidationError("Provide --pid or --conversation-id.")
         }
     }
 }
