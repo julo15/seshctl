@@ -258,6 +258,37 @@ struct ClosedSessionsModeTests {
         #expect(vm.titlesById[old.id] == "Old but titled")
     }
 
+    @Test("Closed Codex rows older than the newest 50 get their thread name in c")
+    @MainActor
+    func codexTitlesReachPastTheNewest50() throws {
+        let home = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        let day = home.appendingPathComponent("sessions/2026/10/22")
+        try FileManager.default.createDirectory(at: day, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let rollout = day.appendingPathComponent("rollout-2026-10-22T16-10-06-old.jsonl").path
+        try "".write(toFile: rollout, atomically: true, encoding: .utf8)
+        try (#"{"id":"old","thread_name":"Old Codex thread"}"# + "\n").write(
+            to: home.appendingPathComponent(CodexThreadNameIndex.fileName), atomically: true, encoding: .utf8)
+
+        let db = try SeshctlDatabase.temporary()
+        let old = try db.startSession(tool: .codex, directory: "/tmp/old", pid: 9000,
+                                      conversationId: "old", transcriptPath: rollout)
+        try db.endSession(pid: 9000, tool: .codex)
+        try db.dbPool.write {
+            try $0.execute(sql: "UPDATE sessions SET updated_at = ? WHERE id = ?",
+                           arguments: [Date(timeIntervalSince1970: 1), old.id])
+        }
+        for pid in 1...55 {
+            try db.startSession(tool: .claude, directory: "/tmp/\(pid)", pid: pid, conversationId: "n\(pid)")
+        }
+        let vm = makeViewModel(db)
+        #expect(!vm.sessions.contains { $0.id == old.id }, "precondition: outside the newest 50")
+
+        vm.enterRecentsMode()
+
+        #expect(vm.titlesById[old.id] == "Old Codex thread")
+    }
+
     @Test("v and the group-jump keys do nothing in c")
     @MainActor
     func treeKeysAreInertInC() throws {
