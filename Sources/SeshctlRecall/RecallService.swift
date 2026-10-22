@@ -411,7 +411,7 @@ final actor RecallStack {
     /// an LLM Tool"). Unknown agents — strings persisted in the index
     /// that don't map to a `SessionTool` — return an empty string;
     /// callers (the UI) treat empty `resumeCmd` as "no resume affordance".
-    private static func resumeCommand(for entry: HistoryEntry) -> String {
+    static func resumeCommand(for entry: HistoryEntry) -> String {
         guard let tool = SessionTool(rawValue: entry.agent) else {
             // Unknown agent persisted in the index — should never happen
             // for entries written by our own adapters. Empty string
