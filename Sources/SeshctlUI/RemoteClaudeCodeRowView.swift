@@ -158,9 +158,7 @@ public struct RemoteClaudeCodeRowView: View {
     /// repeat the headline.
     @ViewBuilder
     private var compactContent: some View {
-        let headline = session.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? (session.branchDisplay ?? session.senderDisplay)
-            : session.title
+        let headline = session.compactHeadline
         let recap = awaySummary.nonEmpty.map { PreviewContent.awaySummary($0) }
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -339,7 +337,12 @@ public struct RemoteClaudeCodeRowView: View {
     /// `.semibold` so the preview doesn't compete with the always-bold
     /// sender heading. Mirrors `SessionRowView.previewUnreadWeight`.
     private var previewUnreadWeight: Font.Weight {
-        rowLayout == .stacked ? .semibold : .bold
+        switch rowLayout {
+        case .stacked: return .semibold
+        case .twoColumn: return .bold
+        // Compact sets its own weights; this only feeds the stacked layouts.
+        case .compact: return .bold
+        }
     }
 
     /// Line 2: `cloud.fill` prefix glyph + branch. Constrained to the

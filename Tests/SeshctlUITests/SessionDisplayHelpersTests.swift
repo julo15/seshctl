@@ -461,6 +461,20 @@ private func makeRemoteSession(
     )
 }
 
+@Suite("RemoteClaudeCodeSession.compactHeadline")
+struct RemoteClaudeCodeSessionCompactHeadlineTests {
+
+    @Test("Title wins and is trimmed")
+    func titleTrimmed() {
+        #expect(makeRemoteSession(title: "  cashdash-prices-load-perf \n").compactHeadline == "cashdash-prices-load-perf")
+    }
+
+    @Test("Blank title falls back to the first branch")
+    func branchFallback() {
+        #expect(makeRemoteSession(title: "   ").compactHeadline == "main")
+    }
+}
+
 @Suite("RemoteClaudeCodeSession.previewContent(awaySummary:)")
 struct RemoteClaudeCodeSessionPreviewContentAwaySummaryTests {
 

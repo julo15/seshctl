@@ -224,6 +224,15 @@ public final class ClaudeCodeConnectionStore: ObservableObject {
             let result: String?
             do {
                 result = try await self.fetcher.fetchLatestAssistantText(sessionId: id)
+            } catch is RemoteRecapBeyondPageCap {
+                // The latest reply is just past the paging cap — usually
+                // because reconnect `system/init` noise advanced
+                // `lastEventAt` without a new reply. Keep whatever recap is
+                // showing, and cache it against this `lastEventAt` so the
+                // walk isn't repeated until activity advances again.
+                guard self.hasClaudeConnection else { return }
+                self.remoteAwaySummaryCache[id] = (pinnedLastEventAt, self.remoteAwaySummariesById[id])
+                return
             } catch {
                 // Cache the failure against this lastEventAt so we don't retry
                 // until activity advances it. See doc on remoteAwaySummaryCache.

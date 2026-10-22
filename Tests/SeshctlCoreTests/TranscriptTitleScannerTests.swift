@@ -168,4 +168,83 @@ struct TranscriptTitleScannerTests {
         """
         #expect(TranscriptTitleScanner.extractTitle(transcript: transcript) == "Two")
     }
+
+    @Test("a complete final record without a newline is applied but not consumed")
+    func unterminatedCompleteRecordApplied() throws {
+        let path = tempPath()
+        try #"{"type":"ai-title","aiTitle":"No newline"}"#.write(toFile: path, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let s1 = try #require(TranscriptTitleScanner.scan(transcriptPath: path, resuming: nil))
+        #expect(s1.title == "No newline")
+        #expect(s1.offset == 0)
+
+        try append("\n", to: path)
+        let size = try #require(FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber).uint64Value
+        let s2 = try #require(TranscriptTitleScanner.scan(transcriptPath: path, resuming: s1))
+        #expect(s2.title == "No newline")
+        #expect(s2.offset == size)
+    }
+
+    @Test("a shrunk file resets both titles and the offset")
+    func shrinkResetsState() throws {
+        let path = tempPath()
+        let long = #"{"type":"custom-title","customTitle":"Renamed with a fairly long name"}"# + "\n"
+        try long.write(toFile: path, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let s1 = try #require(TranscriptTitleScanner.scan(transcriptPath: path, resuming: nil))
+        #expect(s1.customTitle != nil)
+
+        let short = #"{"type":"user"}"# + "\n"
+        try short.write(toFile: path, atomically: true, encoding: .utf8)
+        let s2 = try #require(TranscriptTitleScanner.scan(transcriptPath: path, resuming: s1))
+        #expect(s2.customTitle == nil)
+        #expect(s2.aiTitle == nil)
+        #expect(s2.offset == UInt64(short.utf8.count))
+    }
+
+    @Test("maxBytes bounds a read to whole lines and the next scan resumes")
+    func maxBytesResumes() throws {
+        let path = tempPath()
+        let first = #"{"type":"user"}"# + "\n"
+        let second = #"{"type":"ai-title","aiTitle":"Bounded"}"# + "\n"
+        try (first + second).write(toFile: path, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        // Budget covers the first line and a few bytes of the second.
+        let s1 = try #require(TranscriptTitleScanner.scan(transcriptPath: path, resuming: nil, maxBytes: first.utf8.count + 5))
+        #expect(s1.offset == UInt64(first.utf8.count))
+        #expect(s1.title == nil)
+
+        let s2 = try #require(TranscriptTitleScanner.scan(transcriptPath: path, resuming: s1, maxBytes: 1 << 20))
+        #expect(s2.title == "Bounded")
+        #expect(s2.offset == UInt64((first + second).utf8.count))
+    }
+
+    @Test("a line longer than maxBytes still makes progress")
+    func maxBytesSmallerThanOneLine() throws {
+        let path = tempPath()
+        let line = #"{"type":"ai-title","aiTitle":"Longer than the budget"}"# + "\n"
+        try (line + #"{"type":"user"}"# + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let state = try #require(TranscriptTitleScanner.scan(transcriptPath: path, resuming: nil, maxBytes: 4))
+        #expect(state.title == "Longer than the budget")
+        #expect(state.offset > 0)
+    }
+
+    @Test("a bounded read never applies a cut-off final fragment")
+    func boundedReadSkipsFragment() throws {
+        let path = tempPath()
+        let first = #"{"type":"user"}"# + "\n"
+        // The budget ends exactly at a complete-looking ai-title prefix; it
+        // must not be applied because the read didn't reach EOF.
+        let second = #"{"type":"ai-title","aiTitle":"Whole"}"# + "\n"
+        try (first + second).write(toFile: path, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let state = try #require(TranscriptTitleScanner.scan(transcriptPath: path, resuming: nil, maxBytes: first.utf8.count + second.utf8.count - 1))
+        #expect(state.title == nil)
+        #expect(state.offset == UInt64(first.utf8.count))
+    }
 }

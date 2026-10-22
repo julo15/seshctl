@@ -127,8 +127,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = AXIsProcessTrustedWithOptions(promptOptions)
 
 
-        // One-shot UserDefaults migration for the repo-color-coding toggle.
+        // One-shot UserDefaults migrations: the repo-color-coding toggle key
+        // rename, and the stacked-layout boolean → the Row layout picker.
         AppearanceDefaults.migrateLegacyKey()
+        AppearanceDefaults.migrateRowLayout()
 
         // Set up database and view model
         do {

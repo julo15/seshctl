@@ -99,7 +99,7 @@ public enum RemoteEventsParser {
         switch value {
         case let string as String:
             return string.isEmpty ? nil : string
-        case let number as NSNumber:
+        case let number as NSNumber where CFGetTypeID(number) != CFBooleanGetTypeID():
             return number.stringValue
         default:
             return nil

@@ -202,7 +202,7 @@ public struct SessionListView: View {
                                 let isSelected = index == viewModel.selectedIndex
                                 let isRowActive = row.isActive
 
-                                rowView(for: row, showAgentBadge: showAgentBadge)
+                                rowView(for: row, showAgentBadge: showAgentBadge, isSelected: isSelected)
                                     .contentShape(Rectangle())
                                     .onTapGesture {
                                         viewModel.selectedIndex = index
@@ -399,7 +399,7 @@ public struct SessionListView: View {
     /// note in `body` — and passed down so this builder doesn't re-walk
     /// `orderedRows` per row.
     @ViewBuilder
-    private func rowView(for row: DisplayRow, showAgentBadge: Bool) -> some View {
+    private func rowView(for row: DisplayRow, showAgentBadge: Bool, isSelected: Bool) -> some View {
         switch row {
         case .local(let session):
             SessionRowView(
@@ -411,7 +411,7 @@ public struct SessionListView: View {
                 showAgentBadge: showAgentBadge,
                 awaySummary: viewModel.awaySummariesById[session.id] ?? viewModel.latestAssistantById[session.id],
                 title: viewModel.titlesById[session.id],
-                isSelected: viewModel.selectedRow?.id == session.id,
+                isSelected: isSelected,
                 // List view has a Yesterday section header, so the per-row
                 // slot shows the more specific clock time for yesterday rows
                 // instead of repeating the day.
@@ -431,7 +431,7 @@ public struct SessionListView: View {
         case .remote(let remote):
             RemoteClaudeCodeRowView(
                 session: remote,
-                isSelected: viewModel.selectedRow?.id == remote.id,
+                isSelected: isSelected,
                 isUnread: viewModel.unreadSessionIds.contains(remote.id),
                 isStale: connectionStore.state == .authExpired,
                 showAgentBadge: showAgentBadge,

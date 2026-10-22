@@ -29,10 +29,10 @@ public struct SessionRowView: View {
     /// `Session.previewContent(awaySummary:)`. Sourced from
     /// `SessionListViewModel.awaySummariesById`.
     var awaySummary: String? = nil
-    /// Claude Code's short session title (`ai-title` / `custom-title`). When
-    /// non-nil, line 2 shows it in place of the git branch — the title says
-    /// what the session is about, which identifies a row far better than a
-    /// branch name. Sourced from `SessionListViewModel.titlesById`.
+    /// Claude Code's short session title (`ai-title` / `custom-title`). The
+    /// compact layout uses it as the headline; the stacked layouts show it
+    /// on line 2 in place of the git branch. Sourced from
+    /// `SessionListViewModel.titlesById`.
     var title: String? = nil
     /// Whether this row is the list's keyboard selection. The compact
     /// layout expands the selected row to show its message on its own
@@ -145,7 +145,7 @@ public struct SessionRowView: View {
     }
 
     /// One-line row: the session title as the headline, the checkout folder
-    /// in the repo's accent color, then the latest message faded out to the
+    /// in the repo's accent color, then the latest message truncated at the
     /// row's end. The selected row moves the message onto up to three lines
     /// of its own, so arrowing through the list reads each session in turn
     /// while every other row stays a single scannable line.
@@ -207,7 +207,7 @@ public struct SessionRowView: View {
 
     /// Headline color in the compact layout. Full-strength white is reserved
     /// for unread rows so "new" pops on a scan; read headlines dim slightly
-    /// but stay brighter than the `.tertiary` message beside them. Weight
+    /// but stay brighter than the `.secondary` message beside them. Weight
     /// alone (bold vs semibold) is too subtle to read at 16pt.
     private var compactHeadlineColor: Color {
         isUnread ? .primary : Color.primary.opacity(0.62)
@@ -403,7 +403,12 @@ public struct SessionRowView: View {
     /// pre-stacked-layout shipped behavior; stacked mode picks `.semibold`
     /// so the preview doesn't compete with the always-bold sender heading.
     private var previewUnreadWeight: Font.Weight {
-        rowLayout == .stacked ? .semibold : .bold
+        switch rowLayout {
+        case .stacked: return .semibold
+        case .twoColumn: return .bold
+        // Compact sets its own weights; this only feeds the stacked layouts.
+        case .compact: return .bold
+        }
     }
 
     /// Sender (repo name) color. When per-repo color coding is on, the

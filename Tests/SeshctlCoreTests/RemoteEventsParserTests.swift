@@ -316,4 +316,25 @@ struct RemoteEventsParserTests {
         #expect(RemoteEventsParser.scanPage(eventsResponseData: Data("not json".utf8)) == .malformed)
         #expect(RemoteEventsParser.scanPage(eventsResponseData: makeJSON(["items": []])) == .malformed)
     }
+
+    @Test("scanPage: an empty data array keeps paging")
+    func scanPageEmptyDataKeepsPaging() {
+        let body = makeJSON(["data": [] as [Any], "next_cursor": "12"])
+        #expect(RemoteEventsParser.scanPage(eventsResponseData: body) == .noAssistant(nextCursor: "12"))
+    }
+
+    @Test("scanPage: an assistant event with a malformed message stops paging")
+    func scanPageMalformedAssistantStops() {
+        let body = makeJSON([
+            "data": [systemInit(), ["event_type": "assistant", "payload": ["message": "not an object"] as [String: Any]]],
+            "next_cursor": "12",
+        ])
+        #expect(RemoteEventsParser.scanPage(eventsResponseData: body) == .assistantWithoutText)
+    }
+
+    @Test("scanPage: a boolean next_cursor is not a cursor")
+    func scanPageBooleanCursor() {
+        let body = makeJSON(["data": [systemInit()], "next_cursor": true])
+        #expect(RemoteEventsParser.scanPage(eventsResponseData: body) == .noAssistant(nextCursor: nil))
+    }
 }

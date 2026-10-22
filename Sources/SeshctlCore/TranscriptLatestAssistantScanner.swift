@@ -65,11 +65,13 @@ public enum TranscriptLatestAssistantScanner {
     /// Scan a transcript file on disk for the most recent assistant text
     /// block. Returns `nil` when the file can't be read or no assistant
     /// text qualifies under the state-machine rules above.
+    ///
+    /// Walks lines newest-first via `TranscriptReverseReader` and stops at
+    /// the first decisive line — equivalent to the forward state machine,
+    /// whose final state is set by the newest line that changes it — so a
+    /// 15 MB transcript costs its last few KB, not a full decode.
     public static func extractLatestAssistantText(transcriptPath: String) -> String? {
-        guard let contents = try? String(contentsOfFile: transcriptPath, encoding: .utf8) else {
-            return nil
-        }
-        return extractLatestAssistantText(transcript: contents)
+        TranscriptReverseReader.scan(transcriptPath: transcriptPath, visit: step) ?? nil
     }
 
     /// Pure, string-in form used by tests and callers that have the
@@ -83,49 +85,53 @@ public enum TranscriptLatestAssistantScanner {
     /// choice if Claude ever starts emitting `[empty-text, real-text]`
     /// shapes.
     public static func extractLatestAssistantText(transcript: String) -> String? {
-        var pendingText: String?
-        transcript.enumerateLines { line, _ in
-            guard let data = line.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let type = obj["type"] as? String
-            else { return }
-            if type == "assistant" {
-                guard let message = obj["message"] as? [String: Any],
-                      let content = message["content"] as? [[String: Any]]
-                else { return }
-                for block in content {
-                    guard let blockType = block["type"] as? String, blockType == "text",
-                          let text = block["text"] as? String,
-                          !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    else { continue }
-                    pendingText = text
-                    break
-                }
-            } else if type == "user" {
-                // A `user` event is only a real turn boundary when it carries
-                // a fresh prompt. Claude Code also emits `type:"user"` for
-                // tool_result continuations mid-turn (the assistant fires a
-                // tool_use, the harness streams back the result as a user
-                // event) — those aren't turn boundaries, so they must NOT
-                // clobber `pendingText`. Distinguish by inspecting
-                // `message.content`: an array whose every block is
-                // `tool_result` is a continuation; anything else (string
-                // content, array with text/image/etc., missing/malformed) is
-                // treated as a fresh prompt and clears.
-                // Keep iff content is a non-empty array of pure tool_result blocks.
-                if let message = obj["message"] as? [String: Any],
-                   let content = message["content"] as? [[String: Any]],
-                   !content.isEmpty,
-                   content.allSatisfy({ ($0["type"] as? String) == "tool_result" })
-                {
-                    // Tool_result-only continuation — leave pendingText alone.
-                } else {
-                    pendingText = nil
-                }
+        TranscriptReverseReader.scan(transcript: transcript, visit: step) ?? nil
+    }
+
+    /// The forward state machine's transitions, read newest-first: the first
+    /// line (from the end) that would set or clear `pendingText` decides.
+    /// - assistant event with a non-empty text block → that text.
+    /// - `user` event that is a fresh prompt → nil (no pending reply).
+    /// - everything else (tool_result-only `user` continuations, assistant
+    ///   turns with no text, other record types, malformed lines) → skip.
+    private static func step(_ line: Data) -> TranscriptReverseReader.Step<String?> {
+        guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+              let type = obj["type"] as? String
+        else { return .skip }
+        if type == "assistant" {
+            guard let message = obj["message"] as? [String: Any],
+                  let content = message["content"] as? [[String: Any]]
+            else { return .skip }
+            for block in content {
+                guard let blockType = block["type"] as? String, blockType == "text",
+                      let text = block["text"] as? String
+                else { continue }
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { continue }
+                return .stop(trimmed)
             }
+            return .skip
         }
-        guard let raw = pendingText else { return nil }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        if type == "user" {
+            // A `user` event is only a real turn boundary when it carries
+            // a fresh prompt. Claude Code also emits `type:"user"` for
+            // tool_result continuations mid-turn (the assistant fires a
+            // tool_use, the harness streams back the result as a user
+            // event) — those aren't turn boundaries, so they must NOT
+            // clobber the pending reply. Distinguish by inspecting
+            // `message.content`: an array whose every block is
+            // `tool_result` is a continuation; anything else (string
+            // content, array with text/image/etc., missing/malformed) is
+            // treated as a fresh prompt and clears.
+            if let message = obj["message"] as? [String: Any],
+               let content = message["content"] as? [[String: Any]],
+               !content.isEmpty,
+               content.allSatisfy({ ($0["type"] as? String) == "tool_result" })
+            {
+                return .skip
+            }
+            return .stop(nil)
+        }
+        return .skip
     }
 }

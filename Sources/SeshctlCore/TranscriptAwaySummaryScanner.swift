@@ -24,36 +24,36 @@ public enum TranscriptAwaySummaryScanner {
     /// - the most recent event has no `content` field, or its content is
     ///   empty after stripping the trailing recap hint.
     public static func extractLatestAwaySummary(transcriptPath: String) -> String? {
-        guard let contents = try? String(contentsOfFile: transcriptPath, encoding: .utf8) else {
-            return nil
-        }
-        return extractLatestAwaySummary(transcript: contents)
+        // Newest-first walk via `TranscriptReverseReader`: stops at the first
+        // decisive line, so a 15 MB transcript costs its last few KB rather
+        // than a full decode on every refresh.
+        TranscriptReverseReader.scan(transcriptPath: transcriptPath, visit: step) ?? nil
     }
 
     /// Pure, string-in form used by tests and callers that have the
     /// transcript content already in memory.
     public static func extractLatestAwaySummary(transcript: String) -> String? {
-        // Only surface the recap when it's the most recent *meaningful* event
-        // in the transcript. If a user or assistant turn lands after the
-        // latest `away_summary`, the session has resumed and the recap is
-        // stale — callers should fall through to lastReply/lastAsk instead
-        // of pinning a row to a recap that no longer reflects current state.
-        var pendingContent: String?
-        transcript.enumerateLines { line, _ in
-            guard let data = line.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let type = obj["type"] as? String
-            else { return }
-            if type == "system", obj["subtype"] as? String == "away_summary",
-               let content = obj["content"] as? String {
-                pendingContent = content
-            } else if type == "user" || type == "assistant" {
-                pendingContent = nil
-            }
+        TranscriptReverseReader.scan(transcript: transcript, visit: step) ?? nil
+    }
+
+    /// Only surface the recap when it's the most recent *meaningful* event
+    /// in the transcript. Read newest-first: a user or assistant turn seen
+    /// before any recap means the session has resumed and any older recap is
+    /// stale — callers should fall through to lastReply/lastAsk instead of
+    /// pinning a row to a recap that no longer reflects current state.
+    private static func step(_ line: Data) -> TranscriptReverseReader.Step<String?> {
+        guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+              let type = obj["type"] as? String
+        else { return .skip }
+        if type == "system", obj["subtype"] as? String == "away_summary",
+           let content = obj["content"] as? String {
+            let cleaned = stripRecapHint(content).trimmingCharacters(in: .whitespacesAndNewlines)
+            return .stop(cleaned.isEmpty ? nil : cleaned)
         }
-        guard let raw = pendingContent else { return nil }
-        let cleaned = stripRecapHint(raw).trimmingCharacters(in: .whitespacesAndNewlines)
-        return cleaned.isEmpty ? nil : cleaned
+        if type == "user" || type == "assistant" {
+            return .stop(nil)
+        }
+        return .skip
     }
 
     /// Strip the trailing `(disable recaps in /config)` parenthetical Claude

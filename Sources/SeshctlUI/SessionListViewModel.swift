@@ -67,10 +67,10 @@ public final class SessionListViewModel: ObservableObject {
     @Published public private(set) var latestAssistantById: [String: String] = [:]
     /// Claude Code's short session title (`ai-title`, falling back to
     /// `custom-title`) per local Claude session, keyed by `session.id`.
-    /// Sessions without a title are absent (the row's line 2 falls back to
-    /// the branch / directory). Computed in `refresh()` via
-    /// `TranscriptTitleScanner` with `transcriptTitleCache` providing
-    /// mtime-based reuse.
+    /// Sessions without a title are absent (the row falls back to the branch,
+    /// then the folder). Computed in `refresh()` via `TranscriptTitleScanner`,
+    /// with `transcriptTitleCache` resuming each transcript from the byte
+    /// offset already scanned.
     @Published public private(set) var titlesById: [String: String] = [:]
     /// Per-transcript cache: `path → (mtime, cseId)`. Lets `refresh()` skip
     /// re-reading a live Claude transcript when its file mtime hasn't
@@ -92,6 +92,14 @@ public final class SessionListViewModel: ObservableObject {
     /// bytes per refresh (see `TranscriptTitleScanner`). Pruned by
     /// `pruneTranscriptTitleCache(keepingPaths:)` on each refresh.
     private var transcriptTitleCache: [String: TranscriptTitleScanner.State] = [:]
+    /// Root that transcript resolution falls back to when a session's stored
+    /// path is stale (`~/.claude/projects` in production; a temp dir in tests).
+    private let projectsRoot: URL
+
+    /// Transcript paths currently held in the title cache. Test-only window
+    /// onto pruning: a cache keyed or pruned on the wrong path silently turns
+    /// every refresh back into a full rescan.
+    var titleCachePaths: Set<String> { Set(transcriptTitleCache.keys) }
     @Published public private(set) var recallResults: [RecallResult] = []
     @Published public private(set) var isRecallSearching: Bool = false
     @Published public private(set) var recallIndexingDone: Int?
@@ -188,8 +196,9 @@ public final class SessionListViewModel: ObservableObject {
         }
     }
 
-    public init(database: SeshctlDatabase, refreshInterval: TimeInterval = 2.0, enableGC: Bool = true, focusMemoryWindow: TimeInterval = 30, defaults: UserDefaults = .standard) {
+    public init(database: SeshctlDatabase, refreshInterval: TimeInterval = 2.0, enableGC: Bool = true, focusMemoryWindow: TimeInterval = 30, defaults: UserDefaults = .standard, projectsRoot: URL = TranscriptParser.defaultProjectsRoot) {
         self.database = database
+        self.projectsRoot = projectsRoot
         self.refreshInterval = refreshInterval
         self.enableGC = enableGC
         self.focusMemoryWindow = focusMemoryWindow
@@ -302,7 +311,7 @@ public final class SessionListViewModel: ObservableObject {
             // the scanners would early-out on them anyway.
             var resolvedPathsBySessionId: [String: String] = [:]
             for session in sessions where session.tool == .claude {
-                if let path = TranscriptParser.resolveExistingTranscript(for: session)?.path {
+                if let path = TranscriptParser.resolveExistingTranscript(for: session, projectsRoot: projectsRoot)?.path {
                     resolvedPathsBySessionId[session.id] = path
                 }
             }
@@ -360,10 +369,13 @@ public final class SessionListViewModel: ObservableObject {
             }
             latestAssistantById = latest
             pruneTranscriptLatestAssistantCache(keepingPaths: livePaths)
+            // Sessions arrive most-recent first, so a cold cache spends its
+            // per-refresh read budget on the rows at the top of the list.
             var titles: [String: String] = [:]
+            var titleBudget = titleScanBytesPerRefresh
             for session in sessions {
                 guard let path = resolvedPathsBySessionId[session.id] else { continue }
-                if let title = cachedTitle(for: session, transcriptPath: path) {
+                if let title = cachedTitle(for: session, transcriptPath: path, budget: &titleBudget) {
                     titles[session.id] = title
                 }
             }
@@ -956,17 +968,30 @@ public final class SessionListViewModel: ObservableObject {
         return text
     }
 
+    /// Bytes of transcript the title scanner may read per `refresh()`, shared
+    /// across sessions. Resumed scans read only appended bytes, so this only
+    /// bites on a cold cache: the 50 listed transcripts can total 100 MB+
+    /// (~90 ms in one tick); capped, they fill over a few ticks instead.
+    /// Instance-level (not `static`) so tests can shrink it.
+    var titleScanBytesPerRefresh = 16 * 1024 * 1024
+
     /// Scan the session's transcript for its Claude Code title, resuming
-    /// from where the previous scan of this path stopped. Non-Claude tools
-    /// return nil — only Claude Code writes `ai-title` / `custom-title`
-    /// records.
-    fileprivate func cachedTitle(for session: Session, transcriptPath path: String) -> String? {
+    /// from where the previous scan of this path stopped and drawing reads
+    /// from the shared per-refresh `budget`. Once the budget is spent, this
+    /// returns the cached title without reading. Non-Claude tools return
+    /// nil — only Claude Code writes `ai-title` / `custom-title` records.
+    fileprivate func cachedTitle(for session: Session, transcriptPath path: String, budget: inout Int) -> String? {
         guard session.tool == .claude else { return nil }
-        guard let state = TranscriptTitleScanner.scan(transcriptPath: path, resuming: transcriptTitleCache[path]) else {
+        let previous = transcriptTitleCache[path]
+        guard budget > 0 else { return previous?.title }
+        guard let state = TranscriptTitleScanner.scan(transcriptPath: path, resuming: previous, maxBytes: budget) else {
             transcriptTitleCache.removeValue(forKey: path)
             return nil
         }
         transcriptTitleCache[path] = state
+        // A rewritten (shrunk) file restarts from 0, so count from there.
+        let start = previous.map { $0.offset <= state.offset ? $0.offset : 0 } ?? 0
+        budget -= Int(state.offset - start)
         return state.title
     }
 

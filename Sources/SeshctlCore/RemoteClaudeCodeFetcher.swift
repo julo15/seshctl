@@ -42,6 +42,15 @@ public enum RemoteClaudeCodeError: Error, Equatable {
     case transport(String)
 }
 
+/// Thrown by `fetchLatestAssistantText` when `maxEventPages` pages hold no
+/// assistant event but older pages remain. Distinct from a nil result ("this
+/// session has no reply"): the latest reply exists, just past the cap — so
+/// callers should keep any recap they already show rather than clear it.
+/// Reconnect noise pushes a reply past the cap without changing it.
+public struct RemoteRecapBeyondPageCap: Error, Equatable {
+    public init() {}
+}
+
 // MARK: - API response types
 
 /// Top-level shape of `GET /v1/code/sessions?limit=50`.
@@ -339,11 +348,14 @@ public actor RemoteClaudeCodeFetcher {
     /// - The trimmed text body of the most-recent assistant event's first
     ///   `type == "text"` content block, preserving internal newlines, when
     ///   one exists.
-    /// - `nil` when the session has no assistant events yet (or none within
-    ///   `maxEventPages`), or the latest assistant turn was tool-call-only
-    ///   (no text block). This is a valid
+    /// - `nil` when the session has no assistant events yet, or the latest
+    ///   assistant turn was tool-call-only (no text block). This is a valid
     ///   "no recap available" signal — callers should fall through to the
     ///   default preview.
+    ///
+    /// Throws `RemoteRecapBeyondPageCap` when `maxEventPages` pages hold no
+    /// assistant event but older pages remain — callers should keep any
+    /// recap they already show.
     ///
     /// Throws on failure (not nil):
     /// - `.notConnected` if either `sessionKey` or `sessionKeyLC` cookies are
@@ -388,7 +400,7 @@ public actor RemoteClaudeCodeFetcher {
                 fetcherLogger.debug("events \(sessionId, privacy: .public): newest assistant turn has no text (page \(page))")
                 return nil
             case .noAssistant(let next):
-                guard let next else {
+                guard let next, next != cursor else {
                     fetcherLogger.debug("events \(sessionId, privacy: .public): no assistant event in history (page \(page))")
                     return nil
                 }
@@ -404,7 +416,7 @@ public actor RemoteClaudeCodeFetcher {
             }
         }
         fetcherLogger.debug("events \(sessionId, privacy: .public): no assistant event within \(Self.maxEventPages) pages")
-        return nil
+        throw RemoteRecapBeyondPageCap()
     }
 
     /// Fetch one page of `/v1/code/sessions/<id>/events`. `cursor` is the

@@ -2477,6 +2477,163 @@ struct SessionListViewModelTests {
         #expect(vm.titlesById[session.id] == nil)
     }
 
+    private func titleTranscript(_ lines: [String]) throws -> String {
+        let path = (NSTemporaryDirectory() as NSString).appendingPathComponent("\(UUID().uuidString).jsonl")
+        try (lines.joined(separator: "\n") + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        return path
+    }
+
+    private func appendLine(_ line: String, to path: String) throws {
+        let handle = try #require(FileHandle(forWritingAtPath: path))
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data((line + "\n").utf8))
+    }
+
+    @Test("titlesById picks up a newer title and keeps it across unchanged refreshes")
+    @MainActor
+    func titlesById_updatesAndPersistsAcrossRefreshes() throws {
+        let path = try titleTranscript([#"{"type":"ai-title","aiTitle":"First"}"#])
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let pid: Int = 9103
+        let db = try SeshctlDatabase.temporary()
+        let session = try db.startSession(tool: .claude, directory: "/tmp/x", pid: pid)
+        try db.updateSession(pid: pid, tool: .claude, transcriptPath: path)
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+        #expect(vm.titlesById[session.id] == "First")
+
+        try appendLine(#"{"type":"ai-title","aiTitle":"Second"}"#, to: path)
+        vm.refresh()
+        #expect(vm.titlesById[session.id] == "Second")
+
+        vm.refresh()
+        #expect(vm.titlesById[session.id] == "Second")
+    }
+
+    @Test("titlesById drops the title and cache entry when the transcript can't be opened")
+    @MainActor
+    func titlesById_unreadableTranscriptEvicts() throws {
+        let path = try titleTranscript([#"{"type":"ai-title","aiTitle":"Readable"}"#])
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: path)
+            try? FileManager.default.removeItem(atPath: path)
+        }
+
+        let pid: Int = 9106
+        let db = try SeshctlDatabase.temporary()
+        let session = try db.startSession(tool: .claude, directory: "/tmp/x", pid: pid)
+        try db.updateSession(pid: pid, tool: .claude, transcriptPath: path)
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+        #expect(vm.titlesById[session.id] == "Readable")
+
+        // Still exists (so path resolution keeps it), but can't be opened.
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: path)
+        vm.refresh()
+        #expect(vm.titlesById[session.id] == nil)
+        #expect(!vm.titleCachePaths.contains(path))
+    }
+
+    @Test("title cache is pruned when a session leaves the list")
+    @MainActor
+    func titlesById_cachePrunedWhenSessionRemoved() throws {
+        let pathA = try titleTranscript([#"{"type":"ai-title","aiTitle":"Alpha"}"#])
+        let pathB = try titleTranscript([#"{"type":"ai-title","aiTitle":"Beta"}"#])
+        defer {
+            try? FileManager.default.removeItem(atPath: pathA)
+            try? FileManager.default.removeItem(atPath: pathB)
+        }
+
+        let pidA: Int = 9107
+        let pidB: Int = 9108
+        let db = try SeshctlDatabase.temporary()
+        let sessionA = try db.startSession(tool: .claude, directory: "/tmp/a", pid: pidA)
+        try db.updateSession(pid: pidA, tool: .claude, transcriptPath: pathA)
+        _ = try db.startSession(tool: .claude, directory: "/tmp/b", pid: pidB)
+        try db.updateSession(pid: pidB, tool: .claude, transcriptPath: pathB)
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+        #expect(vm.titleCachePaths == [pathA, pathB])
+
+        try db.endSession(pid: pidB, tool: .claude)
+        _ = try db.gc(olderThan: -1)
+        vm.refresh()
+
+        // Keyed and pruned by the resolved path: the live entry survives
+        // (so it keeps resuming), the removed session's entry is gone.
+        #expect(vm.titleCachePaths == [pathA])
+        #expect(vm.titlesById[sessionA.id] == "Alpha")
+    }
+
+    @Test("titlesById follows a stale worktree transcriptPath to the real file")
+    @MainActor
+    func titlesById_resolvesWorktreeTranscriptPath() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        let projectDir = root.appendingPathComponent("-Users-me-seshctl")
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let convId = UUID().uuidString
+        let realPath = projectDir.appendingPathComponent("\(convId).jsonl").path
+        try (#"{"type":"ai-title","aiTitle":"Worktree session"}"# + "\n").write(toFile: realPath, atomically: true, encoding: .utf8)
+
+        // Claude re-derives transcript_path from the current cwd, so after a
+        // `cd` into a worktree the stored path names a file that never existed.
+        let pid: Int = 9109
+        let db = try SeshctlDatabase.temporary()
+        let session = try db.startSession(
+            tool: .claude,
+            directory: "/Users/me/seshctl/.claude/worktrees/julo-fix",
+            pid: pid,
+            conversationId: convId
+        )
+        try db.updateSession(
+            pid: pid, tool: .claude,
+            transcriptPath: root.appendingPathComponent("-Users-me-seshctl--claude-worktrees-julo-fix/\(convId).jsonl").path
+        )
+
+        let vm = SessionListViewModel(database: db, enableGC: false, projectsRoot: root)
+        vm.refresh()
+        #expect(vm.titlesById[session.id] == "Worktree session")
+        // The fallback directory walk returns the symlink-resolved form
+        // (`/private/var/...` for `/var/...`); compare resolved paths.
+        let resolved = { (p: String) in URL(fileURLWithPath: p).resolvingSymlinksInPath().path }
+        #expect(Set(vm.titleCachePaths.map(resolved)) == [resolved(realPath)])
+    }
+
+    @Test("a cold title cache fills across refreshes within the per-refresh budget")
+    @MainActor
+    func titlesById_coldCacheFillsWithinBudget() throws {
+        let pathA = try titleTranscript([#"{"type":"ai-title","aiTitle":"Alpha"}"#])
+        let pathB = try titleTranscript([#"{"type":"ai-title","aiTitle":"Beta"}"#])
+        defer {
+            try? FileManager.default.removeItem(atPath: pathA)
+            try? FileManager.default.removeItem(atPath: pathB)
+        }
+
+        let db = try SeshctlDatabase.temporary()
+        let sessionA = try db.startSession(tool: .claude, directory: "/tmp/a", pid: 9110)
+        try db.updateSession(pid: 9110, tool: .claude, transcriptPath: pathA)
+        let sessionB = try db.startSession(tool: .claude, directory: "/tmp/b", pid: 9111)
+        try db.updateSession(pid: 9111, tool: .claude, transcriptPath: pathB)
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        // Smaller than one transcript: the first scan overdraws it, so the
+        // other session waits for the next refresh.
+        vm.titleScanBytesPerRefresh = 10
+        vm.refresh()
+        let first = [vm.titlesById[sessionA.id], vm.titlesById[sessionB.id]].compactMap { $0 }
+        #expect(first.count == 1)
+
+        vm.refresh()
+        #expect(vm.titlesById[sessionA.id] == "Alpha")
+        #expect(vm.titlesById[sessionB.id] == "Beta")
+    }
+
     @Test("awaySummariesById empty for non-Claude tool")
     @MainActor
     func awaySummariesById_emptyForNonClaudeTool() throws {

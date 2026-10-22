@@ -57,16 +57,24 @@ public enum TranscriptTitleScanner {
     /// transcript content already in memory.
     public static func extractTitle(transcript: String) -> String? {
         var state = State()
-        scan(Data(transcript.utf8), into: &state)
+        fold(Data(transcript.utf8), into: &state)
         return state.title
     }
 
     /// Continue scanning `transcriptPath` from `previous` (nil = from the
     /// start), reading only bytes appended since. A file shorter than
     /// `previous.offset` was rewritten, so it is rescanned from scratch.
-    /// A trailing partial line (mid-write) is left for the next scan.
+    /// A trailing line without a newline is applied if it decodes, but the
+    /// offset stops before it so it is re-read once complete.
     /// Returns nil when the file can't be opened.
-    public static func scan(transcriptPath: String, resuming previous: State?) -> State? {
+    ///
+    /// `maxBytes` bounds how much is read this call, so a cold cache over
+    /// many large transcripts can fill across several refreshes instead of
+    /// stalling one. A bounded read that stops short of EOF only consumes
+    /// through its last newline; the rest is picked up next call. (If the
+    /// bounded read holds no newline at all — one line longer than the
+    /// budget — the read continues to EOF so the scan always progresses.)
+    public static func scan(transcriptPath: String, resuming previous: State?, maxBytes: Int? = nil) -> State? {
         guard let handle = FileHandle(forReadingAtPath: transcriptPath) else { return nil }
         defer { try? handle.close() }
         guard let size = try? handle.seekToEnd() else { return nil }
@@ -82,7 +90,24 @@ public enum TranscriptTitleScanner {
         } catch {
             return nil
         }
-        guard let appended = try? handle.readToEnd(), !appended.isEmpty else { return state }
+        let remaining = size - state.offset
+        var appended: Data
+        var reachedEnd: Bool
+        if let maxBytes, UInt64(maxBytes) < remaining {
+            guard let chunk = try? handle.read(upToCount: max(maxBytes, 1)) else { return state }
+            appended = chunk
+            reachedEnd = false
+            if appended.lastIndex(of: newline) == nil {
+                guard let rest = try? handle.readToEnd() else { return state }
+                appended.append(rest)
+                reachedEnd = true
+            }
+        } else {
+            guard let all = try? handle.readToEnd() else { return state }
+            appended = all
+            reachedEnd = true
+        }
+        guard !appended.isEmpty else { return state }
 
         // Advance the offset only through the last newline. A trailing line
         // without one may be mid-write, so it is re-read on the next scan —
@@ -91,10 +116,10 @@ public enum TranscriptTitleScanner {
         // it is idempotent: titles are last-record-wins.
         let tailStart = appended.lastIndex(of: newline).map { $0 + 1 } ?? appended.startIndex
         let complete = appended[appended.startIndex..<tailStart]
-        scan(complete, into: &state)
+        fold(complete, into: &state)
         state.offset += UInt64(complete.count)
         let tail = appended[tailStart...]
-        if tail.range(of: marker) != nil {
+        if reachedEnd, tail.range(of: marker) != nil {
             apply(line: tail, to: &state)
         }
         return state
@@ -105,7 +130,7 @@ public enum TranscriptTitleScanner {
 
     /// Decode every line in `data` containing the title marker and fold any
     /// title records into `state`. Lines without the marker are never decoded.
-    static func scan(_ data: Data, into state: inout State) {
+    static func fold(_ data: Data, into state: inout State) {
         var searchStart = data.startIndex
         while searchStart < data.endIndex,
               let hit = data.range(of: marker, in: searchStart..<data.endIndex) {
