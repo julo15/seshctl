@@ -55,7 +55,7 @@ struct BadgedIcon: View {
 }
 
 /// Private inner view rendering the colored circle + glyph (monogram
-/// letter or Claude mark). Kept inside `BadgedIcon.swift` because it
+/// letter or vector mark). Kept inside `BadgedIcon.swift` because it
 /// has no use outside this composite.
 private struct BadgeView: View {
     let spec: AgentBadgeSpec
@@ -77,6 +77,12 @@ private struct BadgeView: View {
             case .claudeMark:
                 ClaudeLogoShape()
                     .fill(Color.white)
+                    .padding(size * 0.14)
+            case .codexMark:
+                // The mark is a solid blob, so it sits further in than
+                // Claude's open spark to look the same size.
+                CodexLogoShape()
+                    .fill(Color.white, style: FillStyle(eoFill: true))
                     .padding(size * 0.18)
             }
         }
