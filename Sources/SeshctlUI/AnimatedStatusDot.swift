@@ -6,14 +6,11 @@ import SwiftUI
 /// halo sizes) now lives in exactly one place.
 ///
 /// Intentionally small surface: you hand it a `StatusKind`, the view runs the
-/// animation that `kind` implies. The `onChange` driver resets and restarts
-/// the animations on status transitions.
+/// animation that `kind` implies.
 public struct AnimatedStatusDot: View {
     public let kind: StatusKind
     /// Recency bucket of the session; dims the neutral gray kinds.
     public let age: SessionAgeDisplay.AgeBucket
-    @State private var isPulsing = false
-    @State private var isPinging = false
 
     public init(kind: StatusKind, age: SessionAgeDisplay.AgeBucket = .today) {
         self.kind = kind
@@ -21,6 +18,23 @@ public struct AnimatedStatusDot: View {
     }
 
     public var body: some View {
+        // A running repeatForever animation can't be cancelled by resetting
+        // its state — it keeps driving the scale/opacity, so a session that
+        // went working -> idle kept pulsing in gray. Keying the view on
+        // `kind` rebuilds it on every status change, discarding the old
+        // animation along with its state.
+        DotBody(kind: kind, age: age)
+            .id(kind)
+    }
+}
+
+private struct DotBody: View {
+    let kind: StatusKind
+    let age: SessionAgeDisplay.AgeBucket
+    @State private var isPulsing = false
+    @State private var isPinging = false
+
+    var body: some View {
         let color = kind.color(age: age)
         ZStack {
             if kind.isPulsing {
@@ -69,11 +83,6 @@ public struct AnimatedStatusDot: View {
         .frame(width: 28, height: 28)
         .drawingGroup()
         .onAppear { startAnimations() }
-        .onChange(of: kind) { _ in
-            isPulsing = false
-            isPinging = false
-            startAnimations()
-        }
     }
 
     /// Working glows at the peak of its pulse. Waiting glows constantly, so
