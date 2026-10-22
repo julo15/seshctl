@@ -177,6 +177,8 @@ public final class SessionListViewModel: ObservableObject {
         /// The current filter excludes every session — point the user at
         /// `r` to change the filter.
         case filteredOut
+        /// The `c` view has nothing to reopen — point the user back.
+        case noClosedSessions
     }
     public static let inboxBurstWindow: TimeInterval = 10 // 10-second "don't switch under the user" window
     /// Synthetic group name for cloud rows that have no git_repository source.
@@ -193,6 +195,16 @@ public final class SessionListViewModel: ObservableObject {
             defaults.set(isTreeMode, forKey: Self.isTreeModeDefaultsKey)
         }
     }
+
+    /// `c` view: closed sessions only, one row per conversation, so a closed
+    /// session can be found and reopened (Enter) without typing a query.
+    /// Overrides tree mode while on, without touching the persisted
+    /// `isTreeMode`. Reset every time the panel opens.
+    @Published public private(set) var isRecentsMode = false
+
+    /// Closed sessions for the `c` view, from `listRecentSessions`. Only
+    /// loaded while `isRecentsMode` is on, so the live list pays nothing.
+    @Published public private(set) var recentSessions: [Session] = []
 
     /// Source filter. `didSet` persists to UserDefaults (not `@AppStorage`
     /// for the same reason as `isTreeMode`).
@@ -301,6 +313,9 @@ public final class SessionListViewModel: ObservableObject {
                 lastGC = Date()
             }
             sessions = try database.listSessions(limit: 50)
+            if isRecentsMode {
+                recentSessions = try Self.reopenable(database.listRecentSessions())
+            }
             remoteSessions = try database.listRemoteClaudeCodeSessions()
             var unread = Set(sessions.filter { session in
                 let actionable = session.status == .idle || session.status == .waiting || session.status == .completed || session.status == .canceled || session.status == .stale
@@ -590,6 +605,9 @@ public final class SessionListViewModel: ObservableObject {
     /// flips to true, so the user sees the full corpus to start
     /// narrowing from.
     public var filteredRows: [DisplayRow] {
+        if isRecentsMode {
+            return closedRows
+        }
         if isTreeMode {
             return treeOrderedRows
         }
@@ -597,6 +615,50 @@ public final class SessionListViewModel: ObservableObject {
             return activeRows + recentRows
         }
         return activeRows
+    }
+
+    /// Rows for the `c` view: deduped closed local sessions plus disconnected
+    /// cloud rows, narrowed by `/` and the source filter.
+    public var closedRows: [DisplayRow] {
+        let local: [DisplayRow] = sourceFilter.includesLocal
+            ? recentSessions
+                .filter { !isSearching || Self.matches(session: $0, title: titlesById[$0.id], query: searchQuery) }
+                .map { .local($0) }
+            : []
+        let remote: [DisplayRow] = sourceFilter.includesRemote
+            ? filteredRemoteSessions
+                .filter { $0.connectionStatus != "connected" }
+                .filter { !bridgedRemoteIds.contains($0.id) }
+                .map { .remote($0) }
+            : []
+        return sortedForDisplay(local + remote)
+    }
+
+    /// Rows the `c` view can actually reopen. A row with no conversation id
+    /// has nothing to hand to the agent's resume command, and they aren't
+    /// rare. They stay reachable through `/`.
+    nonisolated static func reopenable(_ sessions: [Session]) -> [Session] {
+        sessions.filter { !($0.conversationId ?? "").isEmpty }
+    }
+
+    public func toggleRecentsMode() {
+        isRecentsMode ? exitRecentsMode() : enterRecentsMode()
+    }
+
+    public func enterRecentsMode() {
+        pendingKillSessionId = nil
+        pendingForkSessionId = nil
+        pendingMarkAllRead = false
+        isRecentsMode = true
+        recentSessions = (try? Self.reopenable(database.listRecentSessions())) ?? []
+        selectedIndex = orderedRows.isEmpty ? -1 : 0
+    }
+
+    public func exitRecentsMode() {
+        guard isRecentsMode else { return }
+        isRecentsMode = false
+        recentSessions = []
+        selectedIndex = orderedRows.isEmpty ? -1 : 0
     }
 
     /// Ordered rows the view renders. Matches `filteredRows`; retained as
@@ -619,6 +681,9 @@ public final class SessionListViewModel: ObservableObject {
             return .fullyEmpty
         }
         if isSearching { return nil }
+        if isRecentsMode {
+            return closedRows.isEmpty ? .noClosedSessions : nil
+        }
         guard filteredRows.isEmpty else { return nil }
         if !recentRows.isEmpty {
             return .recentsOnly

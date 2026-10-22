@@ -984,4 +984,154 @@ struct DatabaseTests {
         let cursorFetched = try db.getSession(id: cursorSession.id)
         #expect(cursorFetched?.lastAsk == "for cursor")
     }
+
+    // MARK: - listRecentSessions (from #72)
+
+    @Test("Recents lists closed sessions only")
+    func recentsExcludesActive() throws {
+        let db = try SeshctlDatabase.temporary()
+        try db.startSession(tool: .claude, directory: "/tmp/live", pid: 111)
+        try db.startSession(tool: .claude, directory: "/tmp/dead", pid: 222)
+        try db.endSession(pid: 222, tool: .claude)
+
+        let recents = try db.listRecentSessions()
+
+        #expect(recents.count == 1)
+        #expect(recents[0].directory == "/tmp/dead")
+    }
+
+    @Test("Recents keeps the newest row per conversation")
+    func recentsDedupesByConversation() throws {
+        let db = try SeshctlDatabase.temporary()
+        // Write the twins directly. `startSession` now collapses them, so this
+        // reproduces rows left on disk by a build from before that landed.
+        for (index, directory) in ["/tmp/old", "/tmp/mid", "/tmp/new"].enumerated() {
+            let session = Session(
+                id: "row-\(index)",
+                conversationId: "conv-1",
+                tool: .claude,
+                directory: directory,
+                launchDirectory: directory,
+                hostWorkspaceFolder: nil,
+                lastAsk: nil,
+                lastReply: nil,
+                status: .completed,
+                pid: nil,
+                hostAppBundleId: nil,
+                hostAppName: nil,
+                windowId: nil,
+                transcriptPath: nil,
+                gitRepoName: nil,
+                gitBranch: nil,
+                launchArgs: nil,
+                startedAt: Date(timeIntervalSince1970: 1000),
+                updatedAt: Date(timeIntervalSince1970: 1000 + Double(index)),
+                lastReadAt: nil
+            )
+            try db.dbPool.write { try session.insert($0) }
+        }
+
+        let recents = try db.listRecentSessions()
+
+        #expect(recents.count == 1)
+        #expect(recents[0].directory == "/tmp/new")
+    }
+
+    @Test("Recents keeps every row that has no conversation id")
+    func recentsKeepsNullConversationRows() throws {
+        let db = try SeshctlDatabase.temporary()
+        try db.startSession(tool: .claude, directory: "/tmp/a", pid: 111)
+        try db.endSession(pid: 111, tool: .claude)
+        try db.startSession(tool: .claude, directory: "/tmp/b", pid: 222)
+        try db.endSession(pid: 222, tool: .claude)
+
+        #expect(try db.listRecentSessions().count == 2)
+    }
+
+    @Test("Recents separates the same conversation id across tools")
+    func recentsDedupePerTool() throws {
+        let db = try SeshctlDatabase.temporary()
+        try db.startSession(
+            tool: .claude, directory: "/tmp/a", pid: 111, conversationId: "shared")
+        try db.endSession(pid: 111, tool: .claude)
+        try db.startSession(
+            tool: .codex, directory: "/tmp/b", pid: 222, conversationId: "shared")
+        try db.endSession(pid: 222, tool: .codex)
+
+        #expect(try db.listRecentSessions().count == 2)
+    }
+
+    @Test("Recents honours its limit")
+    func recentsRespectsLimit() throws {
+        let db = try SeshctlDatabase.temporary()
+        for pid in 1...5 {
+            try db.startSession(tool: .claude, directory: "/tmp/\(pid)", pid: pid)
+            try db.endSession(pid: pid, tool: .claude)
+        }
+
+        #expect(try db.listRecentSessions(limit: 3).count == 3)
+    }
+
+    @Test("Recents is ordered newest first")
+    func recentsOrderedNewestFirst() throws {
+        let db = try SeshctlDatabase.temporary()
+        for pid in 1...3 {
+            try db.startSession(tool: .claude, directory: "/tmp/\(pid)", pid: pid)
+            try db.endSession(pid: pid, tool: .claude)
+        }
+
+        let recents = try db.listRecentSessions()
+        let stamps = recents.map(\.updatedAt)
+        #expect(stamps == stamps.sorted(by: >))
+    }
+
+    @Test("Recents hides a closed row whose conversation is running again")
+    func recentsHidesLiveConversations() throws {
+        let db = try SeshctlDatabase.temporary()
+        // A closed run, then the same conversation resumed under a new pid.
+        // Write the closed row directly so `collapseInactiveTwins` doesn't
+        // remove it first; the point is the query-layer guard.
+        let closed = Session(
+            id: "closed-row",
+            conversationId: "conv-1",
+            tool: .claude,
+            directory: "/tmp/a",
+            launchDirectory: "/tmp/a",
+            hostWorkspaceFolder: nil,
+            lastAsk: nil,
+            lastReply: nil,
+            status: .stale,
+            pid: 111,
+            hostAppBundleId: nil,
+            hostAppName: nil,
+            windowId: nil,
+            transcriptPath: nil,
+            gitRepoName: nil,
+            gitBranch: nil,
+            launchArgs: nil,
+            startedAt: Date(timeIntervalSince1970: 1000),
+            updatedAt: Date(timeIntervalSince1970: 1000),
+            lastReadAt: nil
+        )
+        try db.dbPool.write { try closed.insert($0) }
+        try db.startSession(
+            tool: .claude, directory: "/tmp/a", pid: 222, conversationId: "conv-1")
+
+        #expect(try db.listRecentSessions().isEmpty)
+    }
+
+    @Test("A closed row stays in recents while a different conversation is live")
+    func recentsKeepsUnrelatedClosedRows() throws {
+        let db = try SeshctlDatabase.temporary()
+        try db.startSession(
+            tool: .claude, directory: "/tmp/a", pid: 111, conversationId: "conv-1")
+        try db.endSession(pid: 111, tool: .claude)
+        try db.startSession(
+            tool: .claude, directory: "/tmp/b", pid: 222, conversationId: "conv-2")
+
+        let recents = try db.listRecentSessions()
+
+        #expect(recents.count == 1)
+        #expect(recents[0].conversationId == "conv-1")
+    }
 }

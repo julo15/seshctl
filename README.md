@@ -52,6 +52,7 @@ Press **Cmd+Shift+S** to toggle the session panel.
 - **U** — mark all sessions as read (then **y** to confirm, **n** to cancel)
 - **r** — cycle the source filter: all → local only → cloud only → all
 - **v** — toggle list/tree view
+- **c** — show closed sessions, one per conversation; **Enter** reopens the selected one, **/** narrows, **Esc** goes back
 - **h / l** — in tree mode, jump to previous/next group
 - **/** — search/filter sessions
 - **?** — open the keyboard help popover
