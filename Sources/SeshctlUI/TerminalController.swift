@@ -547,11 +547,11 @@ public enum TerminalController {
             //
             // 1. TTY — unique per surface, so it resolves both splits sharing a
             //    tab and tabs sharing a working directory. Derived from the
-            //    session PID at focus time, so it self-heals across resume and
-            //    needs nothing recorded at session start.
-            // 2. Terminal ID — legacy rows written by the pre-TTY session-start
-            //    hook. Ages out as those sessions end; kept so upgrades don't
-            //    regress mid-session.
+            //    session PID at focus time, so it self-heals across resume.
+            //    Only works on Ghostty builds whose dictionary has `tty`
+            //    (main channel; stable 1.3.1 lacks it).
+            // 2. Terminal ID — recorded by the session-start hook. The only
+            //    precise rung on stable Ghostty until `tty` ships there.
             // 3. Working directory — last resort, and ambiguous whenever
             //    several surfaces share a cwd, so it prefers the already
             //    selected tab rather than jumping to an arbitrary match.
@@ -577,7 +577,7 @@ public enum TerminalController {
             if let windowId {
                 let escapedId = escapeForAppleScript(windowId)
                 precisionBlocks.append("""
-                        -- Exact terminal ID match (legacy rows)
+                        -- Exact terminal ID match (recorded by the session-start hook)
                         try
                             repeat with trm in terminals
                                 if id of trm is "\(escapedId)" then

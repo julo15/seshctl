@@ -63,8 +63,8 @@ public enum TerminalApp: String, CaseIterable, Sendable {
     // MARK: - Capabilities
 
     /// Whether this app supports the AppleScript focus path (open -b + AppleScript tab selection).
-    /// Terminal.app, iTerm2 and Ghostty match by TTY (Ghostty falls back to working
-    /// directory on older versions whose dictionary lacks `tty`); cmux matches by
+    /// Terminal.app, iTerm2 and Ghostty match by TTY (Ghostty falls back to terminal ID,
+    /// then working directory, on versions whose dictionary lacks `tty`); cmux matches by
     /// workspace UUID via its AppleScript `tab` model.
     public var supportsAppleScriptFocus: Bool {
         switch self {

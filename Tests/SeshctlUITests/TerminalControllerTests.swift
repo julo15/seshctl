@@ -311,7 +311,7 @@ struct ScriptGenerationTests {
         #expect(script!.contains("working directory of trm is \"/Users/me/project\""))
     }
 
-    @Test("Ghostty ladder is TTY, then legacy terminal ID, then directory")
+    @Test("Ghostty ladder is TTY, then terminal ID, then directory")
     func ghosttyScriptWithTerminalId() {
         let script = TerminalController.buildFocusScript(
             app: .ghostty,
@@ -335,7 +335,7 @@ struct ScriptGenerationTests {
         #expect(idMatch.lowerBound < dirMatch.lowerBound)
     }
 
-    @Test("Ghostty legacy ID rung is omitted when no windowId is stored")
+    @Test("Ghostty terminal ID rung is omitted when no windowId is stored")
     func ghosttyScriptWithoutTerminalId() {
         let script = TerminalController.buildFocusScript(
             app: .ghostty,
@@ -925,7 +925,7 @@ struct FocusRoutingTests {
         #expect(env.executedScripts[0].contains("working directory of trm is \"/tmp/project\""))
     }
 
-    @Test("Ghostty focus with windowId keeps the legacy ID rung below TTY")
+    @Test("Ghostty focus with windowId keeps the terminal ID rung below TTY")
     func ghosttyRoutingWithWindowId() {
         let env = MockSystemEnvironment()
         env.guiApps = [600: "com.mitchellh.ghostty"]
