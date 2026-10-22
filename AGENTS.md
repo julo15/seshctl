@@ -194,6 +194,8 @@ Last matching record in the file wins. When Claude Code stopped writing the lega
 
 **Local vs. web routing.** `w` goes through `AppDelegate.openSelectedOnWeb` -> `vm.selectedWebUrl` -> `SessionAction.execute(target: .openRemote(...))` — the same action Enter uses on a pure-remote row, so browser tab reuse via `RemoteBrowserCoordinator` is shared. The mouse path (`SessionRowView.onOpenWeb`, plumbed `AppDelegate -> RootView -> SessionListView`/`SessionTreeView`) dispatches the same target. Never add a second browser-opening path.
 
+**Remote-row recaps page through reconnect noise.** Pure-remote rows get their message from `RemoteClaudeCodeFetcher.fetchLatestAssistantText`, which reads `/v1/code/sessions/<id>/events` newest-first. Remote-control sessions write a ~9 KB `system/init` event on every reconnect, so the newest pages are often nothing but those — with a single `limit=10` page, every remote row went blank with no error. The fetcher now pages back via `?cursor=<next_cursor>` (the only paging param the endpoint honors; it ignores every event-type filter we tried) up to `maxEventPages` (5). Idle sessions can bury their last reply hundreds of events deep (measured 34–830+, up to ~9 MB), so those stay blank by design rather than paying that download. **If remote recaps go blank again,** run `log stream --level debug --predicate 'subsystem == "app.seshctl" AND category == "remote-fetcher"'` and relaunch — each fetch logs how many pages it walked and how it ended.
+
 For how `bridgedLocalIds` fits alongside the other transcript-derived row signals (caching, pruning, the scanner pattern), see "Transcript-Derived Row Signals" below.
 
 ## Transcript-Derived Row Signals

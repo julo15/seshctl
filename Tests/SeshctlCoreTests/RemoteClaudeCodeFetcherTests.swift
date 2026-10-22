@@ -634,6 +634,87 @@ struct RemoteClaudeCodeFetcherTests {
         #expect(result == nil)
     }
 
+    @Test("fetchLatestAssistantText: pages past system-only pages via ?cursor=")
+    func fetchEventsPagesPastSystemOnlyPages() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let log = URLLog()
+        MockURLProtocol.handler = { request in
+            let url = request.url!
+            log.append(url)
+            let body = url.query?.contains("cursor=5024") == true
+                ? fixtureSimpleAssistantEvents
+                : fixtureSystemOnlyEvents(nextCursor: "5024")
+            return (httpResponse(status: 200, url: url), Data(body.utf8))
+        }
+        defer { MockURLProtocol.handler = nil }
+
+        let fetcher = RemoteClaudeCodeFetcher(
+            cookieSource: source([
+                makeCookie(name: "sessionKey"),
+                makeCookie(name: "sessionKeyLC"),
+            ]),
+            urlSession: stubbedSession(),
+            database: db
+        )
+
+        let result = try await fetcher.fetchLatestAssistantText(sessionId: "cse_test_123")
+        #expect(result == "Pushed.")
+        #expect(log.urls.map(\.absoluteString) == [
+            "https://claude.ai/v1/code/sessions/cse_test_123/events?limit=10",
+            "https://claude.ai/v1/code/sessions/cse_test_123/events?limit=10&cursor=5024",
+        ])
+    }
+
+    @Test("fetchLatestAssistantText: gives up after maxEventPages system-only pages")
+    func fetchEventsStopsAtPageCap() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let log = URLLog()
+        MockURLProtocol.handler = { request in
+            let url = request.url!
+            log.append(url)
+            return (httpResponse(status: 200, url: url), Data(fixtureSystemOnlyEvents(nextCursor: "42").utf8))
+        }
+        defer { MockURLProtocol.handler = nil }
+
+        let fetcher = RemoteClaudeCodeFetcher(
+            cookieSource: source([
+                makeCookie(name: "sessionKey"),
+                makeCookie(name: "sessionKeyLC"),
+            ]),
+            urlSession: stubbedSession(),
+            database: db
+        )
+
+        let result = try await fetcher.fetchLatestAssistantText(sessionId: "cse_test_123")
+        #expect(result == nil)
+        #expect(log.urls.count == RemoteClaudeCodeFetcher.maxEventPages)
+    }
+
+    @Test("fetchLatestAssistantText: stops when a system-only page has no next_cursor")
+    func fetchEventsStopsWithoutCursor() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let log = URLLog()
+        MockURLProtocol.handler = { request in
+            let url = request.url!
+            log.append(url)
+            return (httpResponse(status: 200, url: url), Data(fixtureSystemOnlyEvents(nextCursor: nil).utf8))
+        }
+        defer { MockURLProtocol.handler = nil }
+
+        let fetcher = RemoteClaudeCodeFetcher(
+            cookieSource: source([
+                makeCookie(name: "sessionKey"),
+                makeCookie(name: "sessionKeyLC"),
+            ]),
+            urlSession: stubbedSession(),
+            database: db
+        )
+
+        let result = try await fetcher.fetchLatestAssistantText(sessionId: "cse_test_123")
+        #expect(result == nil)
+        #expect(log.urls.count == 1)
+    }
+
     @Test("fetchLatestAssistantText: 401 throws needsReauth")
     func fetchEventsUnauthorizedThrowsNeedsReauth() async throws {
         let db = try SeshctlDatabase.temporary()
@@ -715,3 +796,36 @@ private let fixtureNoAssistantEvents: String = """
   "next_cursor": null
 }
 """
+
+/// Events page holding only `system/init` events — the shape remote-control
+/// sessions return for their newest pages, since each reconnect writes one.
+private func fixtureSystemOnlyEvents(nextCursor: String?) -> String {
+    let cursor = nextCursor.map { "\"\($0)\"" } ?? "null"
+    return """
+    {
+      "data": [
+        { "event_type": "system", "payload": { "type": "system", "subtype": "init" } },
+        { "event_type": "system", "payload": { "type": "system", "subtype": "init" } }
+      ],
+      "next_cursor": \(cursor)
+    }
+    """
+}
+
+/// Synchronously records every URL the mock handler sees, in order.
+/// (`RequestCapture` keeps only the last request and records it from a
+/// detached Task, so it can't assert on a sequence.)
+final class URLLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [URL] = []
+
+    func append(_ url: URL) {
+        lock.lock(); defer { lock.unlock() }
+        storage.append(url)
+    }
+
+    var urls: [URL] {
+        lock.lock(); defer { lock.unlock() }
+        return storage
+    }
+}
