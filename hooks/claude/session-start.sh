@@ -26,7 +26,10 @@ if [ -n "${CMUX_WORKSPACE_ID:-}" ]; then
     ARGS+=(--window-id "$CMUX_WORKSPACE_ID")
   fi
 elif [ "${TERM_PROGRAM:-}" = "ghostty" ]; then
-  # Capture Ghostty terminal ID if running inside Ghostty.
+  # Capture Ghostty terminal ID if running inside Ghostty. The app matches
+  # Ghostty surfaces by TTY first, but stable Ghostty (1.3.1) has no `tty`
+  # scripting property, so this ID is the only precise match there. Drop it
+  # once a stable Ghostty release exposes `tty`.
   # The focused terminal at hook time is the one running this session.
   GHOSTTY_ID=$(osascript -e '
     tell application "Ghostty"

@@ -411,7 +411,7 @@ final actor RecallStack {
     /// an LLM Tool"). Unknown agents — strings persisted in the index
     /// that don't map to a `SessionTool` — return an empty string;
     /// callers (the UI) treat empty `resumeCmd` as "no resume affordance".
-    private static func resumeCommand(for entry: HistoryEntry) -> String {
+    static func resumeCommand(for entry: HistoryEntry) -> String {
         guard let tool = SessionTool(rawValue: entry.agent) else {
             // Unknown agent persisted in the index — should never happen
             // for entries written by our own adapters. Empty string
@@ -422,7 +422,11 @@ final actor RecallStack {
         case .claude:
             return "claude --resume \(entry.sessionID)"
         case .codex:
-            return "codex --resume \(entry.sessionID)"
+            // `resume` is a subcommand, not a flag. `codex --resume <id>` is
+            // rejected. Verified against `codex resume --help`, which
+            // documents `codex resume [OPTIONS] [SESSION_ID] [PROMPT]`.
+            // Matches `TerminalController.buildResumeCommand`.
+            return "codex resume \(entry.sessionID)"
         case .gemini:
             return "gemini"
         case .cursor:

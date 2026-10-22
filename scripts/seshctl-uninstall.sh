@@ -47,6 +47,12 @@ fi
 # deployed hooks dir prefix (~/.local/share/seshctl/hooks/) — same anchored
 # matcher used by the Swift installer. Anchoring keeps us from stripping
 # user-defined hooks that mention "seshctl" elsewhere in their command.
+#
+# An event whose array empties out is dropped with `select`, NOT `|= empty`.
+# jq's `|= empty` sets the key to null rather than deleting it, and Claude Code
+# then refuses the file with `hooks.SessionStart must be an array of matchers;
+# received null` on every launch. The `. // []` coercion additionally cleans up
+# nulls left behind by earlier versions of this script.
 strip_seshctl_hooks() {
     local file="$1"
     [ -f "$file" ] || return 0
@@ -57,10 +63,10 @@ strip_seshctl_hooks() {
         if jq --arg prefix "$HOOK_PREFIX" '
             if .hooks then
                 .hooks |= with_entries(
-                    .value |= map(select(
+                    .value |= ((. // []) | map(select(
                         (.hooks // []) | map(.command // "") | map(startswith($prefix)) | any | not
-                    ))
-                    | .value |= (if length == 0 then empty else . end)
+                    )))
+                    | select((.value | length) > 0)
                 )
                 | (if (.hooks | length) == 0 then del(.hooks) else . end)
             else . end
