@@ -258,7 +258,7 @@ struct ClosedSessionsModeTests {
         #expect(vm.titlesById[old.id] == "Old but titled")
     }
 
-    @Test("Closed Codex rows older than the newest 50 get their thread name in c")
+    @Test("Closed Codex rows older than the newest 50 get their thread name and model in c")
     @MainActor
     func codexTitlesReachPastTheNewest50() throws {
         let home = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
@@ -266,7 +266,8 @@ struct ClosedSessionsModeTests {
         try FileManager.default.createDirectory(at: day, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: home) }
         let rollout = day.appendingPathComponent("rollout-2026-10-22T16-10-06-old.jsonl").path
-        try "".write(toFile: rollout, atomically: true, encoding: .utf8)
+        try (#"{"type":"turn_context","payload":{"model":"gpt-5.6-terra"}}"# + "\n")
+            .write(toFile: rollout, atomically: true, encoding: .utf8)
         try (#"{"id":"old","thread_name":"Old Codex thread"}"# + "\n").write(
             to: home.appendingPathComponent(CodexThreadNameIndex.fileName), atomically: true, encoding: .utf8)
 
@@ -287,6 +288,7 @@ struct ClosedSessionsModeTests {
         vm.enterRecentsMode()
 
         #expect(vm.titlesById[old.id] == "Old Codex thread")
+        #expect(vm.modelsById[old.id] == "GPT-5.6 Terra")
     }
 
     @Test("v and the group-jump keys do nothing in c")

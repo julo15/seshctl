@@ -452,7 +452,7 @@ public final class SessionListViewModel: ObservableObject {
             // per-refresh read budget on the rows at the top of the list.
             var titles: [String: String] = [:]
             var titleBudget = titleScanBytesPerRefresh
-            var codexIndexes: [String: CodexThreadNameIndex.State] = [:]
+            var codexIndexes: [String: CodexThreadNameIndex.State?] = [:]
             for session in titleSessions {
                 let title: String?
                 switch session.tool {
@@ -469,7 +469,7 @@ public final class SessionListViewModel: ObservableObject {
             titlesById = titles
             pruneTranscriptTitleCache(keepingPaths: Array(titlePaths.values))
             // Only indexes some listed session used this refresh survive.
-            codexThreadNameCache = codexIndexes
+            codexThreadNameCache = codexIndexes.compactMapValues { $0 }
             // Models for the pill. Claude paths are already resolved above
             // (live rows plus the `c` view's older ones); Codex rows use the
             // stored rollout path, which the hooks record verbatim.
@@ -1328,21 +1328,24 @@ public final class SessionListViewModel: ObservableObject {
 
     /// The Codex thread name for `session`, from the `session_index.jsonl`
     /// beside its rollout. Each index is scanned at most once per refresh:
-    /// `scanned` collects this refresh's states, resuming from
-    /// `codexThreadNameCache`, and becomes the new cache.
+    /// `scanned` collects this refresh's states (nil = no index to read),
+    /// resuming from `codexThreadNameCache`, and becomes the new cache. A
+    /// failed read of an index that scanned before keeps its last state, so
+    /// one bad read doesn't blank the titles and force a rescan from zero.
     fileprivate func codexThreadName(
         for session: Session,
-        scanned: inout [String: CodexThreadNameIndex.State]
+        scanned: inout [String: CodexThreadNameIndex.State?]
     ) -> String? {
         guard let conversationId = session.conversationId,
               let rolloutPath = session.transcriptPath,
               let indexPath = CodexThreadNameIndex.indexPath(forRolloutPath: rolloutPath)
         else { return nil }
-        if scanned[indexPath] == nil {
-            scanned[indexPath] = CodexThreadNameIndex.scan(
-                indexPath: indexPath, resuming: codexThreadNameCache[indexPath])
+        if scanned.index(forKey: indexPath) == nil {
+            let previous = codexThreadNameCache[indexPath]
+            let state = CodexThreadNameIndex.scan(indexPath: indexPath, resuming: previous)
+            scanned[indexPath] = .some(state ?? (FileManager.default.fileExists(atPath: indexPath) ? previous : nil))
         }
-        return scanned[indexPath]?.names[conversationId]
+        return scanned[indexPath]??.names[conversationId]
     }
 
     /// Drop cache entries for transcripts whose owning session is no longer

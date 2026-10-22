@@ -2687,6 +2687,73 @@ struct SessionListViewModelTests {
         #expect(vm.codexThreadNameCachePaths.isEmpty)
     }
 
+    @Test("Codex rows stay untitled until their index exists, then pick it up")
+    @MainActor
+    func titlesById_codexIndexAppearsLater() throws {
+        let (home, rollouts) = try codexHome(index: [], conversationIds: ["conv-a", "conv-b"])
+        defer { try? FileManager.default.removeItem(at: home) }
+        let indexPath = home.appendingPathComponent(CodexThreadNameIndex.fileName).path
+        try FileManager.default.removeItem(atPath: indexPath)
+
+        let db = try SeshctlDatabase.temporary()
+        let a = try db.startSession(tool: .codex, directory: "/tmp/a", pid: 9113,
+                                    conversationId: "conv-a", transcriptPath: rollouts["conv-a"])
+        _ = try db.startSession(tool: .codex, directory: "/tmp/b", pid: 9114,
+                                conversationId: "conv-b", transcriptPath: rollouts["conv-b"])
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+        #expect(vm.titlesById.isEmpty)
+        #expect(vm.codexThreadNameCachePaths.isEmpty)
+
+        try (#"{"id":"conv-a","thread_name":"Alpha"}"# + "\n").write(toFile: indexPath, atomically: true, encoding: .utf8)
+        vm.refresh()
+        #expect(vm.titlesById[a.id] == "Alpha")
+        #expect(vm.codexThreadNameCachePaths == [indexPath])
+    }
+
+    @Test("A Codex row without a conversation id gets no title")
+    @MainActor
+    func titlesById_codexWithoutConversationId() throws {
+        let (home, rollouts) = try codexHome(index: [#"{"id":"conv-a","thread_name":"Alpha"}"#],
+                                             conversationIds: ["conv-a"])
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let db = try SeshctlDatabase.temporary()
+        let session = try db.startSession(tool: .codex, directory: "/tmp/a", pid: 9115,
+                                          transcriptPath: rollouts["conv-a"])
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+        #expect(vm.titlesById[session.id] == nil)
+        #expect(vm.codexThreadNameCachePaths.isEmpty)
+    }
+
+    @Test("A Codex index that stops being readable keeps its last titles")
+    @MainActor
+    func titlesById_codexUnreadableIndexKeepsState() throws {
+        let (home, rollouts) = try codexHome(index: [#"{"id":"conv-a","thread_name":"Alpha"}"#],
+                                             conversationIds: ["conv-a"])
+        let indexPath = home.appendingPathComponent(CodexThreadNameIndex.fileName).path
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: indexPath)
+            try? FileManager.default.removeItem(at: home)
+        }
+
+        let db = try SeshctlDatabase.temporary()
+        let session = try db.startSession(tool: .codex, directory: "/tmp/a", pid: 9116,
+                                          conversationId: "conv-a", transcriptPath: rollouts["conv-a"])
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+        #expect(vm.titlesById[session.id] == "Alpha")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: indexPath)
+        vm.refresh()
+        #expect(vm.titlesById[session.id] == "Alpha")
+        #expect(vm.codexThreadNameCachePaths == [indexPath])
+    }
+
     @Test("titlesById drops the title and cache entry when the transcript can't be opened")
     @MainActor
     func titlesById_unreadableTranscriptEvicts() throws {

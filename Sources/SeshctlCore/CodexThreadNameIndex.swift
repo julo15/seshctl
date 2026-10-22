@@ -87,6 +87,7 @@ public enum CodexThreadNameIndex {
     private static let newline = UInt8(ascii: "\n")
 
     /// Fold every index line in `data` into `state`, last line per id winning.
+    /// A blank name is skipped, so it never erases an earlier name.
     static func fold(_ data: Data, into state: inout State) {
         for line in data.split(separator: newline) {
             guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
