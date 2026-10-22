@@ -198,7 +198,11 @@ For how `bridgedLocalIds` fits alongside the other transcript-derived row signal
 
 ## Transcript-Derived Row Signals
 
-Three row signals are derived by scanning the live JSONL transcript on each ~2s refresh: `bridgedLocalIds` (via `TranscriptBridgeScanner` → `transcriptBridgeCache`), `awaySummariesById` (via `TranscriptAwaySummaryScanner` → `transcriptAwaySummaryCache`), and `latestAssistantById` (via `TranscriptLatestAssistantScanner` → `transcriptLatestAssistantCache`). All three live in `SessionListViewModel.refresh()`.
+Four row signals are derived by scanning the live JSONL transcript on each ~2s refresh: `bridgedLocalIds` (via `TranscriptBridgeScanner` → `transcriptBridgeCache`), `awaySummariesById` (via `TranscriptAwaySummaryScanner` → `transcriptAwaySummaryCache`), `latestAssistantById` (via `TranscriptLatestAssistantScanner` → `transcriptLatestAssistantCache`), and `titlesById` (via `TranscriptTitleScanner` → `transcriptTitleCache`). All four live in `SessionListViewModel.refresh()`.
+
+**Session titles.** `titlesById` feeds the row headline. The title comes from Claude Code's own `{"type":"ai-title","aiTitle":…}` record — a short LLM label generated once from the opening prompt and never updated — with `{"type":"custom-title","customTitle":…}` as the fallback. AI title deliberately wins over custom title: custom titles are often remote-control names like `m5: assistant` that identify the machine, not the work.
+
+**Row layouts.** `AppearanceDefaults.rowLayoutKey` selects `RowLayout.compact` (default), `.stacked` or `.twoColumn` from Settings → Appearance. Compact is one line per row — headline (`Session.compactHeadline(title:)`: title → branch → folder), the checkout folder (`Session.folderLabel`, worktrees collapsed to their checkout) in the repo accent color, and the message faded to the row's end. The keyboard-selected row (`isSelected`, threaded from `viewModel.selectedRow`) expands the message onto up to three lines; hover never expands, because rows resizing under the cursor move the click target. In stacked/two-column, the title replaces the branch on line 2 and wraps. Both `SessionRowView` and `RemoteClaudeCodeRowView` implement every layout — keep them in step.
 
 For what `bridgedLocalIds` means and how `TranscriptBridgeScanner` derives it (join key shape, legacy fallback, the three published projections), see "Bridged Sessions" above.
 

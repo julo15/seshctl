@@ -22,19 +22,15 @@ public enum AppearanceDefaults {
     /// Default — on, so users discover the app's menu surface out of the box.
     public static let showStatusBarIconDefault = true
 
-    /// Key for the "Stacked row layout" toggle. When on (default),
-    /// session rows render the sender / branch / preview as a vertical
-    /// stack spanning the full row width. When off, falls back to the
-    /// legacy two-column layout where the sender column sits at a fixed
-    /// 180pt on the left and the preview occupies the remaining width on
-    /// the right. Exists for A/B comparison during the stacked-layout
-    /// shakedown — once a winner is picked, the toggle and the losing
-    /// code paths should be removed together.
-    public static let stackedRowLayoutKey = "seshctl.stackedRowLayout"
+    /// Key for the "Row layout" picker. Stores a `RowLayout` raw value.
+    /// Supersedes the earlier `seshctl.stackedRowLayout` boolean, which is
+    /// no longer read — everyone lands on the compact default once.
+    public static let rowLayoutKey = "seshctl.rowLayout"
 
-    /// Default — on. The stacked layout is the new default; the toggle
-    /// lets the user flip back to the two-column legacy for comparison.
-    public static let stackedRowLayoutDefault = true
+    /// Default — compact. The stacked and two-column layouts remain for
+    /// comparison while compact shakes down; once it sticks, the picker and
+    /// the losing code paths should be removed together.
+    public static let rowLayoutDefault: RowLayout = .compact
 
     /// One-shot migration from the pre-release un-prefixed key
     /// (`"repoAccentBarEnabled"`) to `seshctl.repoAccentBarEnabled`.
@@ -49,5 +45,25 @@ public enum AppearanceDefaults {
         }
         defaults.set(defaults.bool(forKey: legacy), forKey: repoAccentBarKey)
         defaults.removeObject(forKey: legacy)
+    }
+}
+
+/// Session row layouts selectable from Settings → Appearance.
+public enum RowLayout: String, CaseIterable, Sendable {
+    /// One line per row — title, repo-colored folder label, faded message.
+    /// The selected row expands to show the message on its own lines.
+    case compact
+    /// Repo name, branch/title and message stacked across the full width.
+    case stacked
+    /// Repo name and branch/title in a fixed 180pt left column, message on
+    /// the right.
+    case twoColumn
+
+    public var displayName: String {
+        switch self {
+        case .compact: return "Compact"
+        case .stacked: return "Stacked"
+        case .twoColumn: return "Two-column"
+        }
     }
 }

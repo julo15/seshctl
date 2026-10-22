@@ -61,7 +61,7 @@ public struct RemoteClaudeCodeRowView: View {
     public let yesterdayStyle: SessionAgeDisplay.YesterdayStyle
 
     @AppStorage(AppearanceDefaults.repoAccentBarKey) private var repoAccentBarEnabled: Bool = AppearanceDefaults.repoAccentBarDefault
-    @AppStorage(AppearanceDefaults.stackedRowLayoutKey) private var stackedRowLayoutEnabled: Bool = AppearanceDefaults.stackedRowLayoutDefault
+    @AppStorage(AppearanceDefaults.rowLayoutKey) private var rowLayout: RowLayout = AppearanceDefaults.rowLayoutDefault
 
     public init(
         session: RemoteClaudeCodeSession,
@@ -139,16 +139,90 @@ public struct RemoteClaudeCodeRowView: View {
         )
     }
 
-    /// Branches between stacked and legacy row layouts. Mirrors the same
-    /// toggle on `SessionRowView` so local and remote rows stay visually
-    /// consistent under both modes.
+    /// Branches between the row layouts. Mirrors the same setting on
+    /// `SessionRowView` so local and remote rows stay visually consistent
+    /// under every layout.
     @ViewBuilder
     private var mainContent: some View {
-        if stackedRowLayoutEnabled {
-            stackedContent
-        } else {
-            legacyContent
+        switch rowLayout {
+        case .compact: compactContent
+        case .stacked: stackedContent
+        case .twoColumn: legacyContent
         }
+    }
+
+    /// Compact one-line content mirroring `SessionRowView.compactContent`.
+    /// The claude.ai session title is the headline and the repo name the
+    /// accent-colored label. Only a fetched recap (`awaySummary`) fills the
+    /// message slot: the preview chain's `.reply(title)` fallback would just
+    /// repeat the headline.
+    @ViewBuilder
+    private var compactContent: some View {
+        let headline = session.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? (session.branchDisplay ?? session.senderDisplay)
+            : session.title
+        let recap = awaySummary.nonEmpty.map { PreviewContent.awaySummary($0) }
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(headline)
+                    .font(.system(size: 16, weight: isUnread ? .bold : .semibold))
+                    .foregroundStyle(compactHeadlineColor)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .layoutPriority(1)
+                    .help(session.branchDisplay ?? session.senderDisplay)
+
+                if headline != session.senderDisplay {
+                    Text(session.senderDisplay)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(compactLabelColor)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+
+                if showCloudAffordances {
+                    Image(systemName: "cloud.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.tertiary)
+                        .help("Runs on claude.ai only")
+                }
+
+                if !isSelected, let recap {
+                    Text(recap.compactSingleLine)
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+
+            if isSelected, let recap {
+                Text(recap.compactText)
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .truncationMode(.tail)
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(.easeOut(duration: 0.15), value: isSelected)
+    }
+
+    /// Headline color in the compact layout. Mirrors
+    /// `SessionRowView.compactHeadlineColor`.
+    private var compactHeadlineColor: Color {
+        isUnread ? .primary : Color.primary.opacity(0.62)
+    }
+
+    /// Label color in the compact layout. Mirrors
+    /// `SessionRowView.compactLabelColor`.
+    private var compactLabelColor: Color {
+        if repoAccentBarEnabled, let color = repoAccentColor(for: repo) {
+            return color
+        }
+        return .secondary
     }
 
     /// Single-column stacked row content mirroring
@@ -265,7 +339,7 @@ public struct RemoteClaudeCodeRowView: View {
     /// `.semibold` so the preview doesn't compete with the always-bold
     /// sender heading. Mirrors `SessionRowView.previewUnreadWeight`.
     private var previewUnreadWeight: Font.Weight {
-        stackedRowLayoutEnabled ? .semibold : .bold
+        rowLayout == .stacked ? .semibold : .bold
     }
 
     /// Line 2: `cloud.fill` prefix glyph + branch. Constrained to the

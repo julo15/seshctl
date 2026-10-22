@@ -65,6 +65,13 @@ public final class SessionListViewModel: ObservableObject {
     /// (`awaySummariesById[id] ?? latestAssistantById[id]`) into the existing
     /// `previewContent(awaySummary:)` slot — no new display branch.
     @Published public private(set) var latestAssistantById: [String: String] = [:]
+    /// Claude Code's short session title (`ai-title`, falling back to
+    /// `custom-title`) per local Claude session, keyed by `session.id`.
+    /// Sessions without a title are absent (the row's line 2 falls back to
+    /// the branch / directory). Computed in `refresh()` via
+    /// `TranscriptTitleScanner` with `transcriptTitleCache` providing
+    /// mtime-based reuse.
+    @Published public private(set) var titlesById: [String: String] = [:]
     /// Per-transcript cache: `path → (mtime, cseId)`. Lets `refresh()` skip
     /// re-reading a live Claude transcript when its file mtime hasn't
     /// advanced. Bounded by `sessions.count` on each refresh (entries for
@@ -79,6 +86,10 @@ public final class SessionListViewModel: ObservableObject {
     /// Pruned by `pruneTranscriptLatestAssistantCache(keepingPaths:)` on each
     /// refresh.
     private var transcriptLatestAssistantCache: [String: (mtime: Date, text: String?)] = [:]
+    /// Per-transcript cache: `path → (mtime, title)`. Mirrors
+    /// `transcriptAwaySummaryCache` for session titles. Pruned by
+    /// `pruneTranscriptTitleCache(keepingPaths:)` on each refresh.
+    private var transcriptTitleCache: [String: (mtime: Date, title: String?)] = [:]
     @Published public private(set) var recallResults: [RecallResult] = []
     @Published public private(set) var isRecallSearching: Bool = false
     @Published public private(set) var recallIndexingDone: Int?
@@ -347,6 +358,15 @@ public final class SessionListViewModel: ObservableObject {
             }
             latestAssistantById = latest
             pruneTranscriptLatestAssistantCache(keepingPaths: livePaths)
+            var titles: [String: String] = [:]
+            for session in sessions {
+                guard let path = resolvedPathsBySessionId[session.id] else { continue }
+                if let title = cachedTitle(for: session, transcriptPath: path) {
+                    titles[session.id] = title
+                }
+            }
+            titlesById = titles
+            pruneTranscriptTitleCache(keepingPaths: livePaths)
             pruneTranscriptBridgeCache(keepingPaths: livePaths)
             // Re-pin `selectedIndex` to the previously-selected row's new
             // position. If the row vanished (closed + filtered out of
@@ -932,6 +952,30 @@ public final class SessionListViewModel: ObservableObject {
             transcriptLatestAssistantCache[path] = (mtime, text)
         }
         return text
+    }
+
+    /// Scan the session's transcript for its Claude Code title, re-using a
+    /// previous result when the transcript's mtime hasn't advanced. Mirrors
+    /// `cachedAwaySummary(for:transcriptPath:)`. Non-Claude tools return nil
+    /// — only Claude Code writes `ai-title` / `custom-title` records.
+    fileprivate func cachedTitle(for session: Session, transcriptPath path: String) -> String? {
+        guard session.tool == .claude else { return nil }
+        let mtime = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+        if let mtime, let cached = transcriptTitleCache[path], cached.mtime == mtime {
+            return cached.title
+        }
+        let title = TranscriptTitleScanner.extractTitle(transcriptPath: path)
+        if let mtime {
+            transcriptTitleCache[path] = (mtime, title)
+        }
+        return title
+    }
+
+    /// Drop cache entries for transcripts whose owning session is no longer
+    /// in the live list. Mirrors `pruneTranscriptAwaySummaryCache`.
+    fileprivate func pruneTranscriptTitleCache(keepingPaths paths: [String]) {
+        let live = Set(paths)
+        transcriptTitleCache = transcriptTitleCache.filter { live.contains($0.key) }
     }
 
     /// Drop cache entries for transcripts whose owning session is no longer

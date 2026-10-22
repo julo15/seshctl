@@ -2437,6 +2437,46 @@ struct SessionListViewModelTests {
         #expect(vm.awaySummariesById[session.id] == "Shipped two PRs.")
     }
 
+    @Test("titlesById populated from Claude transcript ai-title")
+    @MainActor
+    func titlesById_populatedFromClaudeTranscript() throws {
+        let path = (NSTemporaryDirectory() as NSString).appendingPathComponent("\(UUID().uuidString).jsonl")
+        let content = """
+        {"type":"custom-title","customTitle":"m5: whisperfast"}
+        {"type":"ai-title","aiTitle":"Sign in with Apple setup","sessionId":"abc"}
+        """
+        try content.write(toFile: path, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let pid: Int = 9101
+        let db = try SeshctlDatabase.temporary()
+        let session = try db.startSession(tool: .claude, directory: "/tmp/x", pid: pid)
+        try db.updateSession(pid: pid, tool: .claude, transcriptPath: path)
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+
+        #expect(vm.titlesById[session.id] == "Sign in with Apple setup")
+    }
+
+    @Test("titlesById empty for non-Claude tool")
+    @MainActor
+    func titlesById_emptyForNonClaudeTool() throws {
+        let path = (NSTemporaryDirectory() as NSString).appendingPathComponent("\(UUID().uuidString).jsonl")
+        try #"{"type":"ai-title","aiTitle":"Should not show"}"#.write(toFile: path, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let pid: Int = 9102
+        let db = try SeshctlDatabase.temporary()
+        let session = try db.startSession(tool: .codex, directory: "/tmp/x", pid: pid)
+        try db.updateSession(pid: pid, tool: .codex, transcriptPath: path)
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+
+        #expect(vm.titlesById[session.id] == nil)
+    }
+
     @Test("awaySummariesById empty for non-Claude tool")
     @MainActor
     func awaySummariesById_emptyForNonClaudeTool() throws {

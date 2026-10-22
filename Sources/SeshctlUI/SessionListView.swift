@@ -410,6 +410,8 @@ public struct SessionListView: View {
                 showCloudAffordances: connectionStore.hasClaudeConnection,
                 showAgentBadge: showAgentBadge,
                 awaySummary: viewModel.awaySummariesById[session.id] ?? viewModel.latestAssistantById[session.id],
+                title: viewModel.titlesById[session.id],
+                isSelected: viewModel.selectedRow?.id == session.id,
                 // List view has a Yesterday section header, so the per-row
                 // slot shows the more specific clock time for yesterday rows
                 // instead of repeating the day.

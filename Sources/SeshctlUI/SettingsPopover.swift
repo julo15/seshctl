@@ -13,7 +13,7 @@ public struct SettingsPopover: View {
     @State private var showingConfirmDisconnect = false
     @AppStorage(AppearanceDefaults.repoAccentBarKey) private var repoAccentBarEnabled: Bool = AppearanceDefaults.repoAccentBarDefault
     @AppStorage(AppearanceDefaults.showStatusBarIconKey) private var showStatusBarIcon: Bool = AppearanceDefaults.showStatusBarIconDefault
-    @AppStorage(AppearanceDefaults.stackedRowLayoutKey) private var stackedRowLayoutEnabled: Bool = AppearanceDefaults.stackedRowLayoutDefault
+    @AppStorage(AppearanceDefaults.rowLayoutKey) private var rowLayout: RowLayout = AppearanceDefaults.rowLayoutDefault
 
     /// Optional callbacks for the bottom-of-popover Application section.
     /// Supplied by `AppDelegate` so the popover can offer the same uninstall
@@ -86,11 +86,15 @@ public struct SettingsPopover: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Toggle("Stacked row layout", isOn: $stackedRowLayoutEnabled)
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .padding(.top, 4)
-                Text("Stacks the repo name, branch, and chat preview vertically so the preview spans the full row width. Off uses the legacy two-column layout with the sender on the left and preview on the right.")
+                Picker("Row layout", selection: $rowLayout) {
+                    ForEach(RowLayout.allCases, id: \.self) { layout in
+                        Text(layout.displayName).tag(layout)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .controlSize(.small)
+                .padding(.top, 4)
+                Text("Compact shows one line per session and expands the selected row. Stacked and Two-column show every row's message.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

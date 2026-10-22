@@ -38,6 +38,79 @@ private func makeSession(
     )
 }
 
+// MARK: - folderLabel / compactHeadline
+
+@Suite("Session.folderLabel")
+struct SessionFolderLabelTests {
+
+    @Test("Uses the checkout folder, not the git repo name")
+    func usesFolderName() {
+        let s = makeSession(directory: "/Users/me/whisperfast-2", gitRepoName: "whisperfast")
+        #expect(s.folderLabel == "whisperfast-2")
+    }
+
+    @Test("Claude Code worktrees collapse to their owning checkout")
+    func worktreeCollapses() {
+        let s = makeSession(directory: "/Users/me/seshctl/.claude/worktrees/julo-fix-thing", gitRepoName: "seshctl")
+        #expect(s.folderLabel == "seshctl")
+    }
+
+    @Test("Nested paths inside a worktree still collapse")
+    func nestedWorktreePath() {
+        let s = makeSession(directory: "/Users/me/seshctl/.claude/worktrees/julo-fix-thing/Sources")
+        #expect(s.folderLabel == "seshctl")
+    }
+}
+
+@Suite("Session.compactHeadline(title:)")
+struct SessionCompactHeadlineTests {
+
+    @Test("Title wins and is trimmed")
+    func titleWins() {
+        let s = makeSession(directory: "/tmp/foo", gitBranch: "main")
+        #expect(s.compactHeadline(title: "  New release build \n") == "New release build")
+    }
+
+    @Test("Falls back to the branch when there is no title")
+    func branchFallback() {
+        let s = makeSession(directory: "/tmp/foo", gitBranch: "julo/session-titles")
+        #expect(s.compactHeadline(title: nil) == "julo/session-titles")
+        #expect(s.compactHeadline(title: "   ") == "julo/session-titles")
+    }
+
+    @Test("Falls back to the folder when there is no title or branch")
+    func folderFallback() {
+        let s = makeSession(directory: "/tmp/foo", gitBranch: "")
+        #expect(s.compactHeadline(title: nil) == "foo")
+    }
+}
+
+@Suite("PreviewContent compact text")
+struct PreviewContentCompactTextTests {
+
+    @Test("User prompts get the You: prefix; other cases pass through")
+    func compactText() {
+        #expect(PreviewContent.userPrompt("fix it").compactText == "You: fix it")
+        #expect(PreviewContent.reply("done").compactText == "done")
+        #expect(PreviewContent.awaySummary("recap").compactText == "recap")
+        #expect(PreviewContent.statusHint("Idle").compactText == "Idle")
+    }
+
+    @Test("Prompts and hints are italic; replies and recaps are not")
+    func italics() {
+        #expect(PreviewContent.userPrompt("x").isItalic)
+        #expect(PreviewContent.statusHint("x").isItalic)
+        #expect(!PreviewContent.reply("x").isItalic)
+        #expect(!PreviewContent.awaySummary("x").isItalic)
+    }
+
+    @Test("Single-line form joins lines and drops blanks")
+    func singleLine() {
+        #expect(PreviewContent.reply("First line.\n\n  Second line.  \nThird").compactSingleLine
+            == "First line. Second line. Third")
+    }
+}
+
 // MARK: - senderDisplay
 
 @Suite("Session.senderDisplay")

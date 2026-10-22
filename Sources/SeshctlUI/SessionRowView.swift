@@ -29,6 +29,15 @@ public struct SessionRowView: View {
     /// `Session.previewContent(awaySummary:)`. Sourced from
     /// `SessionListViewModel.awaySummariesById`.
     var awaySummary: String? = nil
+    /// Claude Code's short session title (`ai-title` / `custom-title`). When
+    /// non-nil, line 2 shows it in place of the git branch — the title says
+    /// what the session is about, which identifies a row far better than a
+    /// branch name. Sourced from `SessionListViewModel.titlesById`.
+    var title: String? = nil
+    /// Whether this row is the list's keyboard selection. The compact
+    /// layout expands the selected row to show its message on its own
+    /// lines; the other layouts ignore it (the list paints the highlight).
+    var isSelected: Bool = false
     /// How yesterday-bucket timestamps render in the row's age slot — see
     /// `SessionAgeDisplay.YesterdayStyle`. Driven by the parent view: the
     /// time-sorted inbox passes `.timeOfDay`, the repo-grouped tree view
@@ -45,9 +54,9 @@ public struct SessionRowView: View {
     var onOpenWeb: (() -> Void)?
 
     @AppStorage(AppearanceDefaults.repoAccentBarKey) private var repoAccentBarEnabled: Bool = AppearanceDefaults.repoAccentBarDefault
-    @AppStorage(AppearanceDefaults.stackedRowLayoutKey) private var stackedRowLayoutEnabled: Bool = AppearanceDefaults.stackedRowLayoutDefault
+    @AppStorage(AppearanceDefaults.rowLayoutKey) private var rowLayout: RowLayout = AppearanceDefaults.rowLayoutDefault
 
-    public init(session: Session, hostApp: HostAppInfo, isUnread: Bool = false, isBridged: Bool = false, showCloudAffordances: Bool = false, showAgentBadge: Bool = true, awaySummary: String? = nil, yesterdayStyle: SessionAgeDisplay.YesterdayStyle = .date, onDetail: (() -> Void)? = nil, onOpenWeb: (() -> Void)? = nil) {
+    public init(session: Session, hostApp: HostAppInfo, isUnread: Bool = false, isBridged: Bool = false, showCloudAffordances: Bool = false, showAgentBadge: Bool = true, awaySummary: String? = nil, title: String? = nil, isSelected: Bool = false, yesterdayStyle: SessionAgeDisplay.YesterdayStyle = .date, onDetail: (() -> Void)? = nil, onOpenWeb: (() -> Void)? = nil) {
         self.session = session
         self.hostApp = hostApp
         self.isUnread = isUnread
@@ -55,6 +64,8 @@ public struct SessionRowView: View {
         self.showCloudAffordances = showCloudAffordances
         self.showAgentBadge = showAgentBadge
         self.awaySummary = awaySummary
+        self.title = title
+        self.isSelected = isSelected
         self.yesterdayStyle = yesterdayStyle
         self.onDetail = onDetail
         self.onOpenWeb = onOpenWeb
@@ -120,17 +131,97 @@ public struct SessionRowView: View {
         return .orange
     }
 
-    /// Branches between the new stacked layout and the legacy two-column
-    /// layout based on `AppearanceDefaults.stackedRowLayoutKey`. The
-    /// stacked path is the new default; the legacy path is kept for A/B
-    /// comparison and should be removed once the new design is finalized.
+    /// Branches between the row layouts based on
+    /// `AppearanceDefaults.rowLayoutKey`. Compact is the default; stacked
+    /// and two-column are kept for comparison and should be removed once
+    /// the compact design is settled.
     @ViewBuilder
     private var mainContent: some View {
-        if stackedRowLayoutEnabled {
-            stackedContent
-        } else {
-            legacyContent
+        switch rowLayout {
+        case .compact: compactContent
+        case .stacked: stackedContent
+        case .twoColumn: legacyContent
         }
+    }
+
+    /// One-line row: the session title as the headline, the checkout folder
+    /// in the repo's accent color, then the latest message faded out to the
+    /// row's end. The selected row moves the message onto up to three lines
+    /// of its own, so arrowing through the list reads each session in turn
+    /// while every other row stays a single scannable line.
+    ///
+    /// The headline takes `layoutPriority` so it claims its width before the
+    /// inline message; the folder label is `fixedSize` so it never truncates.
+    /// Unread rows get the accent bar (from `ResultRowLayout`) and a bolder
+    /// headline — no pill, which would crowd the one-line layout.
+    @ViewBuilder
+    private var compactContent: some View {
+        let preview = session.previewContent(awaySummary: awaySummary)
+        let headline = session.compactHeadline(title: title)
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(headline)
+                    .font(.system(size: 16, weight: isUnread ? .bold : .semibold))
+                    .foregroundStyle(compactHeadlineColor)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .layoutPriority(1)
+                    .help(session.gitBranch.nonEmpty ?? directoryPath)
+
+                if headline != session.folderLabel {
+                    Text(session.folderLabel)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(compactLabelColor)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+
+                if showCloudAffordances && isBridged {
+                    cloudMarker
+                }
+
+                if !isSelected {
+                    Text(preview.compactSingleLine)
+                        .italic(preview.isItalic)
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+
+            if isSelected {
+                Text(preview.compactText)
+                    .italic(preview.isItalic)
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .truncationMode(.tail)
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(.easeOut(duration: 0.15), value: isSelected)
+    }
+
+    /// Headline color in the compact layout. Full-strength white is reserved
+    /// for unread rows so "new" pops on a scan; read headlines dim slightly
+    /// but stay brighter than the `.tertiary` message beside them. Weight
+    /// alone (bold vs semibold) is too subtle to read at 16pt.
+    private var compactHeadlineColor: Color {
+        isUnread ? .primary : Color.primary.opacity(0.62)
+    }
+
+    /// Folder-label color in the compact layout: the repo accent when color
+    /// coding is on, otherwise `.secondary` — unlike the stacked layouts'
+    /// sender, the label is supporting text and shouldn't compete with the
+    /// headline at full strength.
+    private var compactLabelColor: Color {
+        if repoAccentBarEnabled, let color = repoAccentColor(for: session.gitRepoName) {
+            return color
+        }
+        return .secondary
     }
 
     /// Single-column stacked row content: sender (line 1), branch / row-kind
@@ -196,12 +287,16 @@ public struct SessionRowView: View {
         }
     }
 
-    /// Line-2 row-kind-glyphs + branch (or directory-path fallback when
-    /// there's no git context). `stacked` selects the font size — legacy
-    /// mode matches the sender at 13/14pt, stacked mode demotes to 11/12pt.
+    /// Line-2 row-kind-glyphs + session title, falling back to the branch
+    /// (or the directory path when there's no git context). `stacked`
+    /// selects the font size — legacy mode matches the sender at 13/14pt,
+    /// stacked mode demotes to 11/12pt.
+    ///
+    /// Baseline-aligned so the glyphs sit on the title's first line when it
+    /// wraps, rather than floating to the vertical center of the block.
     @ViewBuilder
     private func subtitleRow(stacked: Bool) -> some View {
-        HStack(spacing: 4) {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
             if showCloudAffordances {
                 Image(systemName: "laptopcomputer")
                     .font(.footnote)
@@ -214,7 +309,18 @@ public struct SessionRowView: View {
                 }
             }
 
-            if let branch = session.gitBranch, !branch.isEmpty {
+            if let title = title.nonEmpty {
+                // Titles are short prose, so they wrap (proportional font,
+                // no line limit) instead of tail-truncating like a branch.
+                // `fixedSize` stops the fixed-width legacy sender column from
+                // squeezing the text back down to one truncated line.
+                Text(title)
+                    .font(.system(size: SenderColumnLayout.subtitleSize(isUnread: isUnread, stacked: stacked)))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .help(session.gitBranch.nonEmpty ?? directoryPath)
+            } else if let branch = session.gitBranch, !branch.isEmpty {
                 Text(branch)
                     .font(.system(size: SenderColumnLayout.subtitleSize(isUnread: isUnread, stacked: stacked), design: .monospaced))
                     .foregroundStyle(.secondary)
@@ -297,7 +403,7 @@ public struct SessionRowView: View {
     /// pre-stacked-layout shipped behavior; stacked mode picks `.semibold`
     /// so the preview doesn't compete with the always-bold sender heading.
     private var previewUnreadWeight: Font.Weight {
-        stackedRowLayoutEnabled ? .semibold : .bold
+        rowLayout == .stacked ? .semibold : .bold
     }
 
     /// Sender (repo name) color. When per-repo color coding is on, the
