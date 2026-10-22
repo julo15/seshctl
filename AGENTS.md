@@ -8,6 +8,7 @@
 - `make uninstall` — one-liner: runs `seshctl uninstall` against the installed CLI (CLI symlink + hook entries + standalone uninstaller + marker + Codex `[features].hooks` flag). Drag `Seshctl.app` to Trash separately.
 - `make cert-setup` — one-time: generate the self-signed code-signing identity in the login keychain.
 - `make test` — run all tests
+- **Hook-only changes and `make install`:** the launch-time reconciler refreshes `~/.local/share/seshctl/hooks/` only when the version changes or `Contents/MacOS/SeshctlApp` is newer than the install marker. A change that touches only `hooks/**/*.sh` doesn't relink the binary, so `make install` leaves the old hooks in place. `touch /Applications/Seshctl.app/Contents/MacOS/SeshctlApp` and relaunch to force a refresh. (Releases are unaffected — the version bump triggers it.)
 
 ## Distributable App Build (Phase 1)
 
@@ -176,6 +177,31 @@ Surfaces to touch when adding a new tool:
 - All hook event names, JSON shapes, and script paths live in `FirstLaunchInstaller` and `hooks/<tool>/` — never hardcode them in the CLI or app code.
 - The CLI and Database are tool-agnostic except for the `SessionTool` raw string. Don't branch on `tool` in `seshctl-cli` unless it's genuinely tool-specific (e.g. the Cursor lazy-create path in `Update`/`End` keyed on `--conversation-id`).
 - Exhaustive `switch`es over `SessionTool` are the safety net: never add `default:` cases.
+
+## Claude Hook Status Transitions
+
+The local session status comes entirely from `hooks/claude/*.sh`:
+
+| Event | Script | Status |
+|---|---|---|
+| `UserPromptSubmit` | `user-prompt.sh` | working |
+| `PreToolUse` | `pre-tool-use.sh` | working; **waiting** for `AskUserQuestion` / `ExitPlanMode` |
+| `PostToolUse` (matcher `AskUserQuestion\|ExitPlanMode`) | `post-tool-use.sh` | working (the user answered) |
+| `Notification` | `notification.sh` | waiting (permission prompts, idle prompts) |
+| `Stop` | `stop.sh` | idle |
+| `SessionEnd` | `session-end.sh` | ended |
+
+**Subagent tool calls share the parent's session and PID.** Their hook payloads carry `agent_id` (absent on the main session's calls), and `hooks.log` tags them `agent=<id>`. Left unchecked, a background subagent's next tool call flips a session waiting on an open question back to working. `pre-tool-use.sh` guards this with a per-session marker at `~/.local/share/seshctl/state/claude-awaiting-user-<session_id>`: blocking tools create it, and while it exists, subagent calls make no update. `post-tool-use.sh`, `stop.sh`, `user-prompt.sh`, `session-end.sh`, and the main session's next tool call all clear it. Subagent calls still set working when no marker exists. That's what un-sticks a session after the user approves a *subagent's* permission prompt (which goes through `notification.sh` and never creates a marker).
+
+**Debugging a wrong dot:** `grep <session_id> ~/.local/share/seshctl/logs/hooks.log` shows the event sequence. Hook updates run in the background (`&`), so two events in the same second can land in either order.
+
+## Status Dots
+
+`StatusKind` (`Sources/SeshctlUI/StatusKind.swift`) is the single source of truth for the row's status dot: color, animation (`isPulsing` for working, `isPinging` for waiting), `isHollow` (completed/offline), and age dimming via `color(age:)` (neutral gray kinds fade for yesterday / older). Both `SessionRowView` and `RemoteClaudeCodeRowView` render it through `AnimatedStatusDot`, passing the row's `SessionAgeDisplay.bucket`. Don't hardcode dot colors in a row view.
+
+The palette follows the activity-monitor convention: green = the agent is running, amber = blocked on the user (the loudest treatment), gray = not running. Two SwiftUI traps in `AnimatedStatusDot`:
+- **`repeatForever` animations can't be cancelled by resetting state.** The animated body is keyed with `.id(kind)` so a status change rebuilds it; without that, a session that went working → idle kept pulsing in gray.
+- **`drawingGroup()` rasterizes into the view's bounds.** The fixed 40pt frame must fit the largest effect (the working halo), or kinds without a halo clip to an 8×8 square. The frame doesn't affect layout — `ResultRowLayout` hosts the dot as an overlay.
 
 ## Bridged Sessions (local CLI <-> claude.ai)
 

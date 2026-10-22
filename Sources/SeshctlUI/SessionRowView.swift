@@ -73,7 +73,7 @@ public struct SessionRowView: View {
 
     public var body: some View {
         ResultRowLayout(
-            status: { AnimatedStatusDot(kind: session.status.statusKind) },
+            status: { AnimatedStatusDot(kind: session.status.statusKind, age: ageDisplay.bucket) },
             ageDisplay: ageDisplay,
             content: { mainContent },
             hostApp: hostApp,

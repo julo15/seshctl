@@ -106,19 +106,19 @@ struct StatusKindForRemoteTests {
 @Suite("StatusKind.color")
 struct StatusKindColorTests {
 
-    @Test("waiting is blue")
-    func waitingIsBlue() {
-        #expect(StatusKind.waiting.color == .blue)
+    @Test("waiting is amber")
+    func waitingIsAmber() {
+        #expect(StatusKind.waiting.color == StatusKind.waitingAmber)
     }
 
-    @Test("working is orange")
-    func workingIsOrange() {
-        #expect(StatusKind.working.color == .orange)
+    @Test("working is green")
+    func workingIsGreen() {
+        #expect(StatusKind.working.color == .green)
     }
 
-    @Test("idle is green")
-    func idleIsGreen() {
-        #expect(StatusKind.idle.color == .green)
+    @Test("idle is gray")
+    func idleIsGray() {
+        #expect(StatusKind.idle.color == .gray)
     }
 
     @Test("offline is gray")
@@ -134,6 +134,31 @@ struct StatusKindColorTests {
     @Test("canceled is red")
     func canceledIsRed() {
         #expect(StatusKind.canceled.color == .red)
+    }
+
+    @Test("neutral gray kinds dim with age")
+    func neutralKindsDimWithAge() {
+        for kind in [StatusKind.idle, .completed, .offline] {
+            #expect(kind.color(age: .today) == .gray)
+            #expect(kind.color(age: .yesterday) == .gray.opacity(0.6))
+            #expect(kind.color(age: .older) == .gray.opacity(0.35))
+        }
+    }
+
+    @Test("colored kinds ignore age")
+    func coloredKindsIgnoreAge() {
+        for kind in [StatusKind.working, .waiting, .canceled, .stale] {
+            #expect(kind.color(age: .older) == kind.color)
+        }
+    }
+
+    @Test("only ended sessions render hollow")
+    func onlyEndedSessionsAreHollow() {
+        #expect(StatusKind.completed.isHollow)
+        #expect(StatusKind.offline.isHollow)
+        for kind in [StatusKind.working, .waiting, .idle, .canceled, .stale] {
+            #expect(!kind.isHollow)
+        }
     }
 }
 
@@ -151,12 +176,12 @@ struct StatusKindAnimationFlagsTests {
         #expect(!StatusKind.stale.isPulsing)
     }
 
-    @Test("only .waiting blinks")
-    func onlyWaitingBlinks() {
-        #expect(StatusKind.waiting.isBlinking)
-        #expect(!StatusKind.working.isBlinking)
-        #expect(!StatusKind.idle.isBlinking)
-        #expect(!StatusKind.offline.isBlinking)
+    @Test("only .waiting pings")
+    func onlyWaitingPings() {
+        #expect(StatusKind.waiting.isPinging)
+        #expect(!StatusKind.working.isPinging)
+        #expect(!StatusKind.idle.isPinging)
+        #expect(!StatusKind.offline.isPinging)
     }
 }
 

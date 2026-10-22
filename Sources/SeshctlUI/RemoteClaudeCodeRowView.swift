@@ -24,7 +24,7 @@ import SeshctlCore
 ///   `claude.ai` text label as a recognition safety net alongside the
 ///   badge — Phase 2 removes the label.
 /// - Status dot: derived via `StatusKind.forRemote(...)`. The shared
-///   `AnimatedStatusDot` renders pulse / blink / solid / dim per
+///   `AnimatedStatusDot` renders pulse / ping / solid / hollow / dim per
 ///   `StatusKind`'s decisions.
 /// - Stale rows dim at the row-opacity tier (per R12a): the body picks up
 ///   `.opacity(0.6)` when `isStale` so the dimming reads as inactive-row
@@ -85,8 +85,8 @@ public struct RemoteClaudeCodeRowView: View {
 
     public var body: some View {
         ResultRowLayout(
-            status: { AnimatedStatusDot(kind: statusKind) },
-            ageDisplay: SessionAgeDisplay(timestamp: session.lastEventAt, yesterdayStyle: yesterdayStyle),
+            status: { AnimatedStatusDot(kind: statusKind, age: ageDisplay.bucket) },
+            ageDisplay: ageDisplay,
             content: { mainContent },
             hostApp: nil,
             // Remote sessions live on claude.ai, not in a macOS app — use a
@@ -129,6 +129,10 @@ public struct RemoteClaudeCodeRowView: View {
             return repoColor
         }
         return .orange
+    }
+
+    private var ageDisplay: SessionAgeDisplay {
+        SessionAgeDisplay(timestamp: session.lastEventAt, yesterdayStyle: yesterdayStyle)
     }
 
     private var statusKind: StatusKind {

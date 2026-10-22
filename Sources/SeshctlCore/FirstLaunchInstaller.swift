@@ -473,7 +473,7 @@ public enum FirstLaunchInstaller {
     enum HookSpec {
         static let claudeScriptNames = [
             "session-start.sh", "user-prompt.sh", "pre-tool-use.sh",
-            "notification.sh", "stop.sh", "session-end.sh",
+            "post-tool-use.sh", "notification.sh", "stop.sh", "session-end.sh",
         ]
         static let codexScriptNames = ["session-start.sh", "user-prompt.sh", "stop.sh"]
         static let cursorScriptNames = [
@@ -492,6 +492,9 @@ public enum FirstLaunchInstaller {
                 .init(event: "SessionStart", matcher: "", command: "\(paths.claudeHooksDir)/session-start.sh"),
                 .init(event: "UserPromptSubmit", matcher: "", command: "\(paths.claudeHooksDir)/user-prompt.sh"),
                 .init(event: "PreToolUse", matcher: "", command: "\(paths.claudeHooksDir)/pre-tool-use.sh"),
+                // Only the tools that block on the user; post-tool-use.sh
+                // flips the session back to working once they're answered.
+                .init(event: "PostToolUse", matcher: "AskUserQuestion|ExitPlanMode", command: "\(paths.claudeHooksDir)/post-tool-use.sh"),
                 .init(event: "Notification", matcher: "", command: "\(paths.claudeHooksDir)/notification.sh"),
                 .init(event: "Stop", matcher: "", command: "\(paths.claudeHooksDir)/stop.sh"),
                 .init(event: "SessionEnd", matcher: "", command: "\(paths.claudeHooksDir)/session-end.sh"),
