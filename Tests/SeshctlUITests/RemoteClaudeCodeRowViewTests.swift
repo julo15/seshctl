@@ -106,9 +106,9 @@ struct StatusKindForRemoteTests {
 @Suite("StatusKind.color")
 struct StatusKindColorTests {
 
-    @Test("waiting is orange")
-    func waitingIsOrange() {
-        #expect(StatusKind.waiting.color == .orange)
+    @Test("waiting is amber")
+    func waitingIsAmber() {
+        #expect(StatusKind.waiting.color == StatusKind.waitingAmber)
     }
 
     @Test("working is green")
@@ -176,12 +176,12 @@ struct StatusKindAnimationFlagsTests {
         #expect(!StatusKind.stale.isPulsing)
     }
 
-    @Test("only .waiting blinks")
-    func onlyWaitingBlinks() {
-        #expect(StatusKind.waiting.isBlinking)
-        #expect(!StatusKind.working.isBlinking)
-        #expect(!StatusKind.idle.isBlinking)
-        #expect(!StatusKind.offline.isBlinking)
+    @Test("only .waiting pings")
+    func onlyWaitingPings() {
+        #expect(StatusKind.waiting.isPinging)
+        #expect(!StatusKind.working.isPinging)
+        #expect(!StatusKind.idle.isPinging)
+        #expect(!StatusKind.offline.isPinging)
     }
 }
 

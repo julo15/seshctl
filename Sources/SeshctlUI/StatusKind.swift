@@ -9,7 +9,8 @@ public enum StatusKind: Equatable, Sendable {
     /// Agent is actively working — pulsing green.
     case working
     /// Agent is waiting on user input (permission prompt, pending action) —
-    /// blinking orange. The loudest color goes to the state blocked on the user.
+    /// bright amber with a repeating ping ring. The loudest treatment goes to
+    /// the state blocked on the user.
     case waiting
     /// Healthy and idle (turn finished) — solid gray. Kept quiet on purpose:
     /// unread turns are flagged by the unread pill / accent bar, not the dot.
@@ -33,7 +34,7 @@ extension StatusKind {
     public var color: Color {
         switch self {
         case .working: return .green
-        case .waiting: return .orange
+        case .waiting: return Self.waitingAmber
         case .idle, .completed, .offline: return .gray
         case .canceled: return .red
         case .stale: return .gray.opacity(0.5)
@@ -57,6 +58,11 @@ extension StatusKind {
         }
     }
 
+    /// Vivid amber (#FFA500) for `.waiting`. System orange reads muddier than
+    /// the system green used for `.working`; the attention state should be at
+    /// least as vibrant as the busy one.
+    public static let waitingAmber = Color(red: 1.0, green: 0.65, blue: 0.0)
+
     /// Whether the dot renders as an outline instead of a filled circle.
     /// Separates ended sessions from idle ones, which share the gray color.
     public var isHollow: Bool { self == .completed || self == .offline }
@@ -64,8 +70,8 @@ extension StatusKind {
     /// Whether the `.working` pulse animation plays.
     public var isPulsing: Bool { self == .working }
 
-    /// Whether the `.waiting` blink animation plays.
-    public var isBlinking: Bool { self == .waiting }
+    /// Whether the `.waiting` ping animation plays.
+    public var isPinging: Bool { self == .waiting }
 }
 
 extension SessionStatus {
