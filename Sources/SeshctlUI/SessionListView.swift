@@ -444,6 +444,7 @@ public struct SessionListView: View {
                 isSelected: isSelected,
                 isUnread: viewModel.unreadSessionIds.contains(remote.id),
                 isStale: connectionStore.state == .authExpired,
+                hostApp: hostAppResolver.claudeDesktopApp(),
                 showAgentBadge: showAgentBadge,
                 awaySummary: connectionStore.remoteAwaySummariesById[remote.id],
                 yesterdayStyle: .timeOfDay

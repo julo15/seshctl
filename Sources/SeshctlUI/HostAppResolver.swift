@@ -18,6 +18,7 @@ public struct HostAppInfo: Sendable {
 @MainActor
 public final class HostAppResolver: ObservableObject {
     private var cache: [String: HostAppInfo] = [:]  // keyed by session ID
+    private var claudeDesktopCache: HostAppInfo??
 
     public init() {}
 
@@ -50,6 +51,25 @@ public final class HostAppResolver: ObservableObject {
         }
 
         cache[session.id] = info
+        return info
+    }
+
+    /// The Claude desktop app, or `nil` when it isn't installed. Remote rows
+    /// show its icon because Enter opens them there (see
+    /// `SessionAction.openRemote`); without it they open in the browser and
+    /// keep the globe. Uses the same `appBundleURL` check as that routing so
+    /// the icon and the action agree. Cached for the resolver's lifetime,
+    /// like per-session lookups.
+    public func claudeDesktopApp(environment: SystemEnvironment = TerminalController.environment) -> HostAppInfo? {
+        if let cached = claudeDesktopCache { return cached }
+        let info = environment.appBundleURL(forBundleId: ClaudeDesktopApp.bundleId).map { url in
+            HostAppInfo(
+                bundleId: ClaudeDesktopApp.bundleId,
+                name: "Claude",
+                icon: NSWorkspace.shared.icon(forFile: url.path)
+            )
+        }
+        claudeDesktopCache = .some(info)
         return info
     }
 
