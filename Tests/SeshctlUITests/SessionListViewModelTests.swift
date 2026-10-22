@@ -2865,6 +2865,117 @@ struct SessionListViewModelTests {
         #expect(vm.selectedSession?.pid == 1111)
     }
 
+    @Test("Row order is frozen while the panel is visible")
+    @MainActor
+    func orderFrozenWhileVisible() throws {
+        let db = try SeshctlDatabase.temporary()
+        try db.startSession(tool: .gemini, directory: "/tmp/b", pid: 2222)
+        Thread.sleep(forTimeInterval: 0.01)
+        try db.startSession(tool: .claude, directory: "/tmp/a", pid: 1111)
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.panelDidShow()
+        defer { vm.panelDidHide() }
+        let before = vm.orderedRows.map(\.id)
+
+        // B gets newer activity, which would normally sort it to the top.
+        Thread.sleep(forTimeInterval: 0.01)
+        try db.updateSession(pid: 2222, tool: .gemini, ask: "hi", status: .idle)
+        vm.refresh()
+
+        #expect(vm.orderedRows.map(\.id) == before)
+    }
+
+    @Test("Order re-sorts by recency on the next show")
+    @MainActor
+    func orderResortsAfterHideAndShow() throws {
+        let db = try SeshctlDatabase.temporary()
+        try db.startSession(tool: .gemini, directory: "/tmp/b", pid: 2222)
+        Thread.sleep(forTimeInterval: 0.01)
+        try db.startSession(tool: .claude, directory: "/tmp/a", pid: 1111)
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.panelDidShow()
+        Thread.sleep(forTimeInterval: 0.01)
+        try db.updateSession(pid: 2222, tool: .gemini, ask: "hi", status: .idle)
+        vm.refresh()
+        vm.panelDidHide()
+
+        vm.panelDidShow()
+        defer { vm.panelDidHide() }
+        #expect(vm.localOrderedSessions.first?.pid == 2222)
+        #expect(vm.orderedRows.first?.id == vm.localOrderedSessions.first?.id)
+    }
+
+    @Test("A session that appears while visible goes to the top")
+    @MainActor
+    func newSessionWhileVisibleGoesToTop() throws {
+        let db = try SeshctlDatabase.temporary()
+        try db.startSession(tool: .gemini, directory: "/tmp/b", pid: 2222)
+        Thread.sleep(forTimeInterval: 0.01)
+        try db.startSession(tool: .claude, directory: "/tmp/a", pid: 1111)
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.panelDidShow()
+        defer { vm.panelDidHide() }
+        let before = vm.orderedRows.map(\.id)
+
+        Thread.sleep(forTimeInterval: 0.01)
+        let fresh = try db.startSession(tool: .claude, directory: "/tmp/c", pid: 3333)
+        Thread.sleep(forTimeInterval: 0.01)
+        try db.updateSession(pid: 2222, tool: .gemini, ask: "hi", status: .idle)
+        vm.refresh()
+
+        #expect(vm.orderedRows.map(\.id) == [fresh.id] + before)
+    }
+
+    @Test("Tree-mode rows stay frozen within their group while visible")
+    @MainActor
+    func treeOrderFrozenWhileVisible() throws {
+        let db = try SeshctlDatabase.temporary()
+        try db.startSession(tool: .gemini, directory: "/tmp/shared", pid: 2222)
+        Thread.sleep(forTimeInterval: 0.01)
+        try db.startSession(tool: .claude, directory: "/tmp/shared", pid: 1111)
+
+        // Tree mode persists to defaults; isolate it so parallel tests don't
+        // start in tree mode.
+        let (defaults, suite) = makeIsolatedDefaults(#function)
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        let vm = SessionListViewModel(database: db, enableGC: false, defaults: defaults)
+        vm.toggleViewMode()
+        #expect(vm.isTreeMode)
+        vm.panelDidShow()
+        defer { vm.panelDidHide() }
+        let before = vm.orderedRows.map(\.id)
+        #expect(before.count == 2)
+
+        Thread.sleep(forTimeInterval: 0.01)
+        try db.updateSession(pid: 2222, tool: .gemini, ask: "hi", status: .idle)
+        vm.refresh()
+
+        #expect(vm.orderedRows.map(\.id) == before)
+    }
+
+    @Test("Order is not frozen while the panel is hidden")
+    @MainActor
+    func orderNotFrozenWhileHidden() throws {
+        let db = try SeshctlDatabase.temporary()
+        try db.startSession(tool: .gemini, directory: "/tmp/b", pid: 2222)
+        Thread.sleep(forTimeInterval: 0.01)
+        try db.startSession(tool: .claude, directory: "/tmp/a", pid: 1111)
+
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.panelDidShow()
+        vm.panelDidHide()
+
+        Thread.sleep(forTimeInterval: 0.01)
+        try db.updateSession(pid: 2222, tool: .gemini, ask: "hi", status: .idle)
+        vm.refresh()
+
+        #expect(vm.localOrderedSessions.first?.pid == 2222)
+        #expect(vm.orderedRows.first?.id == vm.localOrderedSessions.first?.id)
+    }
+
     @Test("panelDidShow stamps lastPanelShownAt to ~now")
     @MainActor
     func panelDidShowStampsTimestamp() throws {
