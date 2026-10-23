@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// The model a row's session is running, shown as a small pill just left of
-/// the host-app icon. Built by `SessionListViewModel.modelPill(for:)`.
+/// The model a row's session is running, shown as a small pill beside the
+/// headline in the compact layout, and just left of the host-app icon in the
+/// stacked layouts. Built by `SessionListViewModel.modelPill(for:)`.
 public struct ModelPill: Equatable, Sendable {
     /// Short display name, e.g. `"Opus 5.5"` (see
     /// `TranscriptModelScanner.displayName(for:)`).

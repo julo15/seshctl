@@ -58,7 +58,8 @@ public struct RemoteClaudeCodeRowView: View {
     /// session has no assistant turn — either way the row falls through to
     /// `.reply(title)`. See `RemoteClaudeCodeSession.previewContent(awaySummary:)`.
     public let awaySummary: String?
-    /// The session's model, shown as a pill left of the icon. Sourced from
+    /// The session's model, shown as a pill beside the headline (compact) or
+    /// left of the icon (stacked layouts). Sourced from
     /// `SessionListViewModel.modelPill(for:)`.
     public let modelPill: ModelPill?
     /// How yesterday-bucket timestamps render in the row's age slot — see
@@ -176,9 +177,9 @@ public struct RemoteClaudeCodeRowView: View {
     /// Compact one-line content mirroring `SessionRowView.compactContent`.
     /// The claude.ai session title is the headline, followed by the model
     /// pill; the accent-colored repo name sits at the far right
-    /// (`ResultRowLayout.trailingLabel`). Only a fetched recap (`awaySummary`) fills the
-    /// message slot: the preview chain's `.reply(title)` fallback would just
-    /// repeat the headline.
+    /// (`ResultRowLayout.trailingLabel`). Only a fetched recap (`awaySummary`)
+    /// fills the message slot: the preview chain's `.reply(title)` fallback
+    /// would just repeat the headline.
     @ViewBuilder
     private var compactContent: some View {
         let headline = session.compactHeadline

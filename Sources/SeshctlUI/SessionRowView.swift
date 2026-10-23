@@ -38,8 +38,8 @@ public struct SessionRowView: View {
     /// layout expands the selected row to show its message on its own
     /// lines; the other layouts ignore it (the list paints the highlight).
     var isSelected: Bool = false
-    /// The session's model, shown as a pill left of the host-app icon.
-    /// Sourced from `SessionListViewModel.modelPill(for:)`.
+    /// The session's model, shown as a pill beside the headline (compact) or
+    /// left of the host-app icon (stacked layouts). Sourced from `SessionListViewModel.modelPill(for:)`.
     var modelPill: ModelPill? = nil
     /// A `t` request for this row, shown on a line under its content.
     /// Sourced from `SessionListViewModel.titleSuggestionsById`.
@@ -169,15 +169,16 @@ public struct SessionRowView: View {
     /// One-line row: the session title as the headline, the model pill, then
     /// the latest message truncated at the row's end. The checkout folder, in
     /// the repo's accent color, sits at the far right beside the app icon
-    /// (`ResultRowLayout.trailingLabel`). The selected row moves the message onto up to three lines
-    /// of its own, so arrowing through the list reads each session in turn
-    /// while every other row stays a single scannable line.
+    /// (`ResultRowLayout.trailingLabel`). The selected row moves the message
+    /// onto up to three lines of its own, so arrowing through the list reads
+    /// each session in turn while every other row stays a single scannable
+    /// line.
     ///
     /// The headline takes `layoutPriority` so it claims its width before the
     /// inline message; the pill and folder label are `fixedSize` so they
     /// never truncate.
     /// Unread rows get the accent bar (from `ResultRowLayout`) and a bolder
-    /// headline — no pill, which would crowd the one-line layout.
+    /// headline — no unread pill, which would crowd the one-line layout.
     @ViewBuilder
     private var compactContent: some View {
         let preview = session.previewContent(awaySummary: awaySummary)
