@@ -19,17 +19,21 @@ cleanup and CLI resolution).
 
 ## Material (recency-biased)
 
-- The last 10 user prompts (each trimmed), the latest assistant reply
-  (trimmed), and the current title as background.
-- The prompt says the session may have moved through several tasks and to
-  title only the current one.
+- The last 10 requests the user typed (each trimmed) and the last 3
+  assistant replies (trimmed). Records the user didn't type (skill bodies,
+  task notifications, image paths) are filtered out.
+- The current title is left out: as background it pulled Haiku back to the
+  session's first task.
+- The prompt says the session may have moved through several tasks, to
+  title only the current one, and to name the work rather than workflow
+  steps (commit, PR, merge).
 
 ## Run
 
 `claude -p --model haiku --setting-sources project --no-session-persistence`
 from a neutral temp directory: loads no user settings (so no hooks, no stray
-rows) and saves no session. Verified: 68 rows before and after. Also sets
-`SESHCTL_INTERNAL_SESSION=1` as a guard the hooks don't read yet. Run off the
+rows) and saves no session. Verified: 68 rows before and after. Stdin is
+`/dev/null` (an inherited stdin makes `claude -p` wait 3s). Run off the
 main actor with a 45s timeout. Failures turn the row's state into a short
 "Couldn't title" note.
 
@@ -42,7 +46,7 @@ main actor with a 45s timeout. Failures turn the row's state into a short
   (`conversation_id`, `tool`, `title`, `updated_at`, PK on the first two),
   `setConversationTitle`, `conversationTitles()`.
 - `SessionListViewModel`: `titleSuggestionsById` state (`loading` /
-  `ready([String])` / `failed`), `requestTitleSuggestions()`,
+  `ready(String)` / `failed`), `requestTitleSuggestions()`,
   `acceptTitleSuggestion()`, `dismissTitleSuggestions()`. Stored titles
   override scanned ones in `titlesById`. Generator injected for tests.
 - `SessionRowView`: a line under the row content for the state.
