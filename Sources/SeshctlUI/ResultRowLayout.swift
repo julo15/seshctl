@@ -34,8 +34,13 @@ struct ResultRowLayout<Status: View, Content: View>: View {
     /// Read rows leave this `false` so the time recedes to `.secondary`.
     var isUnread: Bool = false
     /// The session's model, shown as a pill just left of the host-app icon.
+    /// The compact layout passes nil and draws the pill beside its headline.
     /// Nil leaves no gap.
     var modelPill: ModelPill? = nil
+    /// A short monospaced label (the compact layout's repo name) shown just
+    /// left of the host-app icon, where the stacked layouts put the model
+    /// pill. Nil leaves no gap.
+    var trailingLabel: (text: String, color: Color)? = nil
 
     /// The 24pt icon plus `BadgedIcon`'s trailing overhang, so badged and
     /// bare icons occupy the same width.
@@ -89,6 +94,15 @@ struct ResultRowLayout<Status: View, Content: View>: View {
                     .frame(height: 24)
             }
 
+            if let trailingLabel {
+                Text(trailingLabel.text)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(trailingLabel.color)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .frame(height: 24)
+            }
+
             // Icon and chevron sit closer together than the row's 12pt
             // spacing: they read as one trailing control.
             HStack(alignment: .top, spacing: 5) {
@@ -98,8 +112,8 @@ struct ResultRowLayout<Status: View, Content: View>: View {
                 // `hostAppBadge` is set, the icon is composited with an agent-kind
                 // corner badge via `BadgedIcon`; otherwise renders the bare image
                 // as before. The slot is fixed at the badged width so a row
-                // without a badge keeps its icon, and the model pill beside it,
-                // in the same column.
+                // without a badge keeps its icon, and the pill or label beside
+                // it, in the same column.
                 Group {
                     if let hostAppBadge {
                         let baseImage: Image? = {
