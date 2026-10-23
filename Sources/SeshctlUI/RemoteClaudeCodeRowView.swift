@@ -116,7 +116,11 @@ public struct RemoteClaudeCodeRowView: View {
             hostAppBadge: showAgentBadge && hostApp == nil ? AgentBadgeSpec.forRemote(model: session.model) : nil,
             iconAccessibilityLabel: Session.accessibilityLabel(hostApp: hostApp, agent: .claude),
             isUnread: isUnread,
-            modelPill: modelPill
+            // Mirrors `SessionRowView`: compact puts the model beside the
+            // headline and the repo label out here.
+            modelPill: rowLayout == .compact ? nil : modelPill,
+            trailingLabel: rowLayout == .compact && session.compactHeadline != session.senderDisplay
+                ? (session.senderDisplay, compactLabelColor) : nil
         )
         // Stale-row dimming lives at the row-opacity tier (R12a). Line-1
         // italic is reserved for R3's userPrompt/statusHint cases — which
@@ -170,8 +174,9 @@ public struct RemoteClaudeCodeRowView: View {
     }
 
     /// Compact one-line content mirroring `SessionRowView.compactContent`.
-    /// The claude.ai session title is the headline and the repo name the
-    /// accent-colored label. Only a fetched recap (`awaySummary`) fills the
+    /// The claude.ai session title is the headline, followed by the model
+    /// pill; the accent-colored repo name sits at the far right
+    /// (`ResultRowLayout.trailingLabel`). Only a fetched recap (`awaySummary`) fills the
     /// message slot: the preview chain's `.reply(title)` fallback would just
     /// repeat the headline.
     @ViewBuilder
@@ -188,12 +193,8 @@ public struct RemoteClaudeCodeRowView: View {
                     .layoutPriority(1)
                     .help(session.branchDisplay ?? session.senderDisplay)
 
-                if headline != session.senderDisplay {
-                    Text(session.senderDisplay)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(compactLabelColor)
-                        .lineLimit(1)
-                        .fixedSize()
+                if let modelPill {
+                    ModelPillView(pill: modelPill)
                 }
 
                 if showCloudAffordances {

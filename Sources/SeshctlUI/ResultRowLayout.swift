@@ -36,6 +36,10 @@ struct ResultRowLayout<Status: View, Content: View>: View {
     /// The session's model, shown as a pill just left of the host-app icon.
     /// Nil leaves no gap.
     var modelPill: ModelPill? = nil
+    /// A short monospaced label (the compact layout's repo name) shown in
+    /// the same trailing slot, just left of the host-app icon. Nil leaves no
+    /// gap.
+    var trailingLabel: (text: String, color: Color)? = nil
 
     /// The 24pt icon plus `BadgedIcon`'s trailing overhang, so badged and
     /// bare icons occupy the same width.
@@ -86,6 +90,15 @@ struct ResultRowLayout<Status: View, Content: View>: View {
                 // Centered on the 24pt icon beside it rather than the row's
                 // first text line.
                 ModelPillView(pill: modelPill)
+                    .frame(height: 24)
+            }
+
+            if let trailingLabel {
+                Text(trailingLabel.text)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(trailingLabel.color)
+                    .lineLimit(1)
+                    .fixedSize()
                     .frame(height: 24)
             }
 

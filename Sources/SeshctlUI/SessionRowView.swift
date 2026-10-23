@@ -103,9 +103,15 @@ public struct SessionRowView: View {
             hostAppBadge: showAgentBadge ? AgentBadgeSpec.forAgent(session.tool) : nil,
             iconAccessibilityLabel: Session.accessibilityLabel(hostApp: hostApp, agent: session.tool),
             isUnread: isUnread,
-            modelPill: modelPill
+            // Compact shows the model beside the headline and moves the
+            // folder label out here instead.
+            modelPill: rowLayout == .compact ? nil : modelPill,
+            trailingLabel: rowLayout == .compact && compactHeadline != session.folderLabel
+                ? (session.folderLabel, compactLabelColor) : nil
         )
     }
+
+    private var compactHeadline: String { session.compactHeadline(title: title) }
 
     /// The `cloud.fill` half of the bridged row-kind marker. When the parent
     /// supplies `onOpenWeb` it renders as a borderless button that opens the
@@ -160,20 +166,22 @@ public struct SessionRowView: View {
         }
     }
 
-    /// One-line row: the session title as the headline, the checkout folder
-    /// in the repo's accent color, then the latest message truncated at the
-    /// row's end. The selected row moves the message onto up to three lines
+    /// One-line row: the session title as the headline, the model pill, then
+    /// the latest message truncated at the row's end. The checkout folder, in
+    /// the repo's accent color, sits at the far right beside the app icon
+    /// (`ResultRowLayout.trailingLabel`). The selected row moves the message onto up to three lines
     /// of its own, so arrowing through the list reads each session in turn
     /// while every other row stays a single scannable line.
     ///
     /// The headline takes `layoutPriority` so it claims its width before the
-    /// inline message; the folder label is `fixedSize` so it never truncates.
+    /// inline message; the pill and folder label are `fixedSize` so they
+    /// never truncate.
     /// Unread rows get the accent bar (from `ResultRowLayout`) and a bolder
     /// headline — no pill, which would crowd the one-line layout.
     @ViewBuilder
     private var compactContent: some View {
         let preview = session.previewContent(awaySummary: awaySummary)
-        let headline = session.compactHeadline(title: title)
+        let headline = compactHeadline
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text(headline)
@@ -184,12 +192,8 @@ public struct SessionRowView: View {
                     .layoutPriority(1)
                     .help(session.gitBranch.nonEmpty ?? directoryPath)
 
-                if headline != session.folderLabel {
-                    Text(session.folderLabel)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(compactLabelColor)
-                        .lineLimit(1)
-                        .fixedSize()
+                if let modelPill {
+                    ModelPillView(pill: modelPill)
                 }
 
                 if showCloudAffordances && isBridged {
