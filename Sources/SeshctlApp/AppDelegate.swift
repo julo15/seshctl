@@ -485,12 +485,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if vm.pendingKillSessionId == nil && !vm.pendingMarkAllRead && vm.pendingForkSessionId == nil {
                 openSelectedOnWeb(vm: vm)
             }
+        // t — suggest a title describing what the session is doing now
+        case (_, "t"):
+            if vm.pendingKillSessionId == nil && !vm.pendingMarkAllRead && vm.pendingForkSessionId == nil {
+                vm.requestTitleSuggestion()
+            }
         // x — kill session process
         case (_, "x"):
             if vm.pendingKillSessionId == nil && !vm.pendingMarkAllRead && vm.pendingForkSessionId == nil {
                 vm.requestKill()
             }
-        // y — confirm kill, mark all read, or fork
+        // y — confirm kill, mark all read, fork, or a suggested title
         case (_, "y"):
             if vm.pendingKillSessionId != nil {
                 vm.confirmKill()
@@ -506,8 +511,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     dismiss: { [weak self] in self?.dismissPanelAfterAction() },
                     remoteBrowserCoordinator: remoteBrowserCoordinator
                 )
+            } else if vm.pendingForkSessionId == nil {
+                vm.acceptTitleSuggestion()
             }
-        // n — cancel kill, mark all read, or fork
+        // n — cancel kill, mark all read, fork, or a suggested title
         case (_, "n"):
             if vm.pendingKillSessionId != nil {
                 vm.cancelKill()
@@ -515,6 +522,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 vm.cancelMarkAllRead()
             } else if vm.pendingForkSessionId != nil {
                 vm.cancelFork()
+            } else {
+                vm.dismissTitleSuggestion()
             }
         // q or Escape — cancel kill/mark all read/fork or close panel
         case (_, "q"), (53, _):
@@ -524,6 +533,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 vm.cancelMarkAllRead()
             } else if vm.pendingForkSessionId != nil {
                 vm.cancelFork()
+            } else if vm.dismissTitleSuggestion() {
+                // Discarding the selected row's title suggestions takes the press.
             } else if !vm.backOutOfRecentsMode() {
                 // Backing out of `c` takes one press, like cancelling a pending
                 // confirmation, before the same key closes the panel.

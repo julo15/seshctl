@@ -100,6 +100,7 @@ struct SessionTreeView: View {
                 title: viewModel.titlesById[session.id],
                 isSelected: isSelected,
                 modelPill: viewModel.modelPill(for: session),
+                titleSuggestion: viewModel.titleSuggestionsById[session.id],
                 // Tree view has no time-based section headers, so the age
                 // slot does the day-context work itself via relative-day
                 // shorthand ("1d") for yesterday.

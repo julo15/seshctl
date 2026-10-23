@@ -423,6 +423,7 @@ public struct SessionListView: View {
                 title: viewModel.titlesById[session.id],
                 isSelected: isSelected,
                 modelPill: viewModel.modelPill(for: session),
+                titleSuggestion: viewModel.titleSuggestionsById[session.id],
                 // List view has a Yesterday section header, so the per-row
                 // slot shows the more specific clock time for yesterday rows
                 // instead of repeating the day.
