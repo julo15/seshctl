@@ -732,7 +732,6 @@ public struct SeshctlDatabase: Sendable {
         }
     }
 
-    /// Mark a session as read by setting last_read_at to now.
     // MARK: - Conversation Titles
 
     /// Store the title the user picked for a conversation, replacing any
@@ -762,6 +761,7 @@ public struct SeshctlDatabase: Sendable {
         }
     }
 
+    /// Mark a session as read by setting last_read_at to now.
     public func markSessionRead(id: String) throws {
         try dbPool.write { db in
             try db.execute(

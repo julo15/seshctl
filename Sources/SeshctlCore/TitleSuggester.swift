@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 /// Suggests a title for a session on request (`t`), describing what it is
 /// doing *now*. The user accepts it with `y` or declines with `n`. Claude Code's own `ai-title` is written once from the opening
@@ -106,11 +107,13 @@ public enum TitleSuggester {
     static func normalize(_ line: String) -> String? {
         var text = line.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Leading list markers: "1.", "2)", "-", "*", "•".
-        if let marker = text.range(of: #"^(\d+[.)]|[-*•])\s*"#, options: .regularExpression) {
+        // Bold first, so "**Title**" isn't read as a "*" bullet. A list
+        // marker ("1.", "2)", "-", "*", "•") needs a space after it, so
+        // "3.5 Sonnet upgrade" keeps its number.
+        text = text.replacingOccurrences(of: "**", with: "")
+        if let marker = text.range(of: #"^(\d+[.)]|[-*•])\s+"#, options: .regularExpression) {
             text.removeSubrange(marker)
         }
-        text = text.replacingOccurrences(of: "**", with: "")
 
         // Punctuation can sit outside the quotes (`"Title".`) or inside them
         // (`"Title."`), so strip it on both sides of the unquoting.
@@ -169,9 +172,10 @@ public enum TitleSuggester {
                     continue
                 }
                 if next == "[" {
-                    // CSI: parameter bytes then one final letter.
+                    // CSI: parameter and intermediate bytes, then one final
+                    // byte in 0x40–0x7E (a letter, or `~` and friends).
                     index += 2
-                    while index < scalars.count, !CharacterSet.letters.contains(scalars[index]) {
+                    while index < scalars.count, !(0x40...0x7E).contains(scalars[index].value) {
                         index += 1
                     }
                     if index < scalars.count { index += 1 }
@@ -205,19 +209,23 @@ public enum TitleSuggester {
             .map { URL(fileURLWithPath: $0) }
     }
 
-    /// Arguments for a run that stays out of the user's history:
-    /// `--setting-sources project`, run from an empty directory, loads no
-    /// user settings, so seshctl's own hooks never record it as a session;
-    /// `--no-session-persistence` keeps it out of `~/.claude/projects` and
-    /// `/resume`.
+    /// Arguments for a run that stays out of the user's history and can only
+    /// write text: `--setting-sources project`, run from a fresh empty
+    /// directory, loads no user settings, so seshctl's own hooks never record
+    /// it as a session; `--no-session-persistence` keeps it out of
+    /// `~/.claude/projects` and `/resume`. `--tools ""` and
+    /// `--strict-mcp-config` leave the model nothing to act with, since the
+    /// prompt quotes transcript text that could ask it to.
     static func arguments(prompt: String) -> [String] {
         ["-p", "--model", "haiku", "--output-format", "text",
-         "--setting-sources", "project", "--no-session-persistence", prompt]
+         "--setting-sources", "project", "--no-session-persistence",
+         "--tools", "", "--strict-mcp-config", prompt]
     }
 
-    /// Run the model and return its title, or nil on any failure (CLI
-    /// missing, non-zero exit, timeout, unusable output).
-    /// Blocks for several seconds, so call it off the main actor.
+    /// Run the model and return its title, or why there's none (non-zero
+    /// exit, timeout, unusable output). Blocks for a few seconds, so call it
+    /// off the main actor. Each run gets its own empty directory, removed
+    /// afterwards, so nothing left in a shared one can load as project settings.
     public static func generate(
         prompt: String,
         cli: URL,
@@ -225,12 +233,40 @@ public enum TitleSuggester {
         runner: (String, [String], TimeInterval, URL?) -> ShellRunner.Result? = { path, args, timeout, directory in
             ShellRunner.run(path: path, args: args, timeout: timeout, currentDirectory: directory)
         }
-    ) -> String? {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("seshctl-titler", isDirectory: true)
+    ) -> Result<String, TitleSuggestionFailure> {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("seshctl-titler-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        guard let result = runner(cli.path, arguments(prompt: prompt), timeout, directory),
-              result.status == 0
-        else { return nil }
-        return parseTitle(result.stdout)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        guard let result = runner(cli.path, arguments(prompt: prompt), timeout, directory) else {
+            titlerLogger.error("claude -p didn't finish (failed to launch or timed out after \(timeout)s)")
+            return .failure(.runFailed)
+        }
+        guard result.status == 0 else {
+            titlerLogger.error("claude -p exited \(result.status): \(result.stderr.prefix(500), privacy: .public)")
+            return .failure(.runFailed)
+        }
+        guard let title = parseTitle(result.stdout) else {
+            titlerLogger.error("claude -p gave no usable title: \(result.stdout.prefix(200), privacy: .public)")
+            return .failure(.runFailed)
+        }
+        return .success(title)
     }
 }
+
+/// Why `t` produced no title. The row says which, so a missing CLI isn't
+/// mistaken for a bad run worth retrying.
+public enum TitleSuggestionFailure: Error, Equatable, Sendable {
+    /// No `claude` binary in the places `TitleSuggester.resolveClaudeCLI` looks.
+    case cliNotFound
+    /// No transcript, or nothing in it the user typed.
+    case nothingToTitle
+    /// The CLI failed, timed out or answered with nothing usable. Logged
+    /// under the `titler` category.
+    case runFailed
+}
+
+/// `log stream --predicate 'subsystem == "app.seshctl" AND category == "titler"'`
+/// shows why a run failed; the app's stderr goes nowhere.
+fileprivate let titlerLogger = Logger(subsystem: "app.seshctl", category: "titler")

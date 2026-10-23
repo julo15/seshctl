@@ -46,8 +46,8 @@ main actor with a 45s timeout. Failures turn the row's state into a short
   (`conversation_id`, `tool`, `title`, `updated_at`, PK on the first two),
   `setConversationTitle`, `conversationTitles()`.
 - `SessionListViewModel`: `titleSuggestionsById` state (`loading` /
-  `ready(String)` / `failed`), `requestTitleSuggestions()`,
-  `acceptTitleSuggestion()`, `dismissTitleSuggestions()`. Stored titles
+  `ready(String)` / `failed`), `requestTitleSuggestion()`,
+  `acceptTitleSuggestion()`, `dismissTitleSuggestion()`. Stored titles
   override scanned ones in `titlesById`. Generator injected for tests.
 - `SessionRowView`: a line under the row content for the state.
 - `AppDelegate`: `t`, `y`, `n`, Esc.

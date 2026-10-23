@@ -1,3 +1,4 @@
+import SeshctlCore
 import SwiftUI
 
 /// The line under a row while a `t` request is running or waiting for an
@@ -28,10 +29,18 @@ struct TitleSuggestionView: View {
                     .lineLimit(1)
                     .fixedSize()
             }
-        case .failed:
-            Text("Couldn't suggest a title · t to try again · n to dismiss")
+        case .failed(let reason):
+            Text(failureText(reason))
                 .font(.system(size: 12))
                 .foregroundStyle(.tertiary)
+        }
+    }
+
+    private func failureText(_ reason: TitleSuggestionFailure) -> String {
+        switch reason {
+        case .cliNotFound: "Titles need the claude CLI, and it isn't installed · n to dismiss"
+        case .nothingToTitle: "Nothing to title yet · n to dismiss"
+        case .runFailed: "Couldn't suggest a title · t to try again · n to dismiss"
         }
     }
 }
