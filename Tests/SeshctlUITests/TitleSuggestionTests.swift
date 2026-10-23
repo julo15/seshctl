@@ -56,7 +56,7 @@ struct TitleSuggestionTests {
         #expect(relaunched.titlesById[resumed.id] == "Alpha")
     }
 
-    @Test("An accepted title also names Codex rows, which Claude never titles")
+    @Test("An accepted title also names Codex rows")
     @MainActor
     func codexRowsGetTitles() async throws {
         let db = try SeshctlDatabase.temporary()
