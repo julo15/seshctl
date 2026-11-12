@@ -33,6 +33,9 @@ public enum Search {
     ///     highest-scoring vector per dedupKey value survives. Mirrors the
     ///     Python `recall/search.py` posture of one row per (agent,
     ///     session_id) so a chatty session doesn't crowd out everything else.
+    ///   - minScore: candidates scoring below this are dropped before top-K
+    ///     and dedup, so fewer than `k` results may come back. Defaults to
+    ///     `-infinity` (no cutoff).
     ///
     /// - Returns: `(id, score)` pairs sorted descending by score, capped at
     ///   `k` items.
@@ -44,7 +47,8 @@ public enum Search {
         storedIDs: [Int64],
         storedVectors: [[Float]],
         k: Int,
-        dedupKeys: [String]? = nil
+        dedupKeys: [String]? = nil,
+        minScore: Float = -.infinity
     ) -> [(id: Int64, score: Float)] {
         precondition(
             storedIDs.count == storedVectors.count,
@@ -86,6 +90,7 @@ public enum Search {
                         vDSP_Length(dim)
                     )
                 }
+                guard dot >= minScore else { continue }
                 scored.append((idx: idx, score: dot))
             }
         }
