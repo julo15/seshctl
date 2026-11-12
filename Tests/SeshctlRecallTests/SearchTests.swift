@@ -137,4 +137,48 @@ struct SearchTests {
         // Best-to-worst order is preserved.
         #expect(hits.map(\.id) == [1, 2, 3])
     }
+
+    @Test("topK drops candidates below minScore, even when fewer than k remain")
+    func minScoreDropsLowScores() {
+        let stored: [[Float]] = [
+            unit([1, 0, 0]),      // 1.0
+            unit([1, 1, 0]),      // ~0.707
+            unit([1, 3, 0]),      // ~0.316
+            unit([0, 1, 0]),      // 0.0
+        ]
+        let ids: [Int64] = [1, 2, 3, 4]
+        let query = unit([1, 0, 0])
+
+        let hits = Search.topK(
+            queryVector: query,
+            storedIDs: ids,
+            storedVectors: stored,
+            k: 10,
+            minScore: 0.5
+        )
+
+        #expect(hits.map(\.id) == [1, 2])
+    }
+
+    @Test("minScore applies before dedup, so a session's only sub-threshold hit is dropped")
+    func minScoreAppliesBeforeDedup() {
+        let stored: [[Float]] = [
+            unit([1, 0, 0]),      // S1, 1.0
+            unit([1, 1, 0]),      // S1, ~0.707
+            unit([1, 3, 0]),      // S2, ~0.316
+        ]
+        let ids: [Int64] = [1, 2, 3]
+        let query = unit([1, 0, 0])
+
+        let hits = Search.topK(
+            queryVector: query,
+            storedIDs: ids,
+            storedVectors: stored,
+            k: 10,
+            dedupKeys: ["S1", "S1", "S2"],
+            minScore: 0.5
+        )
+
+        #expect(hits.map(\.id) == [1])
+    }
 }

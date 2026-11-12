@@ -67,6 +67,11 @@ public struct RecallService: Sendable {
         return true
     }
 
+    /// Hits scoring below this cosine similarity (shown as a percentage in
+    /// the UI) are dropped. Below ~40% MiniLM matches are mostly noise, and
+    /// an empty section beats a list of unrelated messages.
+    public static let minimumScore: Float = 0.4
+
     /// Run a semantic recall search.
     ///
     /// - Empty/whitespace queries short-circuit to an empty result set
@@ -382,7 +387,8 @@ final actor RecallStack {
             storedIDs: ids,
             storedVectors: vectors,
             k: limit,
-            dedupKeys: dedupKeys
+            dedupKeys: dedupKeys,
+            minScore: RecallService.minimumScore
         )
 
         // 7. Map to RecallResult. Skip any hit whose entry vanished between
