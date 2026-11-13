@@ -59,11 +59,15 @@ public struct RecallResultRowView: View {
     /// Mirrors `SessionRowView`'s compact layout (fonts, spacing, colors) so
     /// History rows read as the same kind of row as the live list: the
     /// session's name as the headline, the folder at the far right.
+    ///
+    /// Unlike a live row, the message always gets its own line under the
+    /// headline: it's the search match, and squeezed beside a long title
+    /// the match was usually truncated out of view.
     @ViewBuilder
     private var mainContent: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text(headline)
+                headlineText
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Color.primary.opacity(0.62))
                     .lineLimit(1)
@@ -72,27 +76,16 @@ public struct RecallResultRowView: View {
                     .help(result.project)
 
                 if isTranscriptDeleted {
-                    Label("transcript deleted", systemImage: "trash")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .fixedSize()
+                    TagPillView(text: "transcript deleted")
                         .help("This transcript was deleted, so it can't be resumed. \(SessionDetailViewModel.claudeRetentionNote) Enter shows what search history kept.")
                 }
-
-                if !isSelected {
-                    messageText(singleLine: true)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
             }
 
-            if isSelected {
-                messageText(singleLine: false)
-                    .lineLimit(3)
-                    .truncationMode(.tail)
-                    .lineSpacing(2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            messageText(singleLine: !isSelected)
+                .lineLimit(isSelected ? 3 : 2)
+                .truncationMode(.tail)
+                .lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .animation(.easeOut(duration: 0.15), value: isSelected)
@@ -128,6 +121,24 @@ public struct RecallResultRowView: View {
 
     private var folderLabel: String {
         Session.folderLabel(forDirectory: result.project)
+    }
+
+    /// The headline, with matched words highlighted when the search hit the
+    /// session's title (`RecallResult.titleMatch`) and that's the title shown.
+    private var headlineText: Text {
+        guard let marked = result.titleMatch,
+              RecallResult.snippetSegments(marked).map(\.text).joined() == headline
+        else { return Text(headline) }
+        var attributed = AttributedString()
+        for segment in RecallResult.snippetSegments(marked) {
+            var run = AttributedString(segment.text)
+            if segment.isMatch {
+                run.backgroundColor = .yellow.opacity(0.25)
+                run.foregroundColor = .primary
+            }
+            attributed += run
+        }
+        return Text(attributed)
     }
 
     private var headline: String {

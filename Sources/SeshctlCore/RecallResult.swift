@@ -18,6 +18,10 @@ public struct RecallResult: Codable, Sendable, Equatable, Identifiable {
     /// (or `custom-title`) when indexed, else the session's first typed
     /// message, cut to one line. `nil` when there's neither.
     public let title: String?
+    /// The session title the search matched, with matched terms wrapped in
+    /// `snippetMatchStart` / `snippetMatchEnd`. `nil` when only messages
+    /// matched.
+    public let titleMatch: String?
 
     enum CodingKeys: String, CodingKey {
         case agent
@@ -30,6 +34,7 @@ public struct RecallResult: Codable, Sendable, Equatable, Identifiable {
         case text
         case snippet
         case title
+        case titleMatch = "title_match"
     }
 
     public init(
@@ -42,7 +47,8 @@ public struct RecallResult: Codable, Sendable, Equatable, Identifiable {
         resumeCmd: String,
         text: String,
         snippet: String? = nil,
-        title: String? = nil
+        title: String? = nil,
+        titleMatch: String? = nil
     ) {
         self.agent = agent
         self.role = role
@@ -54,6 +60,7 @@ public struct RecallResult: Codable, Sendable, Equatable, Identifiable {
         self.text = text
         self.snippet = snippet
         self.title = title
+        self.titleMatch = titleMatch
     }
 
     /// Marks the start of a matched term inside `snippet`.

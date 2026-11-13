@@ -392,6 +392,30 @@ struct RecallServiceTests {
         #expect(titles["S2"] == "the appcast was stale")
     }
 
+    @Test("keywordSearch matches session titles, ranking them first")
+    func keywordSearchMatchesTitles() async throws {
+        RecallService._resetForTests()
+        let db = try SeshctlDatabase.temporary()
+        let entries: [HistoryEntry] = [
+            makeEntry(text: "talk about the reaper", sessionID: "MSG"),
+            makeEntry(text: "nothing relevant", sessionID: "TITLED"),
+        ]
+        let mock = MockAdapter(name: "claude", entries: entries, cursor: Data("v1".utf8))
+        RecallService.configureForTesting(database: db, adapters: [mock], embedder: NeverEmbedder())
+        try await VectorStore(database: db).upsertTitles([
+            IndexedTitle(agent: "claude", sessionID: "TITLED", aiTitle: "Zombie reaper cleanup", customTitle: nil),
+        ])
+
+        let resp = try await RecallService.keywordSearch(query: "reaper")
+        #expect(resp.results.map(\.sessionId) == ["TITLED", "MSG"])
+        let titled = resp.results[0]
+        #expect(titled.title == "Zombie reaper cleanup")
+        #expect(titled.titleMatch == "Zombie \(KeywordHit.matchStart)reaper\(KeywordHit.matchEnd) cleanup")
+        #expect(titled.snippet == nil, "matched by title only; its newest message stands in")
+        #expect(titled.text == "nothing relevant")
+        #expect(resp.results[1].titleMatch == nil)
+    }
+
     @Test("sessionHistory returns a session's indexed messages as turns")
     func sessionHistoryReturnsTurns() async throws {
         RecallService._resetForTests()

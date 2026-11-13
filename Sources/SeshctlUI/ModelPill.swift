@@ -27,17 +27,40 @@ struct ModelPillView: View {
 
     var body: some View {
         Text(pill.name)
+            .pillChrome(
+                foreground: pill.isUnusual ? AnyShapeStyle(Self.unusualColor) : AnyShapeStyle(.secondary),
+                border: pill.isUnusual ? Self.unusualColor.opacity(0.45) : Color.secondary.opacity(0.35)
+            )
+            .help(pill.isUnusual ? "\(pill.name) — not the usual model for this agent" : pill.name)
+            .accessibilityLabel("Model \(pill.name)")
+    }
+}
+
+/// A short neutral status tag drawn like the model pill, e.g. History's
+/// "transcript deleted".
+struct TagPillView: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .pillChrome(foreground: AnyShapeStyle(.secondary), border: Color.secondary.opacity(0.35))
+    }
+}
+
+extension View {
+    /// The model pill's look: small medium-weight text in a thin rounded
+    /// outline. Shared so every pill on a row matches.
+    func pillChrome(foreground: AnyShapeStyle, border: Color) -> some View {
+        self
             .font(.system(size: 10.5, weight: .medium))
-            .foregroundStyle(pill.isUnusual ? AnyShapeStyle(Self.unusualColor) : AnyShapeStyle(.secondary))
+            .foregroundStyle(foreground)
             .lineLimit(1)
             .fixedSize()
             .padding(.horizontal, 5)
             .padding(.vertical, 1)
             .overlay(
                 RoundedRectangle(cornerRadius: 4)
-                    .strokeBorder(pill.isUnusual ? Self.unusualColor.opacity(0.45) : Color.secondary.opacity(0.35), lineWidth: 1)
+                    .strokeBorder(border, lineWidth: 1)
             )
-            .help(pill.isUnusual ? "\(pill.name) — not the usual model for this agent" : pill.name)
-            .accessibilityLabel("Model \(pill.name)")
     }
 }

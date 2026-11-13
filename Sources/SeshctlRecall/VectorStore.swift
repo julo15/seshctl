@@ -218,6 +218,50 @@ public actor VectorStore {
         }
     }
 
+    /// Sessions whose title (indexed `ai-title`/`custom-title`, or one picked
+    /// with `t`) matches an FTS5 MATCH expression, best match first, one
+    /// per session.
+    public func titleMatches(match: String, limit: Int) throws -> [TitleMatch] {
+        try database.dbPool.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT agent, session_id, highlight(title_fts, 0, ?, ?) AS marked
+                    FROM title_fts
+                    WHERE title_fts MATCH ?
+                    ORDER BY rank
+                    LIMIT ?
+                """,
+                arguments: [KeywordHit.matchStart, KeywordHit.matchEnd, match, limit]
+            )
+            var seen: Set<String> = []
+            var matches: [TitleMatch] = []
+            for row in rows {
+                let match = TitleMatch(agent: row["agent"], sessionID: row["session_id"], marked: row["marked"])
+                if seen.insert(match.sessionKey).inserted { matches.append(match) }
+            }
+            return matches
+        }
+    }
+
+    /// A session's newest stored message, the stand-in hit for a session
+    /// that matched only by title.
+    public func latestEntry(agent: String, sessionID: String) throws -> HistoryEntry? {
+        try database.dbPool.read { db in
+            try Row.fetchOne(
+                db,
+                sql: """
+                    SELECT id, agent, role, session_id, project, timestamp, text, text_hash
+                    FROM recall_entries
+                    WHERE agent = ? AND session_id = ?
+                    ORDER BY timestamp DESC, id DESC
+                    LIMIT 1
+                """,
+                arguments: [agent, sessionID]
+            ).map(Self.entry(from:))
+        }
+    }
+
     /// Store session titles found while indexing. A nil field leaves the
     /// stored value alone, so a pass that saw only a `custom-title` doesn't
     /// erase an earlier `ai-title`.

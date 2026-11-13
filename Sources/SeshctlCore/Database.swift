@@ -316,6 +316,66 @@ public struct SeshctlDatabase: Sendable {
                 """)
         }
 
+        // Full-text index over session titles, so History search matches a
+        // session by its name as well as its messages. One row per title:
+        // Claude's ai-title and custom-title (`recall_titles`) and titles
+        // picked with `t` (`conversation_titles`, whose `tool` values are
+        // the recall `agent` strings). Triggers keep it in step; the
+        // INSERT...SELECTs index titles stored before it existed.
+        migrator.registerMigration("v19_create_title_fts") { db in
+            try db.execute(sql: """
+                CREATE VIRTUAL TABLE title_fts USING fts5(
+                    title,
+                    agent UNINDEXED,
+                    session_id UNINDEXED,
+                    source UNINDEXED,
+                    tokenize='unicode61 remove_diacritics 2',
+                    prefix='2 3'
+                );
+
+                CREATE TRIGGER recall_titles_fts_ai AFTER INSERT ON recall_titles BEGIN
+                    INSERT INTO title_fts (title, agent, session_id, source)
+                        SELECT new.ai_title, new.agent, new.session_id, 'ai' WHERE new.ai_title IS NOT NULL;
+                    INSERT INTO title_fts (title, agent, session_id, source)
+                        SELECT new.custom_title, new.agent, new.session_id, 'custom' WHERE new.custom_title IS NOT NULL;
+                END;
+                CREATE TRIGGER recall_titles_fts_au AFTER UPDATE ON recall_titles BEGIN
+                    DELETE FROM title_fts
+                        WHERE agent = old.agent AND session_id = old.session_id AND source IN ('ai', 'custom');
+                    INSERT INTO title_fts (title, agent, session_id, source)
+                        SELECT new.ai_title, new.agent, new.session_id, 'ai' WHERE new.ai_title IS NOT NULL;
+                    INSERT INTO title_fts (title, agent, session_id, source)
+                        SELECT new.custom_title, new.agent, new.session_id, 'custom' WHERE new.custom_title IS NOT NULL;
+                END;
+                CREATE TRIGGER recall_titles_fts_ad AFTER DELETE ON recall_titles BEGIN
+                    DELETE FROM title_fts
+                        WHERE agent = old.agent AND session_id = old.session_id AND source IN ('ai', 'custom');
+                END;
+
+                CREATE TRIGGER conversation_titles_fts_ai AFTER INSERT ON conversation_titles BEGIN
+                    INSERT INTO title_fts (title, agent, session_id, source)
+                        VALUES (new.title, new.tool, new.conversation_id, 'picked');
+                END;
+                CREATE TRIGGER conversation_titles_fts_au AFTER UPDATE ON conversation_titles BEGIN
+                    DELETE FROM title_fts
+                        WHERE agent = old.tool AND session_id = old.conversation_id AND source = 'picked';
+                    INSERT INTO title_fts (title, agent, session_id, source)
+                        VALUES (new.title, new.tool, new.conversation_id, 'picked');
+                END;
+                CREATE TRIGGER conversation_titles_fts_ad AFTER DELETE ON conversation_titles BEGIN
+                    DELETE FROM title_fts
+                        WHERE agent = old.tool AND session_id = old.conversation_id AND source = 'picked';
+                END;
+
+                INSERT INTO title_fts (title, agent, session_id, source)
+                    SELECT ai_title, agent, session_id, 'ai' FROM recall_titles WHERE ai_title IS NOT NULL;
+                INSERT INTO title_fts (title, agent, session_id, source)
+                    SELECT custom_title, agent, session_id, 'custom' FROM recall_titles WHERE custom_title IS NOT NULL;
+                INSERT INTO title_fts (title, agent, session_id, source)
+                    SELECT title, tool, conversation_id, 'picked' FROM conversation_titles;
+                """)
+        }
+
         try migrator.migrate(dbPool)
     }
 

@@ -75,6 +75,23 @@ struct KeywordRankingTests {
         #expect(ranked.first?.candidate.id == 2)
     }
 
+    @Test("Title matches rank above sessions that matched only in messages")
+    func titleMatchesRankFirst() {
+        let hits = [
+            hit(session: "strong-message", rank: -50, timestamp: now),
+            hit(session: "titled", rank: 0, timestamp: now - 90 * 86_400),
+            hit(session: "titled-and-message", rank: -1, timestamp: now - 90 * 86_400),
+        ]
+        let ranked = KeywordRanking.rankSessions(
+            hits, now: now, limit: 10,
+            titleMatches: [
+                KeywordRanking.sessionKey(agent: "claude", sessionID: "titled"),
+                KeywordRanking.sessionKey(agent: "claude", sessionID: "titled-and-message"),
+            ]
+        )
+        #expect(ranked.map(\.candidate.sessionID) == ["titled-and-message", "titled", "strong-message"])
+    }
+
     @Test("Same session id under different agents stays separate")
     func agentIsPartOfKey() {
         let hits = [

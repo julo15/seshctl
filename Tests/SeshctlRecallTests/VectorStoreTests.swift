@@ -447,6 +447,49 @@ struct VectorStoreTests {
         #expect(try await store.sessionTitle(agent: "codex", sessionID: "S") == nil, "keyed by agent too")
     }
 
+
+    @Test("titleMatches finds indexed and picked titles, follows updates, one row per session")
+    func titleMatchesFollowsTitleTables() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let store = VectorStore(database: db)
+        try await store.upsertTitles([
+            IndexedTitle(agent: "claude", sessionID: "A", aiTitle: "Sparkle appcast fix", customTitle: "appcast box"),
+            IndexedTitle(agent: "claude", sessionID: "B", aiTitle: "Zombie reaper", customTitle: nil),
+        ])
+        try db.setConversationTitle(conversationId: "C", tool: .codex, title: "Appcast signing")
+
+        let matches = try await store.titleMatches(match: #""appc"*"#, limit: 10)
+        #expect(Set(matches.map(\.sessionKey)) == ["claude|A", "codex|C"], "one row per session")
+        let marked = matches.first { $0.sessionID == "C" }?.marked
+        #expect(marked == "\(KeywordHit.matchStart)Appcast\(KeywordHit.matchEnd) signing")
+
+        // Renames replace the old title in the index.
+        try await store.upsertTitles([IndexedTitle(agent: "claude", sessionID: "B", aiTitle: "Process cleanup", customTitle: nil)])
+        try db.setConversationTitle(conversationId: "C", tool: .codex, title: "Release notes")
+        #expect(try await store.titleMatches(match: #""zombie"*"#, limit: 10).isEmpty)
+        #expect(try await store.titleMatches(match: #""cleanup"*"#, limit: 10).map(\.sessionID) == ["B"])
+        #expect(try await store.titleMatches(match: #""appc"*"#, limit: 10).map(\.sessionID) == ["A"])
+
+        // Deletes drop out too.
+        try await db.dbPool.write { rawDB in
+            try rawDB.execute(sql: "DELETE FROM recall_titles WHERE session_id = 'A'")
+            try rawDB.execute(sql: "DELETE FROM conversation_titles")
+        }
+        #expect(try await store.titleMatches(match: #""appc"*"#, limit: 10).isEmpty)
+        #expect(try await store.titleMatches(match: #""release"*"#, limit: 10).isEmpty)
+    }
+
+    @Test("latestEntry returns a session's newest message")
+    func latestEntryIsNewest() async throws {
+        let store = try makeStore()
+        _ = try await store.insertText(entries: [
+            makeTextEntry("older", seed: 1, sessionID: "S"),
+            makeTextEntry("newer", seed: 2, sessionID: "S"),
+            makeTextEntry("other session", seed: 3, sessionID: "T"),
+        ])
+        #expect(try await store.latestEntry(agent: "claude", sessionID: "S")?.text == "newer")
+        #expect(try await store.latestEntry(agent: "claude", sessionID: "missing") == nil)
+    }
 }
 
 private func makeTextEntry(_ text: String, seed: Int, sessionID: String) -> HistoryEntry {

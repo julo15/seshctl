@@ -34,6 +34,24 @@ public struct KeywordCandidate: Sendable, Equatable {
     }
 }
 
+/// A session whose title matched a keyword query.
+public struct TitleMatch: Sendable, Equatable {
+    public let agent: String
+    public let sessionID: String
+    /// The matched title, with matched terms wrapped in
+    /// `KeywordHit.matchStart` / `KeywordHit.matchEnd`.
+    public let marked: String
+
+    public init(agent: String, sessionID: String, marked: String) {
+        self.agent = agent
+        self.sessionID = sessionID
+        self.marked = marked
+    }
+
+    /// The `KeywordRanking` session key.
+    public var sessionKey: String { KeywordRanking.sessionKey(agent: agent, sessionID: sessionID) }
+}
+
 /// One message that matched a keyword query, with its text and snippet.
 public struct KeywordHit: Sendable, Equatable {
     /// Marks the start of a matched term inside `snippet`. Shared with
@@ -111,6 +129,9 @@ public enum KeywordQuery {
 }
 
 public enum KeywordRanking {
+    /// Key identifying a session across agents.
+    public static func sessionKey(agent: String, sessionID: String) -> String { "\(agent)|\(sessionID)" }
+
     /// Collapse message-level matches into one per session, best first.
     ///
     /// A session's representative hit is its best-ranked message. Its score
@@ -119,21 +140,29 @@ public enum KeywordRanking {
     /// one from months ago, and the bonus halves every three weeks. Ties go
     /// to the session with the newer match.
     ///
+    /// Sessions in `titleMatches` rank above every session that matched
+    /// only in its messages: a title names what the session was about, so
+    /// a hit there is the stronger signal. Within each group the order is
+    /// as above. A title-only session's candidate is typically its newest
+    /// message with rank 0.
+    ///
     /// - Parameters:
     ///   - candidates: message-level matches, in any order.
     ///   - now: unix seconds to measure age from.
     ///   - limit: cap on returned sessions.
+    ///   - titleMatches: `sessionKey`s of sessions whose title matched.
     public static func rankSessions(
         _ candidates: [KeywordCandidate],
         now: Double,
-        limit: Int
+        limit: Int,
+        titleMatches: Set<String> = []
     ) -> [(candidate: KeywordCandidate, score: Double)] {
         guard limit > 0 else { return [] }
 
         var best: [String: KeywordCandidate] = [:]
         var latest: [String: Double] = [:]
         for candidate in candidates {
-            let key = "\(candidate.agent)|\(candidate.sessionID)"
+            let key = sessionKey(agent: candidate.agent, sessionID: candidate.sessionID)
             if let current = best[key], current.rank <= candidate.rank {
                 // keep current
             } else {
@@ -142,14 +171,15 @@ public enum KeywordRanking {
             latest[key] = max(latest[key] ?? candidate.timestamp, candidate.timestamp)
         }
 
-        let scored: [(candidate: KeywordCandidate, score: Double, latest: Double)] = best.map { key, candidate in
+        let scored: [(candidate: KeywordCandidate, score: Double, latest: Double, title: Bool)] = best.map { key, candidate in
             let lastActive = latest[key] ?? candidate.timestamp
-            return (candidate, score(rank: candidate.rank, lastActive: lastActive, now: now), lastActive)
+            return (candidate, score(rank: candidate.rank, lastActive: lastActive, now: now), lastActive, titleMatches.contains(key))
         }
 
         return scored
             .sorted { a, b in
-                a.score != b.score ? a.score > b.score : a.latest > b.latest
+                if a.title != b.title { return a.title }
+                return a.score != b.score ? a.score > b.score : a.latest > b.latest
             }
             .prefix(limit)
             .map { ($0.candidate, $0.score) }

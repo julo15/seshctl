@@ -484,29 +484,59 @@ final actor RecallStack {
         // Message-level matches, without text; plenty to fill `limit`
         // sessions even when a few chatty sessions dominate the top.
         let candidates = try await vectorStore.keywordCandidates(match: match, limit: 500)
+
+        // Sessions whose title matched. One that matched only by title has
+        // no message candidate, so its newest message stands in (rank 0,
+        // no snippet); the ranking puts title matches first either way.
+        let titleMatches = try await vectorStore.titleMatches(match: match, limit: 50)
+        let markedTitles = Dictionary(uniqueKeysWithValues: titleMatches.map { ($0.sessionKey, $0.marked) })
+        let messageKeys = Set(candidates.map { KeywordRanking.sessionKey(agent: $0.agent, sessionID: $0.sessionID) })
+        var standIns: [Int64: HistoryEntry] = [:]
+        var titleOnly: [KeywordCandidate] = []
+        for title in titleMatches where !messageKeys.contains(title.sessionKey) {
+            guard let entry = try await vectorStore.latestEntry(agent: title.agent, sessionID: title.sessionID),
+                  let id = entry.id else { continue }
+            standIns[id] = entry
+            titleOnly.append(KeywordCandidate(id: id, agent: entry.agent, sessionID: entry.sessionID, timestamp: entry.timestamp, rank: 0))
+        }
+
         let ranked = KeywordRanking.rankSessions(
-            candidates,
+            candidates + titleOnly,
             now: Date().timeIntervalSince1970,
-            limit: limit
+            limit: limit,
+            titleMatches: Set(markedTitles.keys)
         )
         // Text and snippets only for the rows shown.
-        let hits = try await vectorStore.keywordHits(match: match, ids: ranked.map(\.candidate.id))
-        let scores = Dictionary(uniqueKeysWithValues: ranked.map { ($0.candidate.id, $0.score) })
+        let hits = try await vectorStore.keywordHits(
+            match: match,
+            ids: ranked.map(\.candidate.id).filter { standIns[$0] == nil }
+        )
+        let hitsByID = Dictionary(uniqueKeysWithValues: hits.compactMap { hit in hit.entry.id.map { ($0, hit) } })
         var results: [RecallResult] = []
-        results.reserveCapacity(hits.count)
-        for hit in hits {
-            let title = try await vectorStore.sessionTitle(agent: hit.entry.agent, sessionID: hit.entry.sessionID)
+        results.reserveCapacity(ranked.count)
+        for (candidate, score) in ranked {
+            let entry: HistoryEntry
+            let snippet: String?
+            if let hit = hitsByID[candidate.id] {
+                (entry, snippet) = (hit.entry, hit.snippet)
+            } else if let standIn = standIns[candidate.id] {
+                (entry, snippet) = (standIn, nil)
+            } else {
+                continue
+            }
+            let title = try await vectorStore.sessionTitle(agent: entry.agent, sessionID: entry.sessionID)
             results.append(RecallResult(
-                agent: hit.entry.agent,
-                role: hit.entry.role,
-                sessionId: hit.entry.sessionID,
-                project: hit.entry.project,
-                timestamp: hit.entry.timestamp,
-                score: hit.entry.id.flatMap { scores[$0] } ?? 0,
-                resumeCmd: Self.resumeCommand(for: hit.entry),
-                text: hit.entry.text,
-                snippet: hit.snippet,
-                title: title
+                agent: entry.agent,
+                role: entry.role,
+                sessionId: entry.sessionID,
+                project: entry.project,
+                timestamp: entry.timestamp,
+                score: score,
+                resumeCmd: Self.resumeCommand(for: entry),
+                text: entry.text,
+                snippet: snippet,
+                title: title,
+                titleMatch: markedTitles[KeywordRanking.sessionKey(agent: entry.agent, sessionID: entry.sessionID)]
             ))
         }
         return RecallSearchResponse(results: results, indexingCount: nil)
