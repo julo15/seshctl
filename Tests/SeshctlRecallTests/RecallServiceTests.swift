@@ -176,8 +176,13 @@ struct RecallServiceTests {
     func indexingSurvivesCallerCancellation() async throws {
         // The headline behavior of the detached-indexing change: canceling
         // a search's Task aborts ONLY the await on `indexingTask.value`,
-        // not the detached refresh itself. The DB keeps gaining rows after
-        // the cancel.
+        // not the detached refresh itself. The DB keeps gaining embeddings
+        // after the cancel.
+        //
+        // Counts embeddings, not entries: indexing stores all entry text in
+        // one quick phase before embedding starts, so the entry count is
+        // already final by the time we cancel. Embedding is the slow,
+        // incremental phase the cancel must not stop.
         //
         // Uses MockEmbedder with a 30ms per-chunk delay so the test runs
         // in <500ms total (vs ~6.5s with the real CoreML embedder) and
@@ -207,10 +212,10 @@ struct RecallServiceTests {
             try? await RecallService.search(query: "anything")
         }
 
-        // Poll until indexing has actually started landing rows (up to 5s).
+        // Poll until embedding has actually started landing rows (up to 5s).
         var countAtCancel = 0
         for _ in 0..<500 {
-            countAtCancel = try await store.entryCount()
+            countAtCancel = try await store.embeddingCount()
             if countAtCancel > 0 { break }
             try await Task.sleep(nanoseconds: 10_000_000)
         }
@@ -223,7 +228,7 @@ struct RecallServiceTests {
         // this loop will time out at the same count we sampled before cancel.
         var finalCount = countAtCancel
         for _ in 0..<500 {
-            finalCount = try await store.entryCount()
+            finalCount = try await store.embeddingCount()
             if finalCount > countAtCancel { break }
             try await Task.sleep(nanoseconds: 10_000_000)
         }
@@ -334,5 +339,47 @@ struct RecallServiceTests {
             loadCount == 1,
             "three concurrent searches must share one indexing pass (got \(loadCount))"
         )
+    }
+
+    @Test("keywordSearch returns one result per session with a marked snippet, without embedding")
+    func keywordSearchEndToEnd() async throws {
+        RecallService._resetForTests()
+        let db = try SeshctlDatabase.temporary()
+        let entries: [HistoryEntry] = [
+            makeEntry(text: "regenerate the sparkle appcast", sessionID: "S1"),
+            makeEntry(text: "appcast xml is served by pages", sessionID: "S1"),
+            makeEntry(text: "the appcast was stale", sessionID: "S2"),
+            makeEntry(text: "unrelated chatter", sessionID: "S3"),
+        ]
+        let mock = MockAdapter(name: "claude", entries: entries, cursor: Data("v1".utf8))
+        RecallService.configureForTesting(database: db, adapters: [mock], embedder: NeverEmbedder())
+
+        let resp = try await RecallService.keywordSearch(query: "appc")
+        #expect(Set(resp.results.map(\.sessionId)) == ["S1", "S2"])
+        #expect(resp.results.allSatisfy { $0.snippet?.contains(KeywordHit.matchStart) == true })
+        #expect(resp.results.allSatisfy { $0.resumeCmd == "claude --resume \($0.sessionId)" })
+
+        let embedded = try await VectorStore(database: db).embeddingCount()
+        #expect(embedded == 0, "keyword search must never embed")
+    }
+
+    @Test("keywordSearch with nothing searchable returns empty without building the stack")
+    func keywordSearchShortQuery() async throws {
+        RecallService._resetForTests()
+        // No configure: building the stack would throw.
+        let resp = try await RecallService.keywordSearch(query: " a ")
+        #expect(resp.results.isEmpty)
+    }
+}
+
+/// Throws on every encode, proving keyword search never embeds.
+private actor NeverEmbedder: Embedder {
+    struct Called: Error {}
+    func encode(
+        _ texts: [String],
+        batchSize: Int,
+        onProgress: (@Sendable (Int, Int) -> Void)?
+    ) async throws -> [[Float]] {
+        throw Called()
     }
 }

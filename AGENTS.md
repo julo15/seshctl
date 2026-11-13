@@ -261,6 +261,23 @@ For how `bridgedLocalIds` fits alongside the other transcript-derived row signal
 - **Ordering is plain recency,** not `sortedForDisplay`: the frozen order only snapshots the newest 50 `sessions`.
 - **Reset on every panel show** (`AppDelegate.showPanel`), and Esc/`q` leave the mode before they close the panel.
 
+## Search
+
+Typing in the panel runs two searches:
+
+- **Row filter** (`SessionListViewModel.matches`): instant, in-memory substring match over each panel row's folder, repo, branch, title and last ask/reply. Narrows the live list.
+- **History search** (`RecallService.keywordSearch`): SQLite FTS5 over every message the recall indexer has stored from every transcript on disk, shown in the **History** section as one row per session with the matching excerpt. Rows already in the live list are left out.
+
+**Index.** `recall_fts` (migration `v16_create_recall_fts`) is an external-content FTS5 table over `recall_entries.text`, kept in step by triggers. Nothing in Swift writes it directly: insert into `recall_entries` and the trigger indexes the row.
+
+**Two-phase indexing.** `Indexer.indexText()` stores new message text (cheap, makes it searchable); `Indexer.embedPending()` embeds entries without a vector (CoreML, slow). Keyword search runs only the text phase, and skips it if one finished within `RecallStack.textIndexFreshness` (5s), so keystrokes never wait on the model or a transcript walk. Semantic search (`RecallService.search`) runs both. An entry without an embedding is normal, not drift; don't reintroduce the old "counts differ → wipe the index" check. The CoreML model loads lazily (`LazyEmbedder`) on the first embed.
+
+**Query rules** (`KeywordQuery.matchExpression`): words split on non-alphanumerics like the `unicode61` tokenizer; words of 2+ characters match as prefixes, 1-character words as whole words; `"quoted text"` is a phrase; every term is required. User input is reduced to letters and digits before it reaches FTS5, so it can't inject query syntax. A 1-letter prefix scans most of the index (~200ms on 16k messages), which is why it's excluded.
+
+**Ranking** (`KeywordRanking.rankSessions`): each session's best message by `bm25`, scaled by a recency bonus (up to 2×, halving every 21 days). Snippets come from FTS5's `snippet()` with `\u{1}`/`\u{2}` around matched terms; `RecallResult.snippetSegments` parses them, so the row highlights exactly what matched rather than re-searching the text.
+
+**Semantic search** is not wired to the panel. It stays for a future LLM tier (embeddings as candidate retrieval). Its fixed cutoff (`RecallService.minimumScore`) is a stopgap: cosine scores from MiniLM aren't comparable across queries, and vague queries score noise above it.
+
 ## Title Suggestions (`t`)
 
 `t` asks Claude Haiku for a title describing what the selected session is doing **now**; `y` saves it, `n` or Esc declines it. Claude Code's `ai-title` is written once from the opening prompt, so a long session keeps a title for its first task — this is the user-initiated fix. There's no automatic titling.

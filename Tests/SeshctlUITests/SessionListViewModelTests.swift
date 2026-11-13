@@ -1388,7 +1388,7 @@ struct SessionListViewModelTests {
         await waitForRecall { vm.recallErrorMessage != nil }
 
         #expect(vm.recallErrorMessage != nil)
-        #expect(vm.recallErrorMessage?.contains("Semantic search failed") == true)
+        #expect(vm.recallErrorMessage?.contains("History search failed") == true)
         #expect(vm.recallErrorMessage?.contains("boom") == true)
         #expect(vm.recallErrorMessage?.contains("traceback line 2") == false)
         #expect(vm.isRecallSearching == false)
@@ -1407,7 +1407,7 @@ struct SessionListViewModelTests {
 
         await waitForRecall { vm.recallErrorMessage != nil }
 
-        #expect(vm.recallErrorMessage == "Semantic search timed out")
+        #expect(vm.recallErrorMessage == "History search timed out")
         #expect(vm.isRecallSearching == false)
     }
 
@@ -1424,7 +1424,7 @@ struct SessionListViewModelTests {
 
         await waitForRecall { vm.recallErrorMessage != nil }
 
-        #expect(vm.recallErrorMessage == "Semantic search unavailable")
+        #expect(vm.recallErrorMessage == "History search unavailable")
     }
 
     @Test("exitSearch clears recallErrorMessage")

@@ -252,6 +252,35 @@ public struct SeshctlDatabase: Sendable {
             }
         }
 
+        // Full-text index over recall_entries.text, backing the panel's
+        // keyword history search. External-content table: the text lives
+        // once, in recall_entries; triggers keep the index in step with
+        // inserts, deletes and updates. `prefix='2 3'` makes the
+        // as-you-type prefix queries cheap. The rebuild indexes whatever
+        // the recall indexer already stored.
+        migrator.registerMigration("v16_create_recall_fts") { db in
+            try db.execute(sql: """
+                CREATE VIRTUAL TABLE recall_fts USING fts5(
+                    text,
+                    content='recall_entries',
+                    content_rowid='id',
+                    tokenize='unicode61 remove_diacritics 2',
+                    prefix='2 3'
+                );
+                CREATE TRIGGER recall_entries_fts_ai AFTER INSERT ON recall_entries BEGIN
+                    INSERT INTO recall_fts(rowid, text) VALUES (new.id, new.text);
+                END;
+                CREATE TRIGGER recall_entries_fts_ad AFTER DELETE ON recall_entries BEGIN
+                    INSERT INTO recall_fts(recall_fts, rowid, text) VALUES ('delete', old.id, old.text);
+                END;
+                CREATE TRIGGER recall_entries_fts_au AFTER UPDATE ON recall_entries BEGIN
+                    INSERT INTO recall_fts(recall_fts, rowid, text) VALUES ('delete', old.id, old.text);
+                    INSERT INTO recall_fts(rowid, text) VALUES (new.id, new.text);
+                END;
+                INSERT INTO recall_fts(recall_fts) VALUES ('rebuild');
+                """)
+        }
+
         try migrator.migrate(dbPool)
     }
 

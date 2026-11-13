@@ -1679,7 +1679,7 @@ public final class SessionListViewModel: ObservableObject {
         pendingMarkAllRead = false
     }
 
-    // MARK: - Recall semantic search
+    // MARK: - History search (keyword, over all indexed transcripts)
 
     /// Copy a recall result's resume command to the clipboard.
     /// Constructs the compound form (cd + command) so the user can paste and run directly.
@@ -1712,7 +1712,9 @@ public final class SessionListViewModel: ObservableObject {
         }
 
         debounceTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            // Short: the keyword query itself takes milliseconds; this only
+            // coalesces a fast burst of keystrokes.
+            try? await Task.sleep(nanoseconds: 100_000_000)
             guard !Task.isCancelled else { return }
             self?.executeRecallSearch(query: query)
         }
@@ -1722,7 +1724,7 @@ public final class SessionListViewModel: ObservableObject {
 
     /// Test seam: replace to inject canned recall outcomes.
     internal var recallSearchProvider: @Sendable (String, (@Sendable (Int, Int) -> Void)?) async throws -> RecallSearchResponse = { query, onIndexing in
-        try await RecallService.search(query: query, onIndexing: onIndexing)
+        try await RecallService.keywordSearch(query: query)
     }
 
     private static func firstLine(_ s: String, maxLength: Int = 200) -> String {
@@ -1770,21 +1772,21 @@ public final class SessionListViewModel: ObservableObject {
                     // Unreachable in v0.5.0+ (native recall is always
                     // available). Surface defensively as an error message
                     // so a future regression doesn't fall through silently.
-                    self?.recallErrorMessage = "Semantic search unavailable"
+                    self?.recallErrorMessage = "History search unavailable"
                 case .timeout:
-                    self?.recallErrorMessage = "Semantic search timed out"
+                    self?.recallErrorMessage = "History search timed out"
                 case .searchFailed(let msg):
                     let cleaned = msg.replacingOccurrences(
                         of: "^recall exited with status \\d+: ",
                         with: "",
                         options: .regularExpression
                     )
-                    self?.recallErrorMessage = "Semantic search failed: \(Self.firstLine(cleaned))"
+                    self?.recallErrorMessage = "History search failed: \(Self.firstLine(cleaned))"
                 }
                 self?.clearRecallSearchState()
             } catch {
                 guard !Task.isCancelled else { return }
-                self?.recallErrorMessage = "Semantic search failed: \(Self.firstLine(error.localizedDescription))"
+                self?.recallErrorMessage = "History search failed: \(Self.firstLine(error.localizedDescription))"
                 self?.clearRecallSearchState()
             }
         }

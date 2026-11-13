@@ -1,5 +1,6 @@
 // VectorStoreTests — covers the SQLite-backed embedding store: roundtrip,
-// dedup, FK cascade, drift detection, cursors, and clearAll.
+// dedup, FK cascade, text-only inserts + embedding backfill, the FTS
+// keyword index, cursors, and clearAll.
 //
 // All tests build a fresh `SeshctlDatabase.temporary()` so they're hermetic
 // and parallel-safe (no shared on-disk state).
@@ -142,25 +143,35 @@ struct VectorStoreTests {
         #expect(afterEmbedIDs.isEmpty, "FK cascade should have cleared embeddings")
     }
 
-    @Test("detectDrift is false on balanced store, true when embeddings diverge")
-    func driftDetection() async throws {
-        let db = try SeshctlDatabase.temporary()
-        let store = VectorStore(database: db)
+    @Test("insertText stores entries without embeddings; insertEmbeddings backfills them")
+    func textThenEmbeddings() async throws {
+        let store = try makeStore()
         let entries = (0..<3).map { makeEntry(seed: $0) }
-        let vectors = (0..<3).map { makeVector(seed: $0) }
-        _ = try await store.insert(entries: entries, embeddings: vectors)
 
-        let driftBefore = try await store.detectDrift()
-        #expect(driftBefore == false, "fresh balanced store should not drift")
+        let ids = try await store.insertText(entries: entries)
+        #expect(ids.count == 3)
+        #expect(try await store.entryCount() == 3)
+        #expect(try await store.embeddingCount() == 0)
 
-        // Surgically remove one embedding row (FK doesn't fire — we're
-        // deleting from the child, not the parent).
-        try await db.dbPool.write { rawDB in
-            try rawDB.execute(sql: "DELETE FROM recall_embeddings WHERE entry_id = (SELECT MIN(entry_id) FROM recall_embeddings)")
-        }
+        let pending = try await store.entriesMissingEmbeddings(limit: 10)
+        #expect(pending.map(\.id) == ids, "oldest id first")
 
-        let driftAfter = try await store.detectDrift()
-        #expect(driftAfter == true, "store should report drift after manual embedding deletion")
+        try await store.insertEmbeddings(ids: [ids[0], ids[1]], vectors: [makeVector(seed: 0), makeVector(seed: 1)])
+        #expect(try await store.embeddingCount() == 2)
+        let stillPending = try await store.entriesMissingEmbeddings(limit: 10)
+        #expect(stillPending.map(\.id) == [ids[2]])
+
+        // Re-inserting the same text is a no-op.
+        let again = try await store.insertText(entries: entries)
+        #expect(again.isEmpty)
+    }
+
+    @Test("entriesMissingEmbeddings honors the limit")
+    func missingEmbeddingsLimit() async throws {
+        let store = try makeStore()
+        _ = try await store.insertText(entries: (0..<5).map { makeEntry(seed: $0) })
+        let pending = try await store.entriesMissingEmbeddings(limit: 2)
+        #expect(pending.count == 2)
     }
 
     @Test("Cursor read/write roundtrip + nil for unknown adapters")
@@ -240,66 +251,72 @@ struct VectorStoreTests {
         #expect(h1 != different)
     }
 
-    @Test("filterAlreadyIndexed returns only entries not yet persisted")
-    func filterAlreadyIndexedReturnsOnlyNew() async throws {
+    @Test("keywordHits finds inserted text with marked snippets, best match first")
+    func keywordHitsFindsText() async throws {
         let store = try makeStore()
-        let persisted = (0..<3).map { makeEntry(seed: $0) }
-        let vectors = (0..<3).map { makeVector(seed: $0) }
-        _ = try await store.insert(entries: persisted, embeddings: vectors)
+        _ = try await store.insertText(entries: [
+            makeTextEntry("the sparkle appcast is stale", seed: 1, sessionID: "S1"),
+            makeTextEntry("sparkle appcast generation; regenerate the appcast after every appcast change", seed: 2, sessionID: "S2"),
+            makeTextEntry("nothing relevant here", seed: 3, sessionID: "S3"),
+        ])
 
-        // Mix: 3 already-in-DB + 2 new.
-        let new = (3..<5).map { makeEntry(seed: $0) }
-        let mixed = persisted + new
-        let remaining = try await store.filterAlreadyIndexed(mixed)
-        #expect(remaining.count == 2)
-        #expect(Set(remaining.map(\.text)) == Set(["entry-3", "entry-4"]))
+        let hits = try await store.keywordHits(match: #""appc"*"#, limit: 10)
+        #expect(Set(hits.map(\.entry.sessionID)) == ["S1", "S2"])
+        #expect(hits.first?.entry.sessionID == "S2", "more occurrences rank higher")
+        #expect(hits.allSatisfy { $0.rank < 0 }, "bm25 is negative; lower is better")
+        let marked = hits.first { $0.entry.sessionID == "S1" }?.snippet
+        #expect(marked?.contains("\(KeywordHit.matchStart)appcast\(KeywordHit.matchEnd)") == true)
     }
 
-    @Test("filterAlreadyIndexed treats different sessions as distinct (composite dedup key)")
-    func filterAlreadyIndexedSessionDistinct() async throws {
+    @Test("keywordHits requires every term")
+    func keywordHitsRequiresAllTerms() async throws {
         let store = try makeStore()
-        // Same text, same agent, different sessions — both should remain
-        // "new" until persisted independently.
-        let aText = "shared"
-        let entryA = HistoryEntry(
-            id: nil, agent: "claude", role: "user",
-            sessionID: "session-A", project: "/p",
-            timestamp: 1.0, text: aText,
-            textHash: HistoryEntry.textHash(for: aText)
-        )
-        let entryB = HistoryEntry(
-            id: nil, agent: "claude", role: "user",
-            sessionID: "session-B", project: "/p",
-            timestamp: 2.0, text: aText,
-            textHash: HistoryEntry.textHash(for: aText)
-        )
-        _ = try await store.insert(
-            entries: [entryA],
-            embeddings: [makeVector(seed: 0)]
-        )
-        let remaining = try await store.filterAlreadyIndexed([entryA, entryB])
-        #expect(remaining.count == 1, "session-B should still be 'new'")
-        #expect(remaining.first?.sessionID == "session-B")
+        _ = try await store.insertText(entries: [
+            makeTextEntry("zombie process reaper", seed: 1, sessionID: "S1"),
+            makeTextEntry("zombie movie night", seed: 2, sessionID: "S2"),
+        ])
+        let hits = try await store.keywordHits(match: #""zombie"* "reaper"*"#, limit: 10)
+        #expect(hits.map(\.entry.sessionID) == ["S1"])
     }
 
-    @Test("filterAlreadyIndexed on empty input returns empty")
-    func filterAlreadyIndexedEmpty() async throws {
+    @Test("FTS index follows deletes, so cleared entries stop matching")
+    func keywordIndexFollowsDeletes() async throws {
         let store = try makeStore()
-        let result = try await store.filterAlreadyIndexed([])
-        #expect(result.isEmpty)
+        _ = try await store.insertText(entries: [makeTextEntry("sparkle appcast", seed: 1, sessionID: "S1")])
+        #expect(try await store.keywordHits(match: #""sparkle"*"#, limit: 10).count == 1)
+
+        try await store.clearAllEntriesAndEmbeddings()
+        #expect(try await store.keywordHits(match: #""sparkle"*"#, limit: 10).isEmpty)
     }
 
-    @Test("filterAlreadyIndexed on empty store returns ALL inputs (fast path)")
-    func filterAlreadyIndexedEmptyStore() async throws {
-        // Exercises the `guard !existing.isEmpty else { return entries }`
-        // fast path added to skip the per-entry Set lookup walk on the
-        // first-ever-refresh case.
-        let store = try makeStore()
-        let entries = (0..<5).map { makeEntry(seed: $0) }
-        let result = try await store.filterAlreadyIndexed(entries)
-        #expect(result.count == 5)
-        // Preserves caller order — guarded against a future refactor that
-        // accidentally sorts or filters.
-        #expect(result.map(\.text) == entries.map(\.text))
+    @Test("Migration backfills the FTS index from entries stored before it existed")
+    func migrationBackfillsExistingEntries() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let store = VectorStore(database: db)
+        // Simulate rows written before v16: insert, then wipe the index and
+        // rebuild it the way the migration does.
+        _ = try await store.insertText(entries: [makeTextEntry("legacy appcast row", seed: 1, sessionID: "S1")])
+        try await db.dbPool.write { rawDB in
+            try rawDB.execute(sql: "INSERT INTO recall_fts(recall_fts) VALUES ('delete-all')")
+        }
+        #expect(try await store.keywordHits(match: #""legacy"*"#, limit: 10).isEmpty)
+
+        try await db.dbPool.write { rawDB in
+            try rawDB.execute(sql: "INSERT INTO recall_fts(recall_fts) VALUES ('rebuild')")
+        }
+        #expect(try await store.keywordHits(match: #""legacy"*"#, limit: 10).count == 1)
     }
+}
+
+private func makeTextEntry(_ text: String, seed: Int, sessionID: String) -> HistoryEntry {
+    HistoryEntry(
+        id: nil,
+        agent: "claude",
+        role: "assistant",
+        sessionID: sessionID,
+        project: "/tmp/project",
+        timestamp: 1_700_000_000 + Double(seed),
+        text: text,
+        textHash: HistoryEntry.textHash(for: text)
+    )
 }

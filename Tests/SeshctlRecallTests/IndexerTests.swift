@@ -168,47 +168,42 @@ struct IndexerTests {
         #expect(calls.last?.0 == 5)
     }
 
-    @Test("refresh rebuilds on drift before walking adapters")
-    func refreshOnDriftRebuilds() async throws {
-        let service = try await EmbeddingService()
+    @Test("refresh backfills embeddings for stored entries that lack one")
+    func refreshBackfillsMissingEmbeddings() async throws {
         let db = try SeshctlDatabase.temporary()
         let store = VectorStore(database: db)
 
-        // Pre-populate the store the normal way, then manually corrupt it
-        // so entry/embedding counts diverge. Indexer's drift path should
-        // clear the world before re-walking the mock adapter.
-        let seedEntries = (0..<4).map { makeEntry(seed: $0, agent: "stale") }
-        let seedVectors = seedEntries.map { _ in [Float](repeating: 0.1, count: 384) }
-        _ = try await store.insert(entries: seedEntries, embeddings: seedVectors)
-        try await store.writeCursor(adapterName: "mock-claude", cursor: Data("stale".utf8))
-        try await db.dbPool.write { rawDB in
-            // Drop one embedding so counts diverge.
-            try rawDB.execute(sql: "DELETE FROM recall_embeddings WHERE entry_id = (SELECT MIN(entry_id) FROM recall_embeddings)")
-        }
-        let driftBefore = try await store.detectDrift()
-        #expect(driftBefore == true)
+        // Entries stored text-only (a keyword search's text pass, or an
+        // interrupted earlier refresh). They must be embedded, not wiped.
+        let stored = (0..<4).map { makeEntry(seed: $0) }
+        _ = try await store.insertText(entries: stored)
 
-        let freshEntries = (0..<3).map { makeEntry(seed: $0 + 100, agent: "claude") }
-        let adapter = MockAdapter(
-            name: "mock-claude",
-            entries: freshEntries,
-            cursor: Data("fresh".utf8)
-        )
+        let fresh = (0..<2).map { makeEntry(seed: $0 + 100) }
+        let adapter = MockAdapter(name: "mock-claude", entries: fresh, cursor: Data("fresh".utf8))
+        let indexer = Indexer(store: store, embedder: MockEmbedder(perChunkDelayNanos: 0), adapters: [adapter])
+        try await indexer.refresh(batchSize: 3)
 
-        let indexer = Indexer(store: store, embedder: service, adapters: [adapter])
-        try await indexer.refresh(batchSize: 32)
+        #expect(try await store.entryCount() == 6)
+        #expect(try await store.embeddingCount() == 6)
+        #expect(try await store.entriesMissingEmbeddings(limit: 10).isEmpty)
+    }
 
-        // Drift rebuild + adapter walk: exactly 3 fresh entries remain.
-        let count = try await store.entryCount()
-        #expect(count == 3, "drift rebuild + fresh walk should leave only the new entries")
+    @Test("indexText stores text and advances cursors without embedding anything")
+    func indexTextSkipsEmbedding() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let store = VectorStore(database: db)
+        let entries = (0..<3).map { makeEntry(seed: $0) }
+        let adapter = MockAdapter(name: "mock-claude", entries: entries, cursor: Data("c1".utf8))
+        let indexer = Indexer(store: store, embedder: FailingEmbedder(), adapters: [adapter])
 
-        // No drift after rebuild.
-        let driftAfter = try await store.detectDrift()
-        #expect(driftAfter == false)
+        try await indexer.indexText()
 
-        // Cursor is the fresh one — stale cursor was wiped.
-        let cursor = try await store.readCursor(adapterName: "mock-claude")
-        #expect(cursor == Data("fresh".utf8))
+        #expect(try await store.entryCount() == 3)
+        #expect(try await store.embeddingCount() == 0)
+        #expect(try await store.readCursor(adapterName: "mock-claude") == Data("c1".utf8))
+        // Searchable straight away.
+        let hits = try await store.keywordHits(match: #""indexer"*"#, limit: 10)
+        #expect(hits.count == 3)
     }
 
     @Test("refresh skips already-persisted entries (resume-after-cancel path)")
@@ -266,5 +261,17 @@ struct IndexerTests {
         // Final progress fire should be 7/7.
         #expect(progress.last?.0 == 7)
         #expect(progress.last?.1 == 7)
+    }
+}
+
+/// Fails every encode, proving a code path never embeds.
+private actor FailingEmbedder: Embedder {
+    struct Called: Error {}
+    func encode(
+        _ texts: [String],
+        batchSize: Int,
+        onProgress: (@Sendable (Int, Int) -> Void)?
+    ) async throws -> [[Float]] {
+        throw Called()
     }
 }

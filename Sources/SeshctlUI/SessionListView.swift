@@ -235,7 +235,7 @@ public struct SessionListView: View {
                                     .padding(.top, -4) // adjust since ForEach won't insert it
                             }
 
-                            // Semantic search section
+                            // History search section (keyword matches across all transcripts)
                             if viewModel.isSearching {
                                 if viewModel.isRecallSearching {
                                     HStack(spacing: 6) {
@@ -260,7 +260,7 @@ public struct SessionListView: View {
                                 }
 
                                 if !viewModel.recallResults.isEmpty {
-                                    sectionHeader("Semantic")
+                                    sectionHeader("History")
 
                                     ForEach(Array(viewModel.recallResults.enumerated()), id: \.element.id) { recallIndex, result in
                                         let globalIndex = ordered.count + recallIndex

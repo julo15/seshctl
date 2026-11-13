@@ -42,22 +42,43 @@ public struct RecallResultRowView: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
 
-                Text(scoreLabel)
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                // Keyword relevance isn't a percentage; only semantic
+                // results show a score.
+                if result.snippet == nil {
+                    Text(scoreLabel)
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
             }
 
             HStack(spacing: 4) {
                 Text(roleTag)
                     .font(.body.weight(.bold))
                     .foregroundStyle(.primary.opacity(0.8))
-                highlightedText(snippet, query: searchQuery, perWord: true)
+                snippetText
                     .font(.body.weight(.medium))
                     .foregroundStyle(.primary.opacity(0.8))
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
         }
+    }
+
+    /// Keyword results highlight exactly the terms FTS matched; semantic
+    /// results fall back to highlighting the query's words.
+    private var snippetText: Text {
+        guard let marked = result.snippet else {
+            return highlightedText(snippet, query: searchQuery, perWord: true)
+        }
+        var attributed = AttributedString()
+        for segment in RecallResult.snippetSegments(marked) {
+            var run = AttributedString(segment.text)
+            if segment.isMatch {
+                run.backgroundColor = .yellow.opacity(0.25)
+            }
+            attributed += run
+        }
+        return Text(attributed)
     }
 
     private var projectName: String {
