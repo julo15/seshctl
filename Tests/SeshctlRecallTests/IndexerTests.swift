@@ -202,7 +202,7 @@ struct IndexerTests {
         #expect(try await store.embeddingCount() == 0)
         #expect(try await store.readCursor(adapterName: "mock-claude") == Data("c1".utf8))
         // Searchable straight away.
-        let hits = try await store.keywordHits(match: #""indexer"*"#, limit: 10)
+        let hits = try await store.keywordCandidates(match: #""indexer"*"#, limit: 10)
         #expect(hits.count == 3)
     }
 

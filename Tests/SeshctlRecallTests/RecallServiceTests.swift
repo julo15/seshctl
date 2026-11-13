@@ -91,6 +91,30 @@ private func makeEntry(text: String, sessionID: String) -> HistoryEntry {
     )
 }
 
+/// Adapter whose loads can be slowed down or made to fail, and counted.
+private actor ControllableAdapter: Adapter {
+    struct LoadFailed: Error {}
+
+    nonisolated let name = "claude"
+    let entries: [HistoryEntry]
+    let delayNanos: UInt64
+    let fails: Bool
+    private(set) var loadCount = 0
+
+    init(entries: [HistoryEntry] = [], delayNanos: UInt64 = 0, fails: Bool = false) {
+        self.entries = entries
+        self.delayNanos = delayNanos
+        self.fails = fails
+    }
+
+    func load(cursor: Data?) async throws -> (entries: [HistoryEntry], newCursor: Data) {
+        loadCount += 1
+        if delayNanos > 0 { try await Task.sleep(nanoseconds: delayNanos) }
+        if fails { throw LoadFailed() }
+        return (entries, Data("c\(loadCount)".utf8))
+    }
+}
+
 @Suite("RecallService", .serialized)
 struct RecallServiceTests {
     @Test("isAvailable returns true (native implementation, no external binary)")
@@ -378,6 +402,51 @@ struct RecallServiceTests {
 
         let turns = try await RecallService.sessionHistory(agent: "claude", sessionID: "S1")
         #expect(turns == [.userMessage(text: "first ask", timestamp: Date(timeIntervalSince1970: 1))])
+    }
+
+    @Test("A text pass within the freshness window is reused, not rerun")
+    func keywordSearchReusesFreshTextPass() async throws {
+        RecallService._resetForTests()
+        let db = try SeshctlDatabase.temporary()
+        let adapter = ControllableAdapter(entries: [makeEntry(text: "sparkle appcast", sessionID: "S1")])
+        RecallService.configureForTesting(database: db, adapters: [adapter], embedder: NeverEmbedder())
+
+        _ = try await RecallService.keywordSearch(query: "sparkle")
+        let resp = try await RecallService.keywordSearch(query: "appcast")
+        #expect(resp.results.map(\.sessionId) == ["S1"])
+        #expect(await adapter.loadCount == 1)
+    }
+
+    @Test("Concurrent keyword searches share one in-flight text pass")
+    func keywordSearchJoinsInFlightTextPass() async throws {
+        RecallService._resetForTests()
+        let db = try SeshctlDatabase.temporary()
+        let adapter = ControllableAdapter(
+            entries: [makeEntry(text: "sparkle appcast", sessionID: "S1")],
+            delayNanos: 100_000_000
+        )
+        RecallService.configureForTesting(database: db, adapters: [adapter], embedder: NeverEmbedder())
+
+        async let first = RecallService.keywordSearch(query: "sparkle")
+        async let second = RecallService.keywordSearch(query: "appcast")
+        let (a, b) = try await (first, second)
+        #expect(a.results.count == 1 && b.results.count == 1)
+        #expect(await adapter.loadCount == 1)
+    }
+
+    @Test("A failing text pass still searches the existing index, and isn't retried every keystroke")
+    func keywordSearchSurvivesTextPassFailure() async throws {
+        RecallService._resetForTests()
+        let db = try SeshctlDatabase.temporary()
+        // Rows an earlier, successful pass stored.
+        _ = try await VectorStore(database: db).insertText(entries: [makeEntry(text: "zombie reaper", sessionID: "S1")])
+        let adapter = ControllableAdapter(fails: true)
+        RecallService.configureForTesting(database: db, adapters: [adapter], embedder: NeverEmbedder())
+
+        let resp = try await RecallService.keywordSearch(query: "zombie")
+        #expect(resp.results.map(\.sessionId) == ["S1"])
+        _ = try await RecallService.keywordSearch(query: "reaper")
+        #expect(await adapter.loadCount == 1, "a failed pass counts as fresh")
     }
 
     @Test("keywordSearch with nothing searchable returns empty without building the stack")

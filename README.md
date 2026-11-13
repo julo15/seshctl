@@ -55,7 +55,7 @@ Press **Cmd+Shift+S** to toggle the session panel.
 - **t** — suggest a title for the selected session, describing what it's doing now (takes a few seconds). Press **y** to use it, **n** or **Esc** to keep the current title, **t** for another. A picked title sticks to the conversation across resumes and restarts. Runs Claude Haiku through your `claude` CLI, so it uses your Claude plan
 - **c** — show closed sessions, one per conversation; **Enter** reopens the selected one, **/** narrows, **Esc** or **q** goes back (press again to close the panel)
 - **h / l** — in tree mode, jump to previous/next group
-- **/** — search/filter sessions
+- **/** — search: filters the panel's sessions as you type, and searches every saved transcript message in the **History** section. Words match as prefixes, all must match, and `"quoted text"` is an exact phrase. A result whose transcript Claude Code has deleted says "transcript deleted"; **Enter** shows what search history kept
 - **?** — open the keyboard help popover
 - **q** or **Esc** — dismiss the panel
 

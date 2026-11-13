@@ -100,7 +100,8 @@ struct SessionDetailViewModelTests {
         vm.load()
         #expect(vm.isLoading)
         await waitUntil { !vm.isLoading }
-        #expect(vm.error == SessionDetailViewModel.deletedTranscriptMessage)
+        #expect(vm.error == SessionDetailViewModel.historyFallbackMessage(agent: "claude"))
+        #expect(vm.error?.contains("deleted") == true)
         #expect(vm.indexedMessage == "test recall text")
         #expect(!vm.isRebuiltFromHistory)
     }
@@ -121,6 +122,7 @@ struct SessionDetailViewModelTests {
         await waitUntil { !vm.isLoading }
         #expect(vm.error == nil)
         #expect(vm.isRebuiltFromHistory)
+        #expect(vm.rebuiltFromHistoryMessage.contains(SessionDetailViewModel.claudeRetentionNote))
         #expect(vm.turns == [ask, match, reply])
         #expect(vm.initialScrollTurnId == match.id)
     }
@@ -133,8 +135,22 @@ struct SessionDetailViewModelTests {
         vm.historyProvider = { _, _ in throw Boom() }
         vm.load()
         await waitUntil { !vm.isLoading }
-        #expect(vm.error == SessionDetailViewModel.deletedTranscriptMessage)
+        #expect(vm.error?.hasPrefix("Couldn't load search history") == true)
         #expect(vm.indexedMessage == "test recall text")
+    }
+
+    @Test("A Codex history result isn't described as deleted by Claude Code")
+    func codexRecallResultNeutralCopy() async {
+        let result = makeRecallResult(sessionId: "nonexistent-\(UUID().uuidString)", agent: "codex")
+        let reply = ConversationTurn.assistantMessage(text: "test recall text", toolCalls: [], timestamp: Date())
+        let vm = SessionDetailViewModel(recallResult: result, session: nil)
+        vm.historyProvider = { _, _ in [reply] }
+        vm.load()
+        await waitUntil { !vm.isLoading }
+        #expect(vm.isRebuiltFromHistory)
+        #expect(vm.rebuiltFromHistoryMessage.hasPrefix("Transcript file not found"))
+        #expect(!vm.rebuiltFromHistoryMessage.contains("Claude"))
+        #expect(!SessionDetailViewModel.historyFallbackMessage(agent: "codex").contains("Claude"))
     }
 
     @Test("matchedTurnId is nil when the matched message isn't among the turns")

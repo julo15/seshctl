@@ -1329,7 +1329,6 @@ struct SessionListViewModelTests {
 
         #expect(vm.recallResults.isEmpty)
         #expect(vm.isRecallSearching == false)
-        #expect(vm.recallIndexingDone == nil)
     }
 
     @Test("exitSearch clears recall state")
@@ -1348,7 +1347,6 @@ struct SessionListViewModelTests {
 
         #expect(vm.recallResults.isEmpty)
         #expect(vm.isRecallSearching == false)
-        #expect(vm.recallIndexingDone == nil)
         #expect(vm.isSearching == false)
         #expect(vm.searchQuery == "")
     }
@@ -1379,7 +1377,7 @@ struct SessionListViewModelTests {
     func recallErrorMessagePopulatedOnSearchFailed() async throws {
         let db = try SeshctlDatabase.temporary()
         let vm = SessionListViewModel(database: db, enableGC: false)
-        vm.recallSearchProvider = { _, _ in
+        vm.recallSearchProvider = { _ in
             throw RecallError.searchFailed("boom: traceback line 1\ntraceback line 2")
         }
         vm.enterSearch()
@@ -1399,7 +1397,7 @@ struct SessionListViewModelTests {
     func recallErrorMessagePopulatedOnTimeout() async throws {
         let db = try SeshctlDatabase.temporary()
         let vm = SessionListViewModel(database: db, enableGC: false)
-        vm.recallSearchProvider = { _, _ in
+        vm.recallSearchProvider = { _ in
             throw RecallError.timeout
         }
         vm.enterSearch()
@@ -1416,7 +1414,7 @@ struct SessionListViewModelTests {
     func recallErrorMessageOnNotInstalled() async throws {
         let db = try SeshctlDatabase.temporary()
         let vm = SessionListViewModel(database: db, enableGC: false)
-        vm.recallSearchProvider = { _, _ in
+        vm.recallSearchProvider = { _ in
             throw RecallError.notInstalled
         }
         vm.enterSearch()
@@ -1432,7 +1430,7 @@ struct SessionListViewModelTests {
     func recallErrorMessageClearedByExitSearch() async throws {
         let db = try SeshctlDatabase.temporary()
         let vm = SessionListViewModel(database: db, enableGC: false)
-        vm.recallSearchProvider = { _, _ in
+        vm.recallSearchProvider = { _ in
             throw RecallError.searchFailed("boom")
         }
         vm.enterSearch()
@@ -1450,7 +1448,7 @@ struct SessionListViewModelTests {
     func recallErrorMessageClearedByBackspaceToEmpty() async throws {
         let db = try SeshctlDatabase.temporary()
         let vm = SessionListViewModel(database: db, enableGC: false)
-        vm.recallSearchProvider = { _, _ in
+        vm.recallSearchProvider = { _ in
             throw RecallError.searchFailed("boom")
         }
         vm.enterSearch()
@@ -1480,7 +1478,7 @@ struct SessionListViewModelTests {
     func recallErrorMessageClearedByClearSearchQuery() async throws {
         let db = try SeshctlDatabase.temporary()
         let vm = SessionListViewModel(database: db, enableGC: false)
-        vm.recallSearchProvider = { _, _ in
+        vm.recallSearchProvider = { _ in
             throw RecallError.searchFailed("boom")
         }
         vm.enterSearch()
@@ -1499,7 +1497,7 @@ struct SessionListViewModelTests {
     func recallErrorMessageClearedByNewSearch() async throws {
         let db = try SeshctlDatabase.temporary()
         let vm = SessionListViewModel(database: db, enableGC: false)
-        vm.recallSearchProvider = { _, _ in
+        vm.recallSearchProvider = { _ in
             throw RecallError.searchFailed("oldboom")
         }
         vm.enterSearch()
@@ -1509,7 +1507,7 @@ struct SessionListViewModelTests {
         #expect(vm.recallErrorMessage != nil)
 
         // Swap in a successful provider, then trigger a new search by changing the query.
-        vm.recallSearchProvider = { _, _ in
+        vm.recallSearchProvider = { _ in
             RecallSearchResponse(results: [], indexingCount: nil)
         }
         vm.appendSearchCharacter("x")
@@ -1526,7 +1524,7 @@ struct SessionListViewModelTests {
 
         let db = try SeshctlDatabase.temporary()
         let vm = SessionListViewModel(database: db, enableGC: false)
-        vm.recallSearchProvider = { _, _ in
+        vm.recallSearchProvider = { _ in
             throw RecallError.searchFailed(longMessage)
         }
         vm.enterSearch()
@@ -3603,7 +3601,7 @@ struct SessionListViewModelTests {
         let kept = historyResult("kept")
         let gone = historyResult("gone")
         let codex = historyResult("codex-thread", agent: "codex")
-        vm.recallSearchProvider = { _, _ in
+        vm.recallSearchProvider = { _ in
             RecallSearchResponse(results: [kept, gone, codex], indexingCount: nil)
         }
         vm.enterSearch()
@@ -3625,7 +3623,7 @@ struct SessionListViewModelTests {
     func showsNoSearchResultsAfterEmptySearch() async throws {
         let db = try SeshctlDatabase.temporary()
         let vm = SessionListViewModel(database: db, enableGC: false)
-        vm.recallSearchProvider = { _, _ in
+        vm.recallSearchProvider = { _ in
             RecallSearchResponse(results: [], indexingCount: nil)
         }
         vm.enterSearch()
@@ -3654,7 +3652,7 @@ struct SessionListViewModelTests {
         let db = try SeshctlDatabase.temporary()
         let vm = SessionListViewModel(database: db, enableGC: false)
         let hit = historyResult("hit")
-        vm.recallSearchProvider = { query, _ in
+        vm.recallSearchProvider = { query in
             if query == "bo" { throw RecallError.searchFailed("boom") }
             return RecallSearchResponse(results: [hit], indexingCount: nil)
         }

@@ -1,14 +1,40 @@
 // KeywordSearch — the pure half of the panel's history search: turning what
 // the user typed into an FTS5 MATCH expression, and ranking message-level
-// FTS hits into one row per session.
+// FTS matches into one row per session.
 //
-// `VectorStore.keywordHits` runs the query; `RecallStack.keywordSearch`
-// wires the two together. Nothing here touches the database.
+// Search runs in two steps. `VectorStore.keywordCandidates` ranks matching
+// messages without reading their text, and `KeywordRanking` picks one per
+// session. Then `VectorStore.keywordHits(match:ids:)` loads text and a
+// snippet for just those rows. FTS5's `snippet()` re-tokenizes a message's
+// whole text, so computing it for every match stalled on huge pasted
+// messages (see `HistoryEntry.maxStoredTextLength`).
+// `RecallStack.keywordSearch` wires the steps together. Nothing here touches
+// the database.
 
 import Foundation
 import SeshctlCore
 
-/// One message that matched a keyword query.
+/// A message that matched a keyword query, without its text: what ranking
+/// needs, and cheap to fetch for hundreds of matches.
+public struct KeywordCandidate: Sendable, Equatable {
+    /// `recall_entries` row id.
+    public let id: Int64
+    public let agent: String
+    public let sessionID: String
+    public let timestamp: Double
+    /// FTS5 `bm25` score. More negative is a better match.
+    public let rank: Double
+
+    public init(id: Int64, agent: String, sessionID: String, timestamp: Double, rank: Double) {
+        self.id = id
+        self.agent = agent
+        self.sessionID = sessionID
+        self.timestamp = timestamp
+        self.rank = rank
+    }
+}
+
+/// One message that matched a keyword query, with its text and snippet.
 public struct KeywordHit: Sendable, Equatable {
     /// Marks the start of a matched term inside `snippet`. Shared with
     /// `RecallResult`, whose `snippetSegments` parses it for display.
@@ -17,15 +43,12 @@ public struct KeywordHit: Sendable, Equatable {
     public static let matchEnd = String(RecallResult.snippetMatchEnd)
 
     public let entry: HistoryEntry
-    /// FTS5 `bm25` score. More negative is a better match.
-    public let rank: Double
     /// Excerpt around the match, with matched terms wrapped in
     /// `matchStart` / `matchEnd`.
     public let snippet: String
 
-    public init(entry: HistoryEntry, rank: Double, snippet: String) {
+    public init(entry: HistoryEntry, snippet: String) {
         self.entry = entry
-        self.rank = rank
         self.snippet = snippet
     }
 }
@@ -43,7 +66,8 @@ public enum KeywordQuery {
     ///   only as whole words, since a one-letter prefix matches nearly
     ///   every message and is slow.
     /// - Text in double quotes is a phrase: its words must appear together,
-    ///   in order. An unclosed quote runs to the end of the input.
+    ///   in order. An unclosed quote runs to the end of the input, and its
+    ///   last word matches as a prefix (it's still being typed).
     /// - All words and phrases are required.
     /// - Input whose longest word is under two characters returns `nil`.
     ///
@@ -54,13 +78,19 @@ public enum KeywordQuery {
         var longestWord = 0
 
         let segments = query.split(separator: "\"", omittingEmptySubsequences: false)
+        // An even segment count means an odd number of quotes: the last
+        // phrase is still open.
+        let lastPhraseIsOpen = segments.count % 2 == 0
         for (index, segment) in segments.enumerated() {
             let words = Self.words(in: segment)
             longestWord = max(longestWord, words.map(\.count).max() ?? 0)
             // Odd segments sit between quotes.
             if index % 2 == 1 {
                 if !words.isEmpty {
-                    terms.append("\"\(words.joined(separator: " "))\"")
+                    let phrase = "\"\(words.joined(separator: " "))\""
+                    let isOpen = lastPhraseIsOpen && index == segments.count - 1
+                    // FTS5 applies a phrase's `*` to its last token.
+                    terms.append(isOpen && (words.last?.count ?? 0) >= 2 ? phrase + "*" : phrase)
                 }
             } else {
                 for word in words {
@@ -81,7 +111,7 @@ public enum KeywordQuery {
 }
 
 public enum KeywordRanking {
-    /// Collapse message-level hits into one result per session, best first.
+    /// Collapse message-level matches into one per session, best first.
     ///
     /// A session's representative hit is its best-ranked message. Its score
     /// is that message's relevance (`-bm25`) scaled by the age of the
@@ -90,31 +120,31 @@ public enum KeywordRanking {
     /// to the session with the newer match.
     ///
     /// - Parameters:
-    ///   - hits: message-level hits, in any order.
+    ///   - candidates: message-level matches, in any order.
     ///   - now: unix seconds to measure age from.
     ///   - limit: cap on returned sessions.
     public static func rankSessions(
-        _ hits: [KeywordHit],
+        _ candidates: [KeywordCandidate],
         now: Double,
         limit: Int
-    ) -> [(hit: KeywordHit, score: Double)] {
+    ) -> [(candidate: KeywordCandidate, score: Double)] {
         guard limit > 0 else { return [] }
 
-        var best: [String: KeywordHit] = [:]
+        var best: [String: KeywordCandidate] = [:]
         var latest: [String: Double] = [:]
-        for hit in hits {
-            let key = "\(hit.entry.agent)|\(hit.entry.sessionID)"
-            if let current = best[key], current.rank <= hit.rank {
+        for candidate in candidates {
+            let key = "\(candidate.agent)|\(candidate.sessionID)"
+            if let current = best[key], current.rank <= candidate.rank {
                 // keep current
             } else {
-                best[key] = hit
+                best[key] = candidate
             }
-            latest[key] = max(latest[key] ?? hit.entry.timestamp, hit.entry.timestamp)
+            latest[key] = max(latest[key] ?? candidate.timestamp, candidate.timestamp)
         }
 
-        let scored: [(hit: KeywordHit, score: Double, latest: Double)] = best.map { key, hit in
-            let lastActive = latest[key] ?? hit.entry.timestamp
-            return (hit, score(rank: hit.rank, lastActive: lastActive, now: now), lastActive)
+        let scored: [(candidate: KeywordCandidate, score: Double, latest: Double)] = best.map { key, candidate in
+            let lastActive = latest[key] ?? candidate.timestamp
+            return (candidate, score(rank: candidate.rank, lastActive: lastActive, now: now), lastActive)
         }
 
         return scored
@@ -122,7 +152,7 @@ public enum KeywordRanking {
                 a.score != b.score ? a.score > b.score : a.latest > b.latest
             }
             .prefix(limit)
-            .map { ($0.hit, $0.score) }
+            .map { ($0.candidate, $0.score) }
     }
 
     static let recencyHalfLifeDays = 21.0

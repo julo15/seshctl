@@ -74,7 +74,7 @@ public actor VectorStore {
                     entry.sessionID,
                     entry.project,
                     entry.timestamp,
-                    entry.text,
+                    entry.storedText,
                     entry.textHash,
                 ])
                 // `changes` is 1 if the row landed, 0 if IGNOREd.
@@ -93,15 +93,34 @@ public actor VectorStore {
         }
     }
 
+    /// Rows per write transaction in `insertText`.
+    static let insertTextBatchSize = 500
+
     /// Insert entries without embeddings. Same dedup rule as
     /// `insert(entries:embeddings:)`. The FTS triggers index each landed
     /// row, so it's keyword-searchable as soon as this returns.
     ///
+    /// Writes in transactions of `insertTextBatchSize` rows. A first run
+    /// inserts the whole history (16k+ rows, each with FTS work), and the
+    /// database has no busy timeout, so one long transaction would make the
+    /// hooks' session-status writes fail for its whole duration.
+    ///
     /// - Returns: the row ids of the entries that were actually inserted.
     @discardableResult
     public func insertText(entries: [HistoryEntry]) throws -> [Int64] {
-        guard !entries.isEmpty else { return [] }
-        return try database.dbPool.write { db in
+        var inserted: [Int64] = []
+        inserted.reserveCapacity(entries.count)
+        var start = entries.startIndex
+        while start < entries.endIndex {
+            let end = min(start + Self.insertTextBatchSize, entries.endIndex)
+            inserted += try insertTextBatch(entries[start..<end])
+            start = end
+        }
+        return inserted
+    }
+
+    private func insertTextBatch(_ entries: ArraySlice<HistoryEntry>) throws -> [Int64] {
+        try database.dbPool.write { db in
             var inserted: [Int64] = []
             inserted.reserveCapacity(entries.count)
             for entry in entries {
@@ -115,7 +134,7 @@ public actor VectorStore {
                     entry.sessionID,
                     entry.project,
                     entry.timestamp,
-                    entry.text,
+                    entry.storedText,
                     entry.textHash,
                 ])
                 guard db.changesCount == 1 else { continue }
@@ -190,16 +209,7 @@ public actor VectorStore {
             var byID: [Int64: HistoryEntry] = [:]
             byID.reserveCapacity(rows.count)
             for row in rows {
-                let entry = HistoryEntry(
-                    id: row["id"],
-                    agent: row["agent"],
-                    role: row["role"],
-                    sessionID: row["session_id"],
-                    project: row["project"],
-                    timestamp: row["timestamp"],
-                    text: row["text"],
-                    textHash: row["text_hash"]
-                )
+                let entry = Self.entry(from: row)
                 if let entryID = entry.id {
                     byID[entryID] = entry
                 }
@@ -252,39 +262,77 @@ public actor VectorStore {
         }
     }
 
-    /// Full-text search over entry text, best match first.
+    /// Step 1 of keyword search: messages matching an FTS5 MATCH
+    /// expression, best first, without their text.
     ///
     /// - Parameters:
-    ///   - match: an FTS5 MATCH expression. Build it with
-    ///     `KeywordQuery.matchExpression(for:)`; raw user input can be a
+    ///   - match: an FTS5 query, normally from
+    ///     `KeywordQuery.matchExpression(for:)`. Raw user input can be a
     ///     syntax error.
-    ///   - limit: cap on message-level hits. Callers group these by session.
-    /// - Returns: hits ordered by FTS5's `bm25` (more negative is better).
-    ///   Each snippet wraps matched terms in `KeywordHit.matchStart` /
-    ///   `KeywordHit.matchEnd`.
-    public func keywordHits(match: String, limit: Int) throws -> [KeywordHit] {
+    ///   - limit: cap on message-level matches. Callers group these by session.
+    /// - Returns: matches ordered by FTS5's `bm25` (more negative is better).
+    public func keywordCandidates(match: String, limit: Int) throws -> [KeywordCandidate] {
         try database.dbPool.read { db in
             let rows = try Row.fetchAll(
                 db,
                 sql: """
-                    SELECT e.id, e.agent, e.role, e.session_id, e.project, e.timestamp, e.text, e.text_hash,
-                           bm25(recall_fts) AS rank,
-                           snippet(recall_fts, 0, ?, ?, '…', 16) AS snippet
+                    SELECT e.id, e.agent, e.session_id, e.timestamp, bm25(recall_fts) AS rank
                     FROM recall_fts
                     JOIN recall_entries e ON e.id = recall_fts.rowid
                     WHERE recall_fts MATCH ?
                     ORDER BY rank
                     LIMIT ?
                 """,
-                arguments: [KeywordHit.matchStart, KeywordHit.matchEnd, match, limit]
+                arguments: [match, limit]
             )
             return rows.map { row in
-                KeywordHit(
-                    entry: Self.entry(from: row),
-                    rank: row["rank"],
-                    snippet: row["snippet"]
+                KeywordCandidate(
+                    id: row["id"],
+                    agent: row["agent"],
+                    sessionID: row["session_id"],
+                    timestamp: row["timestamp"],
+                    rank: row["rank"]
                 )
             }
+        }
+    }
+
+    /// Step 2 of keyword search: full entries and snippets for the chosen
+    /// candidates. `snippet()` costs time in proportion to a message's
+    /// length, which is why it runs only for the rows that get shown.
+    ///
+    /// - Parameters:
+    ///   - match: the same MATCH expression the candidates came from.
+    ///     `snippet()` needs it to find the matched terms.
+    ///   - ids: candidate ids, in display order.
+    /// - Returns: hits in the order of `ids`. Ids that no longer match are
+    ///   dropped. Each snippet wraps matched terms in `KeywordHit.matchStart` /
+    ///   `KeywordHit.matchEnd`.
+    public func keywordHits(match: String, ids: [Int64]) throws -> [KeywordHit] {
+        guard !ids.isEmpty else { return [] }
+        return try database.dbPool.read { db in
+            let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ",")
+            var arguments: StatementArguments = [KeywordHit.matchStart, KeywordHit.matchEnd, match]
+            arguments += StatementArguments(ids)
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT e.id, e.agent, e.role, e.session_id, e.project, e.timestamp, e.text, e.text_hash,
+                           snippet(recall_fts, 0, ?, ?, '…', 16) AS snippet
+                    FROM recall_fts
+                    JOIN recall_entries e ON e.id = recall_fts.rowid
+                    WHERE recall_fts MATCH ? AND recall_fts.rowid IN (\(placeholders))
+                """,
+                arguments: arguments
+            )
+            var byID: [Int64: KeywordHit] = [:]
+            for row in rows {
+                let entry = Self.entry(from: row)
+                if let id = entry.id {
+                    byID[id] = KeywordHit(entry: entry, snippet: row["snippet"])
+                }
+            }
+            return ids.compactMap { byID[$0] }
         }
     }
 

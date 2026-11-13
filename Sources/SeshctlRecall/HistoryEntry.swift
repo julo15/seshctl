@@ -12,7 +12,6 @@
 import CryptoKit
 import Foundation
 import SeshctlCore
-import Foundation
 
 public struct HistoryEntry: Sendable, Equatable {
     /// Row id assigned by SQLite. `nil` before insert; populated by
@@ -82,5 +81,22 @@ extension HistoryEntry {
         case "assistant": return .assistantMessage(text: text, toolCalls: [], timestamp: date)
         default: return nil
         }
+    }
+}
+
+extension HistoryEntry {
+    /// Longest message text the index stores, in characters. Longer
+    /// messages (pasted logs and network captures, tens of MB) are truncated
+    /// on insert. FTS5's `snippet()` re-tokenizes a message's whole text,
+    /// and took ~40s on a 20 MB one. Search only matches the stored prefix,
+    /// but `textHash` is still computed from the full text, so dedup is
+    /// unchanged.
+    public static let maxStoredTextLength = 100_000
+
+    /// `text`, truncated to `maxStoredTextLength`.
+    public var storedText: String {
+        text.count > Self.maxStoredTextLength
+            ? String(text.prefix(Self.maxStoredTextLength))
+            : text
     }
 }

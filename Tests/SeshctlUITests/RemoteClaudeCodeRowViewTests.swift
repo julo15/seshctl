@@ -101,6 +101,33 @@ struct StatusKindForRemoteTests {
     }
 }
 
+// MARK: - StatusKind.forHistoryResult tests
+
+@Suite("StatusKind.forHistoryResult")
+struct StatusKindForHistoryResultTests {
+
+    @Test("deleted transcript renders hollow, even when the session is active")
+    func deletedTranscriptIsCompleted() {
+        #expect(StatusKind.forHistoryResult(liveStatus: nil, isTranscriptDeleted: true) == .completed)
+        #expect(StatusKind.forHistoryResult(liveStatus: .working, isTranscriptDeleted: true) == .completed)
+        #expect(StatusKind.completed.isHollow)
+    }
+
+    @Test("a live session shows its real status")
+    func liveSessionUsesItsStatus() {
+        for status in [SessionStatus.working, .waiting, .idle] {
+            #expect(StatusKind.forHistoryResult(liveStatus: status, isTranscriptDeleted: false) == status.statusKind)
+        }
+    }
+
+    @Test("no live session renders idle gray")
+    func noLiveSessionIsIdle() {
+        let kind = StatusKind.forHistoryResult(liveStatus: nil, isTranscriptDeleted: false)
+        #expect(kind == .idle)
+        #expect(!kind.isHollow)
+    }
+}
+
 // MARK: - StatusKind color tests
 
 @Suite("StatusKind.color")

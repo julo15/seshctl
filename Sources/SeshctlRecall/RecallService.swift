@@ -1,10 +1,14 @@
-// RecallService — the static-API façade callers use to run semantic recall
-// searches. Backed by `RecallStack`, an actor that lazily wires up
+// RecallService — the static-API façade callers use to search indexed
+// transcript history. Backed by `RecallStack`, an actor that lazily wires up
 // `EmbeddingService` + `VectorStore` + `Indexer` + `Search` on first use.
 //
-// Public surface (preserved from the pre-Phase-6 stub so the UI doesn't
-// ripple):
-//   - `RecallService.search(query:limit:onIndexing:)` — static async, throws.
+// Public surface:
+//   - `RecallService.keywordSearch(query:limit:)` — FTS5 history search; the
+//     panel's History section. Never waits on embeddings.
+//   - `RecallService.sessionHistory(agent:sessionID:)` — one session's
+//     indexed messages, for rebuilding a deleted transcript.
+//   - `RecallService.search(query:limit:onIndexing:)` — semantic search.
+//     Not wired to the panel; kept for a future LLM tier.
 //   - `RecallService.isAvailable()` — static; always `true` for the native
 //     implementation (no external binary to probe).
 //
@@ -21,6 +25,9 @@
 
 import Foundation
 import SeshctlCore
+import os
+
+private let recallLogger = Logger(subsystem: "app.seshctl", category: "recall")
 
 // MARK: - Public response type.
 
@@ -464,24 +471,35 @@ final actor RecallStack {
         guard let match = KeywordQuery.matchExpression(for: query) else {
             return RecallSearchResponse(results: [], indexingCount: nil)
         }
-        try await ensureTextIndexed()
+        do {
+            try await ensureTextIndexed()
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // The index already holds everything earlier passes stored, so
+            // search it anyway rather than failing every keystroke.
+            recallLogger.error("Text indexing failed; searching the existing index: \(error.localizedDescription, privacy: .public)")
+        }
 
-        // Message-level hits; plenty to fill `limit` sessions even when a
-        // few chatty sessions dominate the top matches.
-        let hits = try await vectorStore.keywordHits(match: match, limit: 500)
+        // Message-level matches, without text; plenty to fill `limit`
+        // sessions even when a few chatty sessions dominate the top.
+        let candidates = try await vectorStore.keywordCandidates(match: match, limit: 500)
         let ranked = KeywordRanking.rankSessions(
-            hits,
+            candidates,
             now: Date().timeIntervalSince1970,
             limit: limit
         )
-        let results = ranked.map { hit, score in
+        // Text and snippets only for the rows shown.
+        let hits = try await vectorStore.keywordHits(match: match, ids: ranked.map(\.candidate.id))
+        let scores = Dictionary(uniqueKeysWithValues: ranked.map { ($0.candidate.id, $0.score) })
+        let results = hits.map { hit in
             RecallResult(
                 agent: hit.entry.agent,
                 role: hit.entry.role,
                 sessionId: hit.entry.sessionID,
                 project: hit.entry.project,
                 timestamp: hit.entry.timestamp,
-                score: score,
+                score: hit.entry.id.flatMap { scores[$0] } ?? 0,
                 resumeCmd: Self.resumeCommand(for: hit.entry),
                 text: hit.entry.text,
                 snippet: hit.snippet
@@ -606,9 +624,9 @@ final actor RecallStack {
         let task = Task<Void, Error>.detached { [self] in
             do {
                 try await self.indexer.indexText()
-                await self.finishTextIndexing(succeeded: true)
+                await self.finishTextIndexing()
             } catch {
-                await self.finishTextIndexing(succeeded: false)
+                await self.finishTextIndexing()
                 throw error
             }
         }
@@ -616,9 +634,12 @@ final actor RecallStack {
         try await task.value
     }
 
-    private func finishTextIndexing(succeeded: Bool) {
+    /// A failed pass counts as fresh too: keyword search falls back to the
+    /// existing index, and retrying a failing walk on every keystroke would
+    /// only repeat the failure. The next pass runs once it goes stale.
+    private func finishTextIndexing() {
         textIndexingTask = nil
-        if succeeded { lastTextIndexedAt = Date() }
+        lastTextIndexedAt = Date()
     }
 
     /// Add a progress subscriber. Returns the id to use for unsubscribe.

@@ -141,9 +141,7 @@ public final class SessionListViewModel: ObservableObject {
     var codexThreadNameCachePaths: Set<String> { Set(codexThreadNameCache.keys) }
     @Published public private(set) var recallResults: [RecallResult] = []
     @Published public private(set) var isRecallSearching: Bool = false
-    @Published public private(set) var recallIndexingDone: Int?
-    @Published public private(set) var recallIndexingTotal: Int?
-    /// User-facing one-line failure message for the semantic search
+    /// User-facing one-line failure message for the History search
     /// section. Populated on any `RecallError` (the detail is truncated
     /// via `firstLine` to keep the row compact). Cleared on every new
     /// search, on `exitSearch()`, and when the query empties.
@@ -1066,7 +1064,7 @@ public final class SessionListViewModel: ObservableObject {
         return orderedRows.count
     }
 
-    /// The currently selected recall result, if the selection is in the semantic section.
+    /// The currently selected recall result, if the selection is in the History section.
     public var selectedRecallResult: RecallResult? {
         let rowsCount = orderedRows.count
         guard isSearching, selectedIndex >= rowsCount else { return nil }
@@ -1743,8 +1741,6 @@ public final class SessionListViewModel: ObservableObject {
 
     private func clearRecallSearchState() {
         isRecallSearching = false
-        recallIndexingDone = nil
-        recallIndexingTotal = nil
     }
 
     private func triggerRecallSearch() {
@@ -1770,10 +1766,8 @@ public final class SessionListViewModel: ObservableObject {
         }
     }
 
-    private var recallSearchGeneration: Int = 0
-
     /// Test seam: replace to inject canned recall outcomes.
-    internal var recallSearchProvider: @Sendable (String, (@Sendable (Int, Int) -> Void)?) async throws -> RecallSearchResponse = { query, onIndexing in
+    internal var recallSearchProvider: @Sendable (String) async throws -> RecallSearchResponse = { query in
         try await RecallService.keywordSearch(query: query)
     }
 
@@ -1791,22 +1785,11 @@ public final class SessionListViewModel: ObservableObject {
         isRecallSearching = true
         recallResults = []
         recallErrorMessage = nil
-        recallIndexingDone = nil
-        recallIndexingTotal = nil
-        recallSearchGeneration += 1
-        let searchGen = recallSearchGeneration
 
         recallSearchTask = Task { @MainActor [weak self] in
             do {
-                let onIndexing: @Sendable (Int, Int) -> Void = { [weak self] done, total in
-                    Task { @MainActor [weak self] in
-                        guard self?.recallSearchGeneration == searchGen else { return }
-                        self?.recallIndexingDone = done
-                        self?.recallIndexingTotal = total
-                    }
-                }
                 guard let provider = self?.recallSearchProvider else { return }
-                let response = try await provider(query, onIndexing)
+                let response = try await provider(query)
                 guard !Task.isCancelled else { return }
                 // Filter out recall hits for sessions we're already showing as local rows.
                 let shownIds = Set((self?.orderedRows ?? []).compactMap { row -> String? in
@@ -1814,11 +1797,14 @@ public final class SessionListViewModel: ObservableObject {
                 })
                 guard let self else { return }
                 let results = response.results.filter { !shownIds.contains($0.sessionId) }
-                self.deletedTranscriptSessionIds = Set(
-                    results
-                        .filter { !Self.transcriptExists(for: $0, projectsRoot: self.projectsRoot) }
-                        .map(\.sessionId)
-                )
+                // Filesystem checks (a directory walk per deleted result),
+                // so they stay off the main actor.
+                let root = self.projectsRoot
+                let deleted = await Task.detached {
+                    Set(results.filter { !Self.transcriptExists(for: $0, projectsRoot: root) }.map(\.sessionId))
+                }.value
+                guard !Task.isCancelled else { return }
+                self.deletedTranscriptSessionIds = deleted
                 self.recallResults = results
                 self.recallCompletedQuery = query
                 self.recallGeneration += 1

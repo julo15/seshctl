@@ -114,3 +114,18 @@ extension StatusKind {
         return .idle
     }
 }
+
+extension StatusKind {
+    /// Status dot for a History search row. A deleted transcript can't be
+    /// resumed, so it renders hollow like an ended session. A row whose
+    /// session is still live shows that session's real status (working
+    /// pulses, waiting pings, idle stays gray). Anything else is idle gray.
+    ///
+    /// - Parameter liveStatus: the matching session's status, only when the
+    ///   session is active. A closed session's `.completed` would otherwise
+    ///   render hollow and read as "deleted".
+    public static func forHistoryResult(liveStatus: SessionStatus?, isTranscriptDeleted: Bool) -> StatusKind {
+        if isTranscriptDeleted { return .completed }
+        return liveStatus?.statusKind ?? .idle
+    }
+}

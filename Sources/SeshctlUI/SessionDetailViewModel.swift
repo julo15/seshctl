@@ -2,6 +2,9 @@ import Foundation
 import SwiftUI
 import SeshctlCore
 import SeshctlRecall
+import os
+
+private let detailLogger = Logger(subsystem: "app.seshctl", category: "detail")
 
 @MainActor
 public final class SessionDetailViewModel: ObservableObject {
@@ -124,9 +127,18 @@ public final class SessionDetailViewModel: ObservableObject {
         isLoading = true
         let provider = historyProvider
         Task {
-            let turns = (try? await provider(result.agent, result.sessionId)) ?? []
+            let turns: [ConversationTurn]
+            do {
+                turns = try await provider(result.agent, result.sessionId)
+            } catch {
+                detailLogger.error("Loading search history for \(result.sessionId, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+                self.error = "Couldn't load search history (\(error.localizedDescription)). The matched message:"
+                self.indexedMessage = result.text
+                self.isLoading = false
+                return
+            }
             if turns.isEmpty {
-                self.error = Self.deletedTranscriptMessage
+                self.error = Self.historyFallbackMessage(agent: result.agent)
                 self.indexedMessage = result.text
             } else {
                 self.isRebuiltFromHistory = true
@@ -147,16 +159,31 @@ public final class SessionDetailViewModel: ObservableObject {
         }?.id
     }
 
-    /// Shown above a transcript rebuilt from the history index.
-    public static let rebuiltFromHistoryMessage =
-        "Transcript deleted by Claude Code. Rebuilt from search history: messages only, no tool calls, and it can't be resumed."
+    /// Why a Claude history result has no transcript: Claude Code deletes
+    /// transcripts older than `cleanupPeriodDays` (30 by default), while
+    /// seshctl's history index keeps their text. Shared by every surface
+    /// that explains a deleted transcript.
+    nonisolated public static let claudeRetentionNote = "Claude Code removes transcripts after 30 days by default."
 
-    /// Shown for a history result whose transcript file is gone. Claude Code
-    /// deletes transcripts older than `cleanupPeriodDays` (30 by default);
-    /// seshctl's history index keeps their text.
-    public static let deletedTranscriptMessage =
-        "This transcript was deleted, so it can't be opened or resumed. Claude Code removes transcripts after 30 days by default. Only the matched message was kept in search history:"
+    /// Banner above a transcript rebuilt from the history index. Only Claude
+    /// transcripts are known to be deleted; other agents' transcripts are
+    /// just ones the detail view can't locate.
+    public var rebuiltFromHistoryMessage: String {
+        let tail = "Rebuilt from search history: messages only, no tool calls."
+        guard recallResult?.agent == SessionTool.claude.rawValue else {
+            return "Transcript file not found. \(tail)"
+        }
+        return "Transcript deleted, so it can't be resumed. \(Self.claudeRetentionNote) \(tail)"
+    }
 
+    /// Shown with only the matched message, when the index has nothing else
+    /// for the session.
+    nonisolated static func historyFallbackMessage(agent: String) -> String {
+        guard agent == SessionTool.claude.rawValue else {
+            return "Transcript file not found. The matched message from search history:"
+        }
+        return "This transcript was deleted, so it can't be opened or resumed. \(claudeRetentionNote) Only the matched message was kept in search history:"
+    }
 
     public func load() {
         let url: URL

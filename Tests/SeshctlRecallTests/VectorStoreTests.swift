@@ -260,12 +260,88 @@ struct VectorStoreTests {
             makeTextEntry("nothing relevant here", seed: 3, sessionID: "S3"),
         ])
 
-        let hits = try await store.keywordHits(match: #""appc"*"#, limit: 10)
-        #expect(Set(hits.map(\.entry.sessionID)) == ["S1", "S2"])
-        #expect(hits.first?.entry.sessionID == "S2", "more occurrences rank higher")
-        #expect(hits.allSatisfy { $0.rank < 0 }, "bm25 is negative; lower is better")
-        let marked = hits.first { $0.entry.sessionID == "S1" }?.snippet
-        #expect(marked?.contains("\(KeywordHit.matchStart)appcast\(KeywordHit.matchEnd)") == true)
+        let candidates = try await store.keywordCandidates(match: #""appc"*"#, limit: 10)
+        #expect(Set(candidates.map(\.sessionID)) == ["S1", "S2"])
+        #expect(candidates.first?.sessionID == "S2", "more occurrences rank higher")
+        #expect(candidates.allSatisfy { $0.rank < 0 }, "bm25 is negative; lower is better")
+
+        let ids = candidates.map(\.id)
+        let hits = try await store.keywordHits(match: #""appc"*"#, ids: ids)
+        #expect(hits.compactMap(\.entry.id) == ids, "hits come back in the order asked for")
+        let s1 = hits.first { $0.entry.sessionID == "S1" }
+        #expect(s1?.entry.text == "the sparkle appcast is stale")
+        #expect(s1?.snippet.contains("\(KeywordHit.matchStart)appcast\(KeywordHit.matchEnd)") == true)
+    }
+
+    @Test("keywordHits(match:ids:) drops ids that don't match and handles no ids")
+    func keywordHitsDropsNonMatching() async throws {
+        let store = try makeStore()
+        let ids = try await store.insertText(entries: [
+            makeTextEntry("sparkle appcast", seed: 1, sessionID: "S1"),
+            makeTextEntry("unrelated", seed: 2, sessionID: "S2"),
+        ])
+        let hits = try await store.keywordHits(match: #""sparkle"*"#, ids: ids + [9_999])
+        #expect(hits.map(\.entry.sessionID) == ["S1"])
+        #expect(try await store.keywordHits(match: #""sparkle"*"#, ids: []).isEmpty)
+    }
+
+    @Test("FTS index follows updates: new text matches, old text doesn't")
+    func keywordIndexFollowsUpdates() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let store = VectorStore(database: db)
+        _ = try await store.insertText(entries: [makeTextEntry("sparkle appcast", seed: 1, sessionID: "S1")])
+        try await db.dbPool.write { rawDB in
+            try rawDB.execute(sql: "UPDATE recall_entries SET text = 'zombie reaper'")
+        }
+        #expect(try await store.keywordCandidates(match: #""zombie"*"#, limit: 10).count == 1)
+        #expect(try await store.keywordCandidates(match: #""sparkle"*"#, limit: 10).isEmpty)
+        try await db.dbPool.write { rawDB in
+            try rawDB.execute(sql: "INSERT INTO recall_fts(recall_fts, rank) VALUES ('integrity-check', 1)")
+        }
+    }
+
+    @Test("insertText truncates oversized text but keeps the full-text hash")
+    func insertTextTruncatesOversizedText() async throws {
+        let store = try makeStore()
+        let huge = String(repeating: "x", count: HistoryEntry.maxStoredTextLength) + " tailword"
+        let entry = HistoryEntry(
+            id: nil, agent: "claude", role: "user", sessionID: "S1", project: "/p",
+            timestamp: 1, text: huge, textHash: HistoryEntry.textHash(for: huge)
+        )
+        let ids = try await store.insertText(entries: [entry])
+        let stored = try await store.entries(forIDs: ids)
+        #expect(stored.first?.text.count == HistoryEntry.maxStoredTextLength)
+        #expect(stored.first?.textHash == HistoryEntry.textHash(for: huge))
+        #expect(try await store.keywordCandidates(match: #""tailword""#, limit: 10).isEmpty)
+        // Re-inserting the same full text still dedupes.
+        #expect(try await store.insertText(entries: [entry]).isEmpty)
+    }
+
+    @Test("insertText spans several write batches")
+    func insertTextSpansBatches() async throws {
+        let store = try makeStore()
+        let count = VectorStore.insertTextBatchSize * 2 + 7
+        let entries = (0..<count).map { makeTextEntry("row \($0)", seed: $0, sessionID: "S") }
+        let ids = try await store.insertText(entries: entries)
+        #expect(ids.count == count)
+        #expect(try await store.entryCount() == count)
+    }
+
+    @Test("v17 migration truncates text stored before the cap")
+    func migrationTruncatesOversizedRows() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let store = VectorStore(database: db)
+        _ = try await store.insertText(entries: [makeTextEntry("short", seed: 1, sessionID: "S1")])
+        // Simulate a pre-cap row, then run the migration's statement.
+        let long = String(repeating: "y", count: 150_000)
+        try await db.dbPool.write { rawDB in
+            try rawDB.execute(sql: "UPDATE recall_entries SET text = ?", arguments: [long])
+            try rawDB.execute(sql: SeshctlDatabase.truncateOversizedRecallTextSQL)
+        }
+        let length = try await db.dbPool.read { rawDB in
+            try Int.fetchOne(rawDB, sql: "SELECT length(text) FROM recall_entries")
+        }
+        #expect(length == HistoryEntry.maxStoredTextLength)
     }
 
     @Test("keywordHits requires every term")
@@ -275,18 +351,18 @@ struct VectorStoreTests {
             makeTextEntry("zombie process reaper", seed: 1, sessionID: "S1"),
             makeTextEntry("zombie movie night", seed: 2, sessionID: "S2"),
         ])
-        let hits = try await store.keywordHits(match: #""zombie"* "reaper"*"#, limit: 10)
-        #expect(hits.map(\.entry.sessionID) == ["S1"])
+        let hits = try await store.keywordCandidates(match: #""zombie"* "reaper"*"#, limit: 10)
+        #expect(hits.map(\.sessionID) == ["S1"])
     }
 
     @Test("FTS index follows deletes, so cleared entries stop matching")
     func keywordIndexFollowsDeletes() async throws {
         let store = try makeStore()
         _ = try await store.insertText(entries: [makeTextEntry("sparkle appcast", seed: 1, sessionID: "S1")])
-        #expect(try await store.keywordHits(match: #""sparkle"*"#, limit: 10).count == 1)
+        #expect(try await store.keywordCandidates(match: #""sparkle"*"#, limit: 10).count == 1)
 
         try await store.clearAllEntriesAndEmbeddings()
-        #expect(try await store.keywordHits(match: #""sparkle"*"#, limit: 10).isEmpty)
+        #expect(try await store.keywordCandidates(match: #""sparkle"*"#, limit: 10).isEmpty)
     }
 
     @Test("entries(agent:sessionID:) returns one session's messages oldest first")
@@ -324,12 +400,12 @@ struct VectorStoreTests {
         try await db.dbPool.write { rawDB in
             try rawDB.execute(sql: "INSERT INTO recall_fts(recall_fts) VALUES ('delete-all')")
         }
-        #expect(try await store.keywordHits(match: #""legacy"*"#, limit: 10).isEmpty)
+        #expect(try await store.keywordCandidates(match: #""legacy"*"#, limit: 10).isEmpty)
 
         try await db.dbPool.write { rawDB in
             try rawDB.execute(sql: "INSERT INTO recall_fts(recall_fts) VALUES ('rebuild')")
         }
-        #expect(try await store.keywordHits(match: #""legacy"*"#, limit: 10).count == 1)
+        #expect(try await store.keywordCandidates(match: #""legacy"*"#, limit: 10).count == 1)
     }
 }
 

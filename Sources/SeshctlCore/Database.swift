@@ -258,6 +258,13 @@ public struct SeshctlDatabase: Sendable {
         // inserts, deletes and updates. `prefix='2 3'` makes the
         // as-you-type prefix queries cheap. The rebuild indexes whatever
         // the recall indexer already stored.
+        // External-content FTS5 over `recall_entries.text`, kept in step by
+        // triggers. Any future migration that drops or recreates
+        // `recall_entries` must also drop, recreate and 'rebuild'
+        // `recall_fts`: dropping the content table doesn't error, it
+        // silently orphans the index. Builds before v16 still run the old
+        // drift check, so a downgrade wipes the index, deleted-transcript
+        // history included.
         migrator.registerMigration("v16_create_recall_fts") { db in
             try db.execute(sql: """
                 CREATE VIRTUAL TABLE recall_fts USING fts5(
@@ -281,10 +288,26 @@ public struct SeshctlDatabase: Sendable {
                 """)
         }
 
+        // Truncate messages stored before the index capped text length
+        // (`HistoryEntry.maxStoredTextLength`, 100k characters). A 20 MB
+        // pasted capture made FTS5's `snippet()` take ~40s. The update
+        // trigger re-indexes the shortened rows.
+        migrator.registerMigration("v17_truncate_oversized_recall_text") { db in
+            try db.execute(sql: Self.truncateOversizedRecallTextSQL)
+        }
+
         try migrator.migrate(dbPool)
     }
 
     // MARK: - Helpers
+
+    /// Body of migration v17. Internal so tests can run it against rows
+    /// written after the migration already ran.
+    static let truncateOversizedRecallTextSQL = """
+        UPDATE recall_entries
+        SET text = substr(text, 1, 100000)
+        WHERE length(text) > 100000
+        """
 
     private static let activeStatusFilter =
         Column("status") == SessionStatus.idle.rawValue

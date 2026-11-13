@@ -3,7 +3,8 @@ import SeshctlCore
 
 public struct RecallResultRowView: View {
     let result: RecallResult
-    let isActive: Bool
+    /// The matching session's status, when that session is active.
+    let liveStatus: SessionStatus?
     let hostApp: HostAppInfo?
     var searchQuery: String?
     /// The transcript is gone from disk: the row can't be resumed, so it
@@ -11,9 +12,9 @@ public struct RecallResultRowView: View {
     var isTranscriptDeleted: Bool
     var onDetail: (() -> Void)?
 
-    public init(result: RecallResult, isActive: Bool = false, hostApp: HostAppInfo? = nil, searchQuery: String? = nil, isTranscriptDeleted: Bool = false, onDetail: (() -> Void)? = nil) {
+    public init(result: RecallResult, liveStatus: SessionStatus? = nil, hostApp: HostAppInfo? = nil, searchQuery: String? = nil, isTranscriptDeleted: Bool = false, onDetail: (() -> Void)? = nil) {
         self.result = result
-        self.isActive = isActive
+        self.liveStatus = liveStatus
         self.isTranscriptDeleted = isTranscriptDeleted
         self.hostApp = hostApp
         self.searchQuery = searchQuery
@@ -30,17 +31,11 @@ public struct RecallResultRowView: View {
         )
     }
 
-    @ViewBuilder
     private var statusIndicator: some View {
-        if isTranscriptDeleted {
-            Circle()
-                .strokeBorder(Color.gray, lineWidth: 1.5)
-                .frame(width: 8, height: 8)
-        } else {
-            Circle()
-                .fill(isActive ? .green : .gray)
-                .frame(width: 8, height: 8)
-        }
+        AnimatedStatusDot(
+            kind: StatusKind.forHistoryResult(liveStatus: liveStatus, isTranscriptDeleted: isTranscriptDeleted),
+            age: ageDisplay.bucket
+        )
     }
 
     @ViewBuilder
@@ -64,7 +59,7 @@ public struct RecallResultRowView: View {
                     Label("transcript deleted", systemImage: "trash")
                         .font(.system(.footnote, design: .monospaced))
                         .foregroundStyle(.secondary)
-                        .help("Claude Code deleted this transcript (it removes them after 30 days by default), so it can't be resumed. Enter shows what search history kept.")
+                        .help("This transcript was deleted, so it can't be resumed. \(SessionDetailViewModel.claudeRetentionNote) Enter shows what search history kept.")
                 }
             }
 

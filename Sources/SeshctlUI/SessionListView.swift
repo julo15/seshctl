@@ -241,19 +241,9 @@ public struct SessionListView: View {
                                     HStack(spacing: 6) {
                                         ProgressView()
                                             .controlSize(.small)
-                                        Group {
-                                            if let total = viewModel.recallIndexingTotal {
-                                                if let done = viewModel.recallIndexingDone, done > 0 {
-                                                    Text("Indexing \(done)/\(total) entries...")
-                                                } else {
-                                                    Text("Indexing \(total) entries...")
-                                                }
-                                            } else {
-                                                Text("Searching...")
-                                            }
-                                        }
-                                        .font(.system(.footnote, design: .monospaced))
-                                        .foregroundStyle(.tertiary)
+                                        Text("Searching...")
+                                            .font(.system(.footnote, design: .monospaced))
+                                            .foregroundStyle(.tertiary)
                                     }
                                     .padding(.horizontal, 16)
                                     .padding(.vertical, 8)
@@ -269,7 +259,7 @@ public struct SessionListView: View {
 
                                         RecallResultRowView(
                                             result: result,
-                                            isActive: matchedSession?.isActive ?? false,
+                                            liveStatus: matchedSession.flatMap { $0.isActive ? $0.status : nil },
                                             hostApp: matchedSession.map { hostAppResolver.resolve(session: $0) },
                                             searchQuery: viewModel.searchQuery,
                                             isTranscriptDeleted: viewModel.isTranscriptDeleted(result),

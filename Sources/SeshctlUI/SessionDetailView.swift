@@ -57,7 +57,7 @@ public struct SessionDetailView: View {
             }
 
             if viewModel.isRebuiltFromHistory {
-                Label(SessionDetailViewModel.rebuiltFromHistoryMessage, systemImage: "clock.arrow.circlepath")
+                Label(viewModel.rebuiltFromHistoryMessage, systemImage: "clock.arrow.circlepath")
                     .font(.system(.footnote, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)

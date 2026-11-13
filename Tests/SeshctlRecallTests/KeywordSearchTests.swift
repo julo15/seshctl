@@ -12,22 +12,9 @@ private func hit(
     rank: Double,
     timestamp: Double,
     agent: String = "claude",
-    text: String = "t"
-) -> KeywordHit {
-    KeywordHit(
-        entry: HistoryEntry(
-            id: nil,
-            agent: agent,
-            role: "user",
-            sessionID: session,
-            project: "/p",
-            timestamp: timestamp,
-            text: text,
-            textHash: HistoryEntry.textHash(for: text)
-        ),
-        rank: rank,
-        snippet: text
-    )
+    id: Int64 = 0
+) -> KeywordCandidate {
+    KeywordCandidate(id: id, agent: agent, sessionID: session, timestamp: timestamp, rank: rank)
 }
 
 @Suite("KeywordQuery")
@@ -52,9 +39,13 @@ struct KeywordQueryTests {
         #expect(KeywordQuery.matchExpression(for: #"zombie "stale reaper""#) == #""zombie"* "stale reaper""#)
     }
 
-    @Test("An unclosed quote runs to the end of the input")
+    @Test("An unclosed quote runs to the end of the input, its last word a prefix")
     func unclosedQuote() {
-        #expect(KeywordQuery.matchExpression(for: #""stale rea"#) == #""stale rea""#)
+        #expect(KeywordQuery.matchExpression(for: #""stale rea"#) == #""stale rea"*"#)
+        // A closed phrase stays exact.
+        #expect(KeywordQuery.matchExpression(for: #""stale rea""#) == #""stale rea""#)
+        // A one-letter last word isn't prefixed, like unquoted words.
+        #expect(KeywordQuery.matchExpression(for: #"go "stale r"#) == #""go"* "stale r""#)
     }
 
     @Test("FTS syntax in the input is neutralized")
@@ -75,13 +66,13 @@ struct KeywordRankingTests {
     @Test("Collapses to one result per session, keeping its best message")
     func onePerSession() {
         let hits = [
-            hit(session: "A", rank: -2, timestamp: now, text: "weak"),
-            hit(session: "A", rank: -9, timestamp: now, text: "strong"),
+            hit(session: "A", rank: -2, timestamp: now, id: 1),
+            hit(session: "A", rank: -9, timestamp: now, id: 2),
             hit(session: "B", rank: -5, timestamp: now),
         ]
         let ranked = KeywordRanking.rankSessions(hits, now: now, limit: 10)
-        #expect(ranked.map(\.hit.entry.sessionID) == ["A", "B"])
-        #expect(ranked.first?.hit.entry.text == "strong")
+        #expect(ranked.map(\.candidate.sessionID) == ["A", "B"])
+        #expect(ranked.first?.candidate.id == 2)
     }
 
     @Test("Same session id under different agents stays separate")
@@ -99,7 +90,7 @@ struct KeywordRankingTests {
             hit(session: "old", rank: -6, timestamp: now - 120 * 86_400),
             hit(session: "new", rank: -5, timestamp: now),
         ]
-        #expect(KeywordRanking.rankSessions(hits, now: now, limit: 10).map(\.hit.entry.sessionID) == ["new", "old"])
+        #expect(KeywordRanking.rankSessions(hits, now: now, limit: 10).map(\.candidate.sessionID) == ["new", "old"])
     }
 
     @Test("A much better old match still wins")
@@ -108,7 +99,7 @@ struct KeywordRankingTests {
             hit(session: "old", rank: -20, timestamp: now - 120 * 86_400),
             hit(session: "new", rank: -5, timestamp: now),
         ]
-        #expect(KeywordRanking.rankSessions(hits, now: now, limit: 10).first?.hit.entry.sessionID == "old")
+        #expect(KeywordRanking.rankSessions(hits, now: now, limit: 10).first?.candidate.sessionID == "old")
     }
 
     @Test("Equal scores go to the session with the newer match")
@@ -123,7 +114,7 @@ struct KeywordRankingTests {
                 == KeywordRanking.score(rank: -4, lastActive: ancient + 1, now: now)
         )
         let ranked = KeywordRanking.rankSessions([a, b], now: now, limit: 10)
-        #expect(ranked.map(\.hit.entry.sessionID) == ["newer", "older"])
+        #expect(ranked.map(\.candidate.sessionID) == ["newer", "older"])
     }
 
     @Test("Honors the limit")
@@ -168,6 +159,43 @@ struct LazyEmbedderTests {
             _ = try await lazy.encode(["a"], batchSize: 1, onProgress: nil)
         }
         let vectors = try await lazy.encode(["a"], batchSize: 1, onProgress: nil)
+        #expect(vectors.count == 1)
+        #expect(await counter.count == 2)
+    }
+
+    @Test("Concurrent first encodes share one build")
+    func concurrentFirstEncodesShareBuild() async throws {
+        let counter = Counter()
+        let lazy = LazyEmbedder {
+            await counter.bump()
+            // Slow enough that the second encode arrives mid-build.
+            try await Task.sleep(nanoseconds: 50_000_000)
+            return MockEmbedder(perChunkDelayNanos: 0, vectorDim: 3)
+        }
+        async let first = lazy.encode(["a"], batchSize: 1, onProgress: nil)
+        async let second = lazy.encode(["b"], batchSize: 1, onProgress: nil)
+        let (a, b) = try await (first, second)
+        #expect(a.count == 1 && b.count == 1)
+        #expect(await counter.count == 1)
+    }
+
+    @Test("Concurrent encodes during a failing build all fail, and the next one retries")
+    func concurrentFailingBuild() async throws {
+        struct Boom: Error {}
+        let counter = Counter()
+        let lazy = LazyEmbedder {
+            await counter.bump()
+            try await Task.sleep(nanoseconds: 50_000_000)
+            if await counter.count == 1 { throw Boom() }
+            return MockEmbedder(perChunkDelayNanos: 0, vectorDim: 3)
+        }
+        async let first: [[Float]]? = try? lazy.encode(["a"], batchSize: 1, onProgress: nil)
+        async let second: [[Float]]? = try? lazy.encode(["b"], batchSize: 1, onProgress: nil)
+        let (a, b) = await (first, second)
+        #expect(a == nil && b == nil)
+        #expect(await counter.count == 1, "both waited on the same failed build")
+
+        let vectors = try await lazy.encode(["c"], batchSize: 1, onProgress: nil)
         #expect(vectors.count == 1)
         #expect(await counter.count == 2)
     }
