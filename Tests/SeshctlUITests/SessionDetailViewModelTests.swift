@@ -92,13 +92,79 @@ struct SessionDetailViewModelTests {
         #expect(vm.toolName == "claude")
     }
 
-    @Test("RecallResult with missing transcript file shows error")
-    func recallResultMissingTranscript() {
+    @Test("Deleted transcript with nothing in history explains why and keeps the matched message")
+    func recallResultMissingTranscript() async {
         let result = makeRecallResult(sessionId: "nonexistent-\(UUID().uuidString)")
         let vm = SessionDetailViewModel(recallResult: result, session: nil)
+        vm.historyProvider = { _, _ in [] }
         vm.load()
-        #expect(vm.error == "No transcript available")
-        #expect(!vm.isLoading)
+        #expect(vm.isLoading)
+        await waitUntil { !vm.isLoading }
+        #expect(vm.error == SessionDetailViewModel.deletedTranscriptMessage)
+        #expect(vm.indexedMessage == "test recall text")
+        #expect(!vm.isRebuiltFromHistory)
+    }
+
+    @Test("Deleted transcript is rebuilt from history and scrolls to the matched message")
+    func recallResultRebuiltFromHistory() async {
+        let result = makeRecallResult(sessionId: "nonexistent-\(UUID().uuidString)")
+        let ask = ConversationTurn.userMessage(text: "an earlier ask", timestamp: Date(timeIntervalSince1970: 1))
+        let match = ConversationTurn.userMessage(text: "test recall text", timestamp: Date(timeIntervalSince1970: 2))
+        let reply = ConversationTurn.assistantMessage(text: "a reply", toolCalls: [], timestamp: Date(timeIntervalSince1970: 3))
+        let vm = SessionDetailViewModel(recallResult: result, session: nil)
+        vm.historyProvider = { agent, sessionID in
+            #expect(agent == "claude")
+            #expect(sessionID == result.sessionId)
+            return [ask, match, reply]
+        }
+        vm.load()
+        await waitUntil { !vm.isLoading }
+        #expect(vm.error == nil)
+        #expect(vm.isRebuiltFromHistory)
+        #expect(vm.turns == [ask, match, reply])
+        #expect(vm.initialScrollTurnId == match.id)
+    }
+
+    @Test("A history provider failure falls back to the matched message")
+    func recallResultHistoryProviderFails() async {
+        struct Boom: Error {}
+        let result = makeRecallResult(sessionId: "nonexistent-\(UUID().uuidString)")
+        let vm = SessionDetailViewModel(recallResult: result, session: nil)
+        vm.historyProvider = { _, _ in throw Boom() }
+        vm.load()
+        await waitUntil { !vm.isLoading }
+        #expect(vm.error == SessionDetailViewModel.deletedTranscriptMessage)
+        #expect(vm.indexedMessage == "test recall text")
+    }
+
+    @Test("matchedTurnId is nil when the matched message isn't among the turns")
+    func matchedTurnIdMissing() {
+        let result = makeRecallResult()
+        let turns = [ConversationTurn.userMessage(text: "something else", timestamp: Date())]
+        #expect(SessionDetailViewModel.matchedTurnId(in: turns, for: result) == nil)
+    }
+
+    private func waitUntil(timeout: TimeInterval = 15, _ condition: () -> Bool) async {
+        let start = Date()
+        while !condition() && Date().timeIntervalSince(start) < timeout {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+
+    @Test("RecallResult resolves its transcript under the injected projects root")
+    func recallResultResolvesUnderProjectsRoot() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("seshctl-detail-\(UUID().uuidString)")
+        let projectDir = root.appendingPathComponent("-somewhere-else")
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data().write(to: projectDir.appendingPathComponent("conv-found.jsonl"))
+
+        let result = makeRecallResult(sessionId: "conv-found")
+        let vm = SessionDetailViewModel(recallResult: result, session: nil, projectsRoot: root)
+        vm.load()
+        #expect(vm.error == nil)
+        #expect(vm.indexedMessage == nil)
     }
 
     // MARK: - Search Tests

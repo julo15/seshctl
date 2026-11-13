@@ -11,6 +11,8 @@
 
 import CryptoKit
 import Foundation
+import SeshctlCore
+import Foundation
 
 public struct HistoryEntry: Sendable, Equatable {
     /// Row id assigned by SQLite. `nil` before insert; populated by
@@ -67,5 +69,18 @@ public struct HistoryEntry: Sendable, Equatable {
     public static func textHash(for text: String) -> String {
         let digest = SHA256.hash(data: Data(text.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+extension HistoryEntry {
+    /// This message as a transcript turn, or `nil` for a role the detail
+    /// view doesn't render.
+    public var conversationTurn: ConversationTurn? {
+        let date = Date(timeIntervalSince1970: timestamp)
+        switch role {
+        case "user": return .userMessage(text: text, timestamp: date)
+        case "assistant": return .assistantMessage(text: text, toolCalls: [], timestamp: date)
+        default: return nil
+        }
     }
 }

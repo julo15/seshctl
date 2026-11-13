@@ -95,6 +95,40 @@ public struct RecallService: Sendable {
         return try await stack.search(query: trimmed, limit: limit, onIndexing: onIndexing)
     }
 
+    /// Run a keyword (full-text) search over every indexed message.
+    ///
+    /// Returns one result per session, best first, each carrying a
+    /// `snippet` with matched terms marked (see `KeywordHit.matchStart`).
+    /// Queries with nothing searchable (see
+    /// `KeywordQuery.matchExpression(for:)`) return no results without
+    /// touching the index.
+    ///
+    /// Picks up new messages first unless a text pass finished within
+    /// `RecallStack.textIndexFreshness`, so a burst of keystrokes doesn't
+    /// re-walk the transcripts on each one. Never waits on embeddings.
+    public static func keywordSearch(
+        query: String,
+        limit: Int = 20
+    ) async throws -> RecallSearchResponse {
+        guard KeywordQuery.matchExpression(for: query) != nil else {
+            return RecallSearchResponse(results: [], indexingCount: nil)
+        }
+        let stack = try await sharedStack()
+        return try await stack.keywordSearch(query: query, limit: limit)
+    }
+
+    /// Every message the index kept for one session, oldest first, as
+    /// conversation turns. Rebuilds a conversation whose transcript file
+    /// has been deleted. Tool calls aren't indexed, so turns carry none.
+    public static func sessionHistory(
+        agent: String,
+        sessionID: String
+    ) async throws -> [ConversationTurn] {
+        let stack = try await sharedStack()
+        return try await stack.sessionHistory(agent: agent, sessionID: sessionID)
+            .compactMap(\.conversationTurn)
+    }
+
     // MARK: - Shared-state plumbing.
 
     // `NSLock` (not an actor) so the synchronous `configure(_:)` entry
@@ -266,6 +300,18 @@ final actor RecallStack {
     /// look "out-of-order" to the monotonic-done guard and get dropped.
     private var indexingPassID: Int = 0
 
+    /// In-flight text-only pass (`Indexer.indexText`) started by a keyword
+    /// search. Separate from `indexingTask` so a keyword search never waits
+    /// behind embedding.
+    private var textIndexingTask: Task<Void, Error>?
+
+    /// When the last text pass finished, used to skip re-walking the
+    /// transcripts on every keystroke.
+    private var lastTextIndexedAt: Date?
+
+    /// How long a finished text pass counts as fresh.
+    static let textIndexFreshness: TimeInterval = 5
+
     private init(
         database: SeshctlDatabase,
         vectorStore: VectorStore,
@@ -281,8 +327,8 @@ final actor RecallStack {
     /// Build the stack. Reads the database configured via
     /// `RecallService.configure(database:)` — throws
     /// `RecallError.searchFailed(...)` if `configure()` was never called.
-    /// The `EmbeddingService()` init throws (model resource not found) if
-    /// the bundled `.mlpackage` is missing.
+    /// The CoreML model loads on the first embed, not here, so a missing
+    /// `.mlpackage` surfaces from semantic search rather than from build.
     ///
     /// In test contexts that called
     /// `RecallService.configureForTesting(database:adapters:embedder:)`,
@@ -302,7 +348,8 @@ final actor RecallStack {
         if let injected = RecallService.sharedEmbedderOverrideAccessor() {
             embedder = injected
         } else {
-            embedder = try await EmbeddingService()
+            // Lazy: keyword search builds this stack too and never embeds.
+            embedder = LazyEmbedder { try await EmbeddingService() }
         }
         let adapters = RecallService.sharedAdaptersOverrideAccessor()
             ?? AdapterRegistry.defaultAdapters()
@@ -411,6 +458,42 @@ final actor RecallStack {
         return RecallSearchResponse(results: results, indexingCount: totalIndexed)
     }
 
+    /// Keyword search: pick up new message text (unless fresh), run the FTS
+    /// query, and collapse hits into one `RecallResult` per session.
+    func keywordSearch(query: String, limit: Int) async throws -> RecallSearchResponse {
+        guard let match = KeywordQuery.matchExpression(for: query) else {
+            return RecallSearchResponse(results: [], indexingCount: nil)
+        }
+        try await ensureTextIndexed()
+
+        // Message-level hits; plenty to fill `limit` sessions even when a
+        // few chatty sessions dominate the top matches.
+        let hits = try await vectorStore.keywordHits(match: match, limit: 500)
+        let ranked = KeywordRanking.rankSessions(
+            hits,
+            now: Date().timeIntervalSince1970,
+            limit: limit
+        )
+        let results = ranked.map { hit, score in
+            RecallResult(
+                agent: hit.entry.agent,
+                role: hit.entry.role,
+                sessionId: hit.entry.sessionID,
+                project: hit.entry.project,
+                timestamp: hit.entry.timestamp,
+                score: score,
+                resumeCmd: Self.resumeCommand(for: hit.entry),
+                text: hit.entry.text,
+                snippet: hit.snippet
+            )
+        }
+        return RecallSearchResponse(results: results, indexingCount: nil)
+    }
+
+    func sessionHistory(agent: String, sessionID: String) async throws -> [HistoryEntry] {
+        try await vectorStore.entries(agent: agent, sessionID: sessionID)
+    }
+
     /// Mirror the Python pipeline's per-agent resume command. Exhaustive
     /// over `SessionTool` so the compiler flags any new tool we add to
     /// `SessionTool` without also wiring it here (see AGENTS.md "Adding
@@ -506,6 +589,36 @@ final actor RecallStack {
                 )
             }
         })
+    }
+
+    /// Run a text-only indexing pass (or join the in-flight one), unless one
+    /// finished within `textIndexFreshness`. Detached for the same reason as
+    /// `ensureIndexingComplete`: a cancelled search must not abort the pass.
+    private func ensureTextIndexed() async throws {
+        if let existing = textIndexingTask {
+            try await existing.value
+            return
+        }
+        if let last = lastTextIndexedAt,
+           Date().timeIntervalSince(last) < Self.textIndexFreshness {
+            return
+        }
+        let task = Task<Void, Error>.detached { [self] in
+            do {
+                try await self.indexer.indexText()
+                await self.finishTextIndexing(succeeded: true)
+            } catch {
+                await self.finishTextIndexing(succeeded: false)
+                throw error
+            }
+        }
+        textIndexingTask = task
+        try await task.value
+    }
+
+    private func finishTextIndexing(succeeded: Bool) {
+        textIndexingTask = nil
+        if succeeded { lastTextIndexedAt = Date() }
     }
 
     /// Add a progress subscriber. Returns the id to use for unsubscribe.

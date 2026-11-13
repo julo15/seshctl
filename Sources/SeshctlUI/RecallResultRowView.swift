@@ -6,11 +6,15 @@ public struct RecallResultRowView: View {
     let isActive: Bool
     let hostApp: HostAppInfo?
     var searchQuery: String?
+    /// The transcript is gone from disk: the row can't be resumed, so it
+    /// says so and renders hollow.
+    var isTranscriptDeleted: Bool
     var onDetail: (() -> Void)?
 
-    public init(result: RecallResult, isActive: Bool = false, hostApp: HostAppInfo? = nil, searchQuery: String? = nil, onDetail: (() -> Void)? = nil) {
+    public init(result: RecallResult, isActive: Bool = false, hostApp: HostAppInfo? = nil, searchQuery: String? = nil, isTranscriptDeleted: Bool = false, onDetail: (() -> Void)? = nil) {
         self.result = result
         self.isActive = isActive
+        self.isTranscriptDeleted = isTranscriptDeleted
         self.hostApp = hostApp
         self.searchQuery = searchQuery
         self.onDetail = onDetail
@@ -28,9 +32,15 @@ public struct RecallResultRowView: View {
 
     @ViewBuilder
     private var statusIndicator: some View {
-        Circle()
-            .fill(isActive ? .green : .gray)
-            .frame(width: 8, height: 8)
+        if isTranscriptDeleted {
+            Circle()
+                .strokeBorder(Color.gray, lineWidth: 1.5)
+                .frame(width: 8, height: 8)
+        } else {
+            Circle()
+                .fill(isActive ? .green : .gray)
+                .frame(width: 8, height: 8)
+        }
     }
 
     @ViewBuilder
@@ -42,22 +52,50 @@ public struct RecallResultRowView: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
 
-                Text(scoreLabel)
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                // Keyword relevance isn't a percentage; only semantic
+                // results show a score.
+                if result.snippet == nil {
+                    Text(scoreLabel)
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+
+                if isTranscriptDeleted {
+                    Label("transcript deleted", systemImage: "trash")
+                        .font(.system(.footnote, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .help("Claude Code deleted this transcript (it removes them after 30 days by default), so it can't be resumed. Enter shows what search history kept.")
+                }
             }
 
             HStack(spacing: 4) {
                 Text(roleTag)
                     .font(.body.weight(.bold))
                     .foregroundStyle(.primary.opacity(0.8))
-                highlightedText(snippet, query: searchQuery, perWord: true)
+                snippetText
                     .font(.body.weight(.medium))
                     .foregroundStyle(.primary.opacity(0.8))
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
         }
+    }
+
+    /// Keyword results highlight exactly the terms FTS matched; semantic
+    /// results fall back to highlighting the query's words.
+    private var snippetText: Text {
+        guard let marked = result.snippet else {
+            return highlightedText(snippet, query: searchQuery, perWord: true)
+        }
+        var attributed = AttributedString()
+        for segment in RecallResult.snippetSegments(marked) {
+            var run = AttributedString(segment.text)
+            if segment.isMatch {
+                run.backgroundColor = .yellow.opacity(0.25)
+            }
+            attributed += run
+        }
+        return Text(attributed)
     }
 
     private var projectName: String {

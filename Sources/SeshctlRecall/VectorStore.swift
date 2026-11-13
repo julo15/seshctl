@@ -8,8 +8,13 @@
 // exists, else insert + embed") that would otherwise need explicit
 // transaction nesting.
 //
-// Schema: see migration `v13_create_recall_tables` in
-// `Sources/SeshctlCore/Database.swift`.
+// Schema: see migrations `v13_create_recall_tables` and
+// `v16_create_recall_fts` in `Sources/SeshctlCore/Database.swift`.
+//
+// Text and embeddings land separately. `insertText` makes a message
+// keyword-searchable immediately (the FTS triggers index it on insert);
+// `insertEmbeddings` fills in its vector later, when semantic search runs.
+// An entry without an embedding is normal, not corruption.
 //
 // Embedding serialization: raw little-endian FP32 byte buffer (no version
 // tag). 384 floats × 4 bytes = 1536 bytes per row. Endianness matches the
@@ -88,6 +93,56 @@ public actor VectorStore {
         }
     }
 
+    /// Insert entries without embeddings. Same dedup rule as
+    /// `insert(entries:embeddings:)`. The FTS triggers index each landed
+    /// row, so it's keyword-searchable as soon as this returns.
+    ///
+    /// - Returns: the row ids of the entries that were actually inserted.
+    @discardableResult
+    public func insertText(entries: [HistoryEntry]) throws -> [Int64] {
+        guard !entries.isEmpty else { return [] }
+        return try database.dbPool.write { db in
+            var inserted: [Int64] = []
+            inserted.reserveCapacity(entries.count)
+            for entry in entries {
+                try db.execute(sql: """
+                    INSERT OR IGNORE INTO recall_entries
+                        (agent, role, session_id, project, timestamp, text, text_hash)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, arguments: [
+                    entry.agent,
+                    entry.role,
+                    entry.sessionID,
+                    entry.project,
+                    entry.timestamp,
+                    entry.text,
+                    entry.textHash,
+                ])
+                guard db.changesCount == 1 else { continue }
+                inserted.append(db.lastInsertedRowID)
+            }
+            return inserted
+        }
+    }
+
+    /// Store embeddings for entries already in `recall_entries`. Replaces
+    /// any existing vector for the same id.
+    public func insertEmbeddings(ids: [Int64], vectors: [[Float]]) throws {
+        precondition(
+            ids.count == vectors.count,
+            "VectorStore.insertEmbeddings: ids.count (\(ids.count)) != vectors.count (\(vectors.count))"
+        )
+        guard !ids.isEmpty else { return }
+        try database.dbPool.write { db in
+            for (id, vector) in zip(ids, vectors) {
+                try db.execute(sql: """
+                    INSERT OR REPLACE INTO recall_embeddings (entry_id, vector)
+                    VALUES (?, ?)
+                """, arguments: [id, Self.encode(vector: vector)])
+            }
+        }
+    }
+
     // MARK: - Reads.
 
     /// Load every (entry_id, vector) pair into memory. Used by Search for
@@ -153,53 +208,97 @@ public actor VectorStore {
         }
     }
 
-    /// Return the subset of `entries` whose `(text_hash, agent, session_id)`
-    /// triple is NOT already in `recall_entries`. Used by `Indexer.refresh`
-    /// to make canceled-then-resumed indexing cheap: the adapter still
-    /// re-walks the same transcripts (cheap), but only entries not yet
-    /// persisted go through the expensive embed step.
-    ///
-    /// Loads ALL existing triples into a Set once per call (8k rows × ~80
-    /// bytes = ~640KB resident, trivial). Don't call this in a hot loop.
-    public func filterAlreadyIndexed(_ entries: [HistoryEntry]) throws -> [HistoryEntry] {
-        guard !entries.isEmpty else { return [] }
-        let existing = try loadExistingDedupKeys()
-        // First-ever-refresh fast path: nothing in DB → every input is new.
-        // Skip the filter walk + per-entry Set lookups.
-        guard !existing.isEmpty else { return entries }
-        return entries.filter { entry in
-            !existing.contains(Self.dedupKey(
-                textHash: entry.textHash,
-                agent: entry.agent,
-                sessionID: entry.sessionID
-            ))
-        }
-    }
-
-    private func loadExistingDedupKeys() throws -> Set<String> {
+    /// Every stored message of one session, oldest first. The index keeps
+    /// one copy of each distinct message text per session, so a repeated
+    /// message ("yes") appears once, at its first occurrence.
+    public func entries(agent: String, sessionID: String) throws -> [HistoryEntry] {
         try database.dbPool.read { db in
             let rows = try Row.fetchAll(
                 db,
-                sql: "SELECT text_hash, agent, session_id FROM recall_entries"
+                sql: """
+                    SELECT id, agent, role, session_id, project, timestamp, text, text_hash
+                    FROM recall_entries
+                    WHERE agent = ? AND session_id = ?
+                    ORDER BY timestamp ASC, id ASC
+                """,
+                arguments: [agent, sessionID]
             )
-            var keys = Set<String>()
-            keys.reserveCapacity(rows.count)
-            for row in rows {
-                keys.insert(Self.dedupKey(
-                    textHash: row["text_hash"],
-                    agent: row["agent"],
-                    sessionID: row["session_id"]
-                ))
-            }
-            return keys
+            return rows.map(Self.entry(from:))
         }
     }
 
-    private static func dedupKey(textHash: String, agent: String, sessionID: String) -> String {
-        // `|` is not a valid char in either text_hash (hex SHA-256), agent
-        // (lowercase ASCII), or session_id (uuid-ish), so collisions are
-        // structurally impossible.
-        "\(textHash)|\(agent)|\(sessionID)"
+    /// Up to `limit` entries that have no embedding yet, oldest id first.
+    public func entriesMissingEmbeddings(limit: Int) throws -> [HistoryEntry] {
+        try database.dbPool.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT e.id, e.agent, e.role, e.session_id, e.project, e.timestamp, e.text, e.text_hash
+                    FROM recall_entries e
+                    WHERE NOT EXISTS (SELECT 1 FROM recall_embeddings m WHERE m.entry_id = e.id)
+                    ORDER BY e.id ASC
+                    LIMIT ?
+                """,
+                arguments: [limit]
+            )
+            return rows.map(Self.entry(from:))
+        }
+    }
+
+    /// Number of entries that have an embedding.
+    public func embeddingCount() throws -> Int {
+        try database.dbPool.read { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM recall_embeddings") ?? 0
+        }
+    }
+
+    /// Full-text search over entry text, best match first.
+    ///
+    /// - Parameters:
+    ///   - match: an FTS5 MATCH expression. Build it with
+    ///     `KeywordQuery.matchExpression(for:)`; raw user input can be a
+    ///     syntax error.
+    ///   - limit: cap on message-level hits. Callers group these by session.
+    /// - Returns: hits ordered by FTS5's `bm25` (more negative is better).
+    ///   Each snippet wraps matched terms in `KeywordHit.matchStart` /
+    ///   `KeywordHit.matchEnd`.
+    public func keywordHits(match: String, limit: Int) throws -> [KeywordHit] {
+        try database.dbPool.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT e.id, e.agent, e.role, e.session_id, e.project, e.timestamp, e.text, e.text_hash,
+                           bm25(recall_fts) AS rank,
+                           snippet(recall_fts, 0, ?, ?, '…', 16) AS snippet
+                    FROM recall_fts
+                    JOIN recall_entries e ON e.id = recall_fts.rowid
+                    WHERE recall_fts MATCH ?
+                    ORDER BY rank
+                    LIMIT ?
+                """,
+                arguments: [KeywordHit.matchStart, KeywordHit.matchEnd, match, limit]
+            )
+            return rows.map { row in
+                KeywordHit(
+                    entry: Self.entry(from: row),
+                    rank: row["rank"],
+                    snippet: row["snippet"]
+                )
+            }
+        }
+    }
+
+    private static func entry(from row: Row) -> HistoryEntry {
+        HistoryEntry(
+            id: row["id"],
+            agent: row["agent"],
+            role: row["role"],
+            sessionID: row["session_id"],
+            project: row["project"],
+            timestamp: row["timestamp"],
+            text: row["text"],
+            textHash: row["text_hash"]
+        )
     }
 
     /// Total number of rows in `recall_entries`. Used for indexing UX
@@ -243,19 +342,7 @@ public actor VectorStore {
         }
     }
 
-    // MARK: - Drift detection + rebuild.
-
-    /// Returns `true` when `recall_entries.count != recall_embeddings.count`.
-    /// Indexer calls this on every refresh; on drift it wipes both tables
-    /// and resets cursors before re-indexing. Mirrors the same posture as
-    /// the Python recall pipeline (`recall/index.py`).
-    public func detectDrift() throws -> Bool {
-        try database.dbPool.read { db in
-            let entryCount = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM recall_entries") ?? 0
-            let embedCount = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM recall_embeddings") ?? 0
-            return entryCount != embedCount
-        }
-    }
+    // MARK: - Reset.
 
     /// Wipe both `recall_entries` and `recall_embeddings` plus the cursor
     /// table. Cursor wipe ensures the next refresh re-walks from scratch
