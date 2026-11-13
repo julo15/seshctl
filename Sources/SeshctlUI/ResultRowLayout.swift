@@ -41,6 +41,10 @@ struct ResultRowLayout<Status: View, Content: View>: View {
     /// left of the host-app icon, where the stacked layouts put the model
     /// pill. Nil leaves no gap.
     var trailingLabel: (text: String, color: Color)? = nil
+    /// Whether to reserve the host-app icon slot. History rows turn it off:
+    /// past sessions rarely have a running host app, so the slot was
+    /// mostly empty space.
+    var showsHostAppSlot: Bool = true
 
     /// The 24pt icon plus `BadgedIcon`'s trailing overhang, so badged and
     /// bare icons occupy the same width.
@@ -106,54 +110,56 @@ struct ResultRowLayout<Status: View, Content: View>: View {
             // Icon and chevron sit closer together than the row's 12pt
             // spacing: they read as one trailing control.
             HStack(alignment: .top, spacing: 5) {
-                // Host app icon — always takes the same slot, even for rows
-                // without a host app (e.g., remote claude.ai sessions, which fall
-                // through to the `hostAppSystemSymbol` placeholder). When
-                // `hostAppBadge` is set, the icon is composited with an agent-kind
-                // corner badge via `BadgedIcon`; otherwise renders the bare image
-                // as before. The slot is fixed at the badged width so a row
-                // without a badge keeps its icon, and the pill or label beside
-                // it, in the same column.
-                Group {
-                    if let hostAppBadge {
-                        let baseImage: Image? = {
-                            if let hostApp {
-                                return Image(nsImage: hostApp.icon)
-                            } else if let hostAppSystemSymbol {
-                                return Image(systemName: hostAppSystemSymbol)
-                            } else {
-                                return nil
-                            }
-                        }()
-                        if let baseImage {
-                            BadgedIcon(
-                                base: baseImage,
-                                badge: hostAppBadge,
-                                accessibilityLabel: iconAccessibilityLabel ?? ""
-                            )
-                        } else {
-                            Color.clear
-                                .frame(width: 24, height: 24)
-                                .accessibilityHidden(true)
-                        }
-                    } else {
-                        Group {
-                            if let hostApp {
-                                Image(nsImage: hostApp.icon)
-                                    .resizable()
-                            } else if let hostAppSystemSymbol {
-                                Image(systemName: hostAppSystemSymbol)
-                                    .font(.system(size: 18, weight: .regular))
-                                    .foregroundStyle(.secondary)
+                if showsHostAppSlot {
+                    // Host app icon — always takes the same slot, even for rows
+                    // without a host app (e.g., remote claude.ai sessions, which fall
+                    // through to the `hostAppSystemSymbol` placeholder). When
+                    // `hostAppBadge` is set, the icon is composited with an agent-kind
+                    // corner badge via `BadgedIcon`; otherwise renders the bare image
+                    // as before. The slot is fixed at the badged width so a row
+                    // without a badge keeps its icon, and the pill or label beside
+                    // it, in the same column.
+                    Group {
+                        if let hostAppBadge {
+                            let baseImage: Image? = {
+                                if let hostApp {
+                                    return Image(nsImage: hostApp.icon)
+                                } else if let hostAppSystemSymbol {
+                                    return Image(systemName: hostAppSystemSymbol)
+                                } else {
+                                    return nil
+                                }
+                            }()
+                            if let baseImage {
+                                BadgedIcon(
+                                    base: baseImage,
+                                    badge: hostAppBadge,
+                                    accessibilityLabel: iconAccessibilityLabel ?? ""
+                                )
                             } else {
                                 Color.clear
+                                    .frame(width: 24, height: 24)
                                     .accessibilityHidden(true)
                             }
+                        } else {
+                            Group {
+                                if let hostApp {
+                                    Image(nsImage: hostApp.icon)
+                                        .resizable()
+                                } else if let hostAppSystemSymbol {
+                                    Image(systemName: hostAppSystemSymbol)
+                                        .font(.system(size: 18, weight: .regular))
+                                        .foregroundStyle(.secondary)
+                                } else {
+                                    Color.clear
+                                        .accessibilityHidden(true)
+                                }
+                            }
+                            .frame(width: 24, height: 24)
                         }
-                        .frame(width: 24, height: 24)
                     }
+                    .frame(width: Self.iconSlotWidth, alignment: .topLeading)
                 }
-                .frame(width: Self.iconSlotWidth, alignment: .topLeading)
 
                 // Detail chevron — same fixed-width slot whether or not the row
                 // offers a detail action.

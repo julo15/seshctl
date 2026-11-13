@@ -45,7 +45,8 @@ public struct RecallResultRowView: View {
             onDetail: onDetail,
             // The folder sits at the far right in its repo color, as on the
             // live rows, unless it's already the headline.
-            trailingLabel: headline != folderLabel ? (folderLabel, folderLabelColor) : nil
+            trailingLabel: headline != folderLabel ? (folderLabel, folderLabelColor) : nil,
+            showsHostAppSlot: false
         )
     }
 
