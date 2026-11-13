@@ -385,6 +385,11 @@ struct RecallServiceTests {
 
         let embedded = try await VectorStore(database: db).embeddingCount()
         #expect(embedded == 0, "keyword search must never embed")
+
+        // Untitled sessions are named by their first message.
+        let titles = Dictionary(uniqueKeysWithValues: resp.results.map { ($0.sessionId, $0.title) })
+        #expect(titles["S1"] == "regenerate the sparkle appcast")
+        #expect(titles["S2"] == "the appcast was stale")
     }
 
     @Test("sessionHistory returns a session's indexed messages as turns")

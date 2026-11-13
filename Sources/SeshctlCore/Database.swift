@@ -296,6 +296,26 @@ public struct SeshctlDatabase: Sendable {
             try db.execute(sql: Self.truncateOversizedRecallTextSQL)
         }
 
+        // Session titles for History rows. Claude Code deletes transcripts
+        // after 30 days, taking their `ai-title` with them, so the indexer
+        // keeps a copy. Clearing the Claude cursor makes the next text pass
+        // re-read every transcript still on disk to backfill titles;
+        // entries it already holds are skipped by the dedup key. The index
+        // finds each session's first message for rows with no title.
+        migrator.registerMigration("v18_create_recall_titles") { db in
+            try db.execute(sql: """
+                CREATE TABLE recall_titles (
+                    agent TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    ai_title TEXT,
+                    custom_title TEXT,
+                    PRIMARY KEY (agent, session_id)
+                );
+                CREATE INDEX recall_entries_session ON recall_entries (agent, session_id, timestamp);
+                DELETE FROM recall_cursors WHERE adapter_name = 'claude';
+                """)
+        }
+
         try migrator.migrate(dbPool)
     }
 

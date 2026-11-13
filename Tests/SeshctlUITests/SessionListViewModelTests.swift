@@ -3678,4 +3678,32 @@ struct SessionListViewModelTests {
         vm.appendSearchCharacter("b")
         #expect(vm.searchedHistory)
     }
+
+    @Test("historyTitle prefers a picked title, then the index's")
+    @MainActor
+    func historyTitlePrecedence() async throws {
+        let db = try SeshctlDatabase.temporary()
+        try db.setConversationTitle(conversationId: "picked", tool: .claude, title: "Picked with t")
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        let indexed = RecallResult(
+            agent: "claude", role: "user", sessionId: "indexed", project: "/tmp/p",
+            timestamp: 1, score: 1, resumeCmd: "", text: "t", snippet: "t", title: "From the index"
+        )
+        let picked = RecallResult(
+            agent: "claude", role: "user", sessionId: "picked", project: "/tmp/p",
+            timestamp: 1, score: 1, resumeCmd: "", text: "t", snippet: "t", title: "From the index"
+        )
+        let untitled = historyResult("untitled")
+        vm.recallSearchProvider = { _ in
+            RecallSearchResponse(results: [indexed, picked, untitled], indexingCount: nil)
+        }
+        vm.enterSearch()
+        vm.appendSearchCharacter("tt")
+        await waitForRecall { vm.recallResults.count == 3 }
+
+        #expect(vm.historyTitle(for: picked) == "Picked with t")
+        #expect(vm.historyTitle(for: indexed) == "From the index")
+        #expect(vm.historyTitle(for: untitled) == nil)
+    }
 }
+

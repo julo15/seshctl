@@ -161,6 +161,9 @@ public final class SessionListViewModel: ObservableObject {
     /// `showsNoSearchResults` wait for the current query's answer instead
     /// of flashing "no matches" between keystrokes.
     @Published public private(set) var recallCompletedQuery: String?
+    /// Titles picked with `t`, read when a history search lands, so History
+    /// rows name sessions the same way live rows do.
+    @Published private(set) var historyPickedTitles: [ConversationTitleKey: String] = [:]
     /// One-time toast flag: set to `true` when the user presses `x` with a
     /// cloud row selected. The view observes this, renders a toast, then
     /// calls `acknowledgeCloudKillToast()` to reset.
@@ -1703,6 +1706,21 @@ public final class SessionListViewModel: ObservableObject {
         deletedTranscriptSessionIds.contains(result.sessionId)
     }
 
+    /// The name a History row shows, in the live rows' order: a title picked
+    /// with `t`, then the matching session's own title (Claude's
+    /// `ai-title`, Codex's thread name), then the index's (its stored
+    /// `ai-title`, or the session's first message). `nil` when none exists.
+    public func historyTitle(for result: RecallResult) -> String? {
+        if let tool = SessionTool(rawValue: result.agent),
+           let picked = historyPickedTitles[ConversationTitleKey(conversationId: result.sessionId, tool: tool)] {
+            return picked
+        }
+        if let session = session(for: result), let title = titlesById[session.id] {
+            return title
+        }
+        return result.title
+    }
+
     /// True once the current query's searches have both come back empty:
     /// no panel row matches and history found nothing.
     public var showsNoSearchResults: Bool {
@@ -1805,6 +1823,7 @@ public final class SessionListViewModel: ObservableObject {
                 }.value
                 guard !Task.isCancelled else { return }
                 self.deletedTranscriptSessionIds = deleted
+                self.historyPickedTitles = (try? self.database.conversationTitles()) ?? [:]
                 self.recallResults = results
                 self.recallCompletedQuery = query
                 self.recallGeneration += 1

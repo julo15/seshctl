@@ -492,8 +492,11 @@ final actor RecallStack {
         // Text and snippets only for the rows shown.
         let hits = try await vectorStore.keywordHits(match: match, ids: ranked.map(\.candidate.id))
         let scores = Dictionary(uniqueKeysWithValues: ranked.map { ($0.candidate.id, $0.score) })
-        let results = hits.map { hit in
-            RecallResult(
+        var results: [RecallResult] = []
+        results.reserveCapacity(hits.count)
+        for hit in hits {
+            let title = try await vectorStore.sessionTitle(agent: hit.entry.agent, sessionID: hit.entry.sessionID)
+            results.append(RecallResult(
                 agent: hit.entry.agent,
                 role: hit.entry.role,
                 sessionId: hit.entry.sessionID,
@@ -502,8 +505,9 @@ final actor RecallStack {
                 score: hit.entry.id.flatMap { scores[$0] } ?? 0,
                 resumeCmd: Self.resumeCommand(for: hit.entry),
                 text: hit.entry.text,
-                snippet: hit.snippet
-            )
+                snippet: hit.snippet,
+                title: title
+            ))
         }
         return RecallSearchResponse(results: results, indexingCount: nil)
     }

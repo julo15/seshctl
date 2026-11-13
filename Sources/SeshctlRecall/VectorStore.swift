@@ -218,6 +218,60 @@ public actor VectorStore {
         }
     }
 
+    /// Store session titles found while indexing. A nil field leaves the
+    /// stored value alone, so a pass that saw only a `custom-title` doesn't
+    /// erase an earlier `ai-title`.
+    public func upsertTitles(_ titles: [IndexedTitle]) throws {
+        guard !titles.isEmpty else { return }
+        try database.dbPool.write { db in
+            for title in titles {
+                try db.execute(sql: """
+                    INSERT INTO recall_titles (agent, session_id, ai_title, custom_title)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT (agent, session_id) DO UPDATE SET
+                        ai_title = COALESCE(excluded.ai_title, ai_title),
+                        custom_title = COALESCE(excluded.custom_title, custom_title)
+                """, arguments: [title.agent, title.sessionID, title.aiTitle, title.customTitle])
+            }
+        }
+    }
+
+    /// How many leading user messages `sessionTitle` checks for one the
+    /// user typed (skill bodies and notifications come first in some
+    /// sessions).
+    static let firstMessageScanLimit = 10
+    /// Longest first-message title, in characters.
+    static let firstMessageTitleLength = 120
+
+    /// A display name for a session: its indexed `ai-title`, else its
+    /// `custom-title`, else its first typed message flattened to one line
+    /// and cut to `firstMessageTitleLength`. `nil` when there's none.
+    public func sessionTitle(agent: String, sessionID: String) throws -> String? {
+        try database.dbPool.read { db in
+            if let row = try Row.fetchOne(
+                db,
+                sql: "SELECT ai_title, custom_title FROM recall_titles WHERE agent = ? AND session_id = ?",
+                arguments: [agent, sessionID]
+            ), let title = (row["ai_title"] as String?) ?? (row["custom_title"] as String?) {
+                return title
+            }
+            let texts = try String.fetchAll(
+                db,
+                sql: """
+                    SELECT text FROM recall_entries
+                    WHERE agent = ? AND session_id = ? AND role = 'user'
+                    ORDER BY timestamp ASC, id ASC
+                    LIMIT ?
+                """,
+                arguments: [agent, sessionID, Self.firstMessageScanLimit]
+            )
+            guard let typed = texts.lazy.compactMap(TitleSuggester.typedRequest).first else { return nil }
+            let line = typed.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            guard line.count > Self.firstMessageTitleLength else { return line }
+            return String(line.prefix(Self.firstMessageTitleLength - 1)) + "…"
+        }
+    }
+
     /// Every stored message of one session, oldest first. The index keeps
     /// one copy of each distinct message text per session, so a repeated
     /// message ("yes") appears once, at its first occurrence.

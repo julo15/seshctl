@@ -275,3 +275,35 @@ private actor FailingEmbedder: Embedder {
         throw Called()
     }
 }
+
+/// Adapter that reports a session title alongside its entries.
+private struct TitledAdapter: Adapter {
+    let name = "claude"
+    let entries: [HistoryEntry]
+    let title: IndexedTitle
+
+    func load(cursor: Data?) async throws -> (entries: [HistoryEntry], newCursor: Data) {
+        (entries, Data("t1".utf8))
+    }
+
+    func loadWithTitles(cursor: Data?) async throws -> AdapterLoad {
+        AdapterLoad(entries: entries, titles: [title], newCursor: Data("t1".utf8))
+    }
+}
+
+@Suite("Indexer titles")
+struct IndexerTitleTests {
+    @Test("indexText stores the titles an adapter reports")
+    func indexTextStoresTitles() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let store = VectorStore(database: db)
+        let entry = makeEntry(seed: 1)
+        let adapter = TitledAdapter(
+            entries: [entry],
+            title: IndexedTitle(agent: "claude", sessionID: entry.sessionID, aiTitle: "Indexed title", customTitle: nil)
+        )
+        let indexer = Indexer(store: store, embedder: MockEmbedder(perChunkDelayNanos: 0, vectorDim: 3), adapters: [adapter])
+        try await indexer.indexText()
+        #expect(try await store.sessionTitle(agent: "claude", sessionID: entry.sessionID) == "Indexed title")
+    }
+}

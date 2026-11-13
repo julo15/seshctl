@@ -61,10 +61,11 @@ public actor Indexer {
         for adapter in adapters {
             try Task.checkCancellation()
             let cursor = try await store.readCursor(adapterName: adapter.name)
-            let (entries, newCursor) = try await adapter.load(cursor: cursor)
-            try await store.insertText(entries: entries)
+            let load = try await adapter.loadWithTitles(cursor: cursor)
+            try await store.insertText(entries: load.entries)
+            try await store.upsertTitles(load.titles)
             try Task.checkCancellation()
-            try await store.writeCursor(adapterName: adapter.name, cursor: newCursor)
+            try await store.writeCursor(adapterName: adapter.name, cursor: load.newCursor)
         }
     }
 

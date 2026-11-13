@@ -17,12 +17,16 @@ public struct RecallResultRowView: View {
     /// repo accent; falls back to the folder label, which is usually the
     /// same name.
     var repoName: String?
+    /// The session's name (see `SessionListViewModel.historyTitle(for:)`).
+    /// Nil falls back to the folder as the headline.
+    var title: String?
     var onDetail: (() -> Void)?
 
     @AppStorage(AppearanceDefaults.repoAccentBarKey) private var repoAccentBarEnabled: Bool = AppearanceDefaults.repoAccentBarDefault
 
-    public init(result: RecallResult, liveStatus: SessionStatus? = nil, hostApp: HostAppInfo? = nil, searchQuery: String? = nil, isTranscriptDeleted: Bool = false, isSelected: Bool = false, repoName: String? = nil, onDetail: (() -> Void)? = nil) {
+    public init(result: RecallResult, liveStatus: SessionStatus? = nil, hostApp: HostAppInfo? = nil, searchQuery: String? = nil, isTranscriptDeleted: Bool = false, isSelected: Bool = false, repoName: String? = nil, title: String? = nil, onDetail: (() -> Void)? = nil) {
         self.result = result
+        self.title = title
         self.isSelected = isSelected
         self.repoName = repoName
         self.liveStatus = liveStatus
@@ -38,7 +42,10 @@ public struct RecallResultRowView: View {
             ageDisplay: ageDisplay,
             content: { mainContent },
             hostApp: hostApp,
-            onDetail: onDetail
+            onDetail: onDetail,
+            // The folder sits at the far right in its repo color, as on the
+            // live rows, unless it's already the headline.
+            trailingLabel: headline != folderLabel ? (folderLabel, folderLabelColor) : nil
         )
     }
 
@@ -50,17 +57,17 @@ public struct RecallResultRowView: View {
     }
 
     /// Mirrors `SessionRowView`'s compact layout (fonts, spacing, colors) so
-    /// History rows read as the same kind of row as the live list. The
-    /// headline is the checkout folder in its repo accent: a past session
-    /// has no title to show, and the folder is what identifies it.
+    /// History rows read as the same kind of row as the live list: the
+    /// session's name as the headline, the folder at the far right.
     @ViewBuilder
     private var mainContent: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text(folderLabel)
+                Text(headline)
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(headlineColor)
+                    .foregroundStyle(Color.primary.opacity(0.62))
                     .lineLimit(1)
+                    .truncationMode(.tail)
                     .layoutPriority(1)
                     .help(result.project)
 
@@ -123,13 +130,17 @@ public struct RecallResultRowView: View {
         Session.folderLabel(forDirectory: result.project)
     }
 
+    private var headline: String {
+        title.flatMap { $0.isEmpty ? nil : $0 } ?? folderLabel
+    }
+
     /// The repo accent when color coding is on, like the live rows' folder
-    /// label; otherwise the dimmed primary of a read compact headline.
-    private var headlineColor: Color {
+    /// label; otherwise `.secondary`.
+    private var folderLabelColor: Color {
         if repoAccentBarEnabled, let color = repoAccentColor(for: repoName ?? folderLabel) {
             return color
         }
-        return Color.primary.opacity(0.62)
+        return .secondary
     }
 
     private var firstLine: String {

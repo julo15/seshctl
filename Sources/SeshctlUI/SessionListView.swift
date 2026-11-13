@@ -265,6 +265,7 @@ public struct SessionListView: View {
                                             isTranscriptDeleted: viewModel.isTranscriptDeleted(result),
                                             isSelected: isSelected,
                                             repoName: matchedSession?.gitRepoName,
+                                            title: viewModel.historyTitle(for: result),
                                             onDetail: onOpenRecallDetail.map { handler in
                                                 {
                                                     if let session = matchedSession {

@@ -14,6 +14,10 @@ public struct RecallResult: Codable, Sendable, Equatable, Identifiable {
     /// Excerpt around a keyword match, with matched terms wrapped in
     /// `snippetMatchStart` / `snippetMatchEnd`. `nil` for semantic results.
     public let snippet: String?
+    /// A name for the session from the history index: Claude's `ai-title`
+    /// (or `custom-title`) when indexed, else the session's first typed
+    /// message, cut to one line. `nil` when there's neither.
+    public let title: String?
 
     enum CodingKeys: String, CodingKey {
         case agent
@@ -25,6 +29,7 @@ public struct RecallResult: Codable, Sendable, Equatable, Identifiable {
         case resumeCmd = "resume_cmd"
         case text
         case snippet
+        case title
     }
 
     public init(
@@ -36,7 +41,8 @@ public struct RecallResult: Codable, Sendable, Equatable, Identifiable {
         score: Double,
         resumeCmd: String,
         text: String,
-        snippet: String? = nil
+        snippet: String? = nil,
+        title: String? = nil
     ) {
         self.agent = agent
         self.role = role
@@ -47,6 +53,7 @@ public struct RecallResult: Codable, Sendable, Equatable, Identifiable {
         self.resumeCmd = resumeCmd
         self.text = text
         self.snippet = snippet
+        self.title = title
     }
 
     /// Marks the start of a matched term inside `snippet`.

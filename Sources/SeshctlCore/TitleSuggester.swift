@@ -77,7 +77,7 @@ public enum TitleSuggester {
 
     /// The text the user typed, with `[Image #N]` placeholders removed, or
     /// nil when the record isn't something the user typed.
-    static func typedRequest(_ text: String) -> String? {
+    public static func typedRequest(_ text: String) -> String? {
         let cleaned = text.replacingOccurrences(of: #"\[Image #\d+\]"#, with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty, !nonTypedPrefixes.contains(where: cleaned.hasPrefix) else { return nil }

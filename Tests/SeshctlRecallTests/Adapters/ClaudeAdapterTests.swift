@@ -247,4 +247,36 @@ struct ClaudeAdapterTests {
         #expect(entries.count == 1)
         #expect(entries.first?.text == "should reload")
     }
+
+    @Test("ai-title and custom-title records become session titles, last of each winning")
+    func capturesTitles() async throws {
+        let fx = try ClaudeFixture()
+        defer { fx.cleanup() }
+        let url = try fx.writeTranscript(
+            projectDirName: "-tmp-x",
+            sessionID: "s1",
+            lines: [
+                userLine(cwd: "/tmp/x", text: "hello"),
+                #"{"type":"ai-title","aiTitle":"First title","sessionId":"s1"}"#,
+                #"{"type":"custom-title","customTitle":"  m5: assistant  ","sessionId":"s1"}"#,
+                #"{"type":"ai-title","aiTitle":"Better title","sessionId":"s1"}"#,
+                #"{"type":"ai-title","aiTitle":"   ","sessionId":"s1"}"#,
+            ]
+        )
+        _ = try fx.writeTranscript(projectDirName: "-tmp-y", sessionID: "s2", lines: [userLine(cwd: "/tmp/y", text: "untitled")])
+
+        let adapter = ClaudeAdapter(projectsDir: fx.projectsDir)
+        let first = try await adapter.loadWithTitles(cursor: nil)
+        #expect(first.titles == [IndexedTitle(agent: "claude", sessionID: "s1", aiTitle: "Better title", customTitle: "m5: assistant")])
+        #expect(first.entries.count == 2, "title records aren't messages")
+
+        // Only newly appended records are reported on the next pass.
+        try fx.appendToTranscript(url, lines: [#"{"type":"custom-title","customTitle":"renamed","sessionId":"s1"}"#])
+        let second = try await adapter.loadWithTitles(cursor: first.newCursor)
+        #expect(second.titles == [IndexedTitle(agent: "claude", sessionID: "s1", aiTitle: nil, customTitle: "renamed")])
+
+        // `load` still works and drops titles.
+        let (entries, _) = try await adapter.load(cursor: nil)
+        #expect(entries.count == 2)
+    }
 }

@@ -407,6 +407,46 @@ struct VectorStoreTests {
         }
         #expect(try await store.keywordCandidates(match: #""legacy"*"#, limit: 10).count == 1)
     }
+
+    @Test("upsertTitles keeps stored fields that a later pass leaves nil")
+    func upsertTitlesCoalesces() async throws {
+        let store = try makeStore()
+        try await store.upsertTitles([IndexedTitle(agent: "claude", sessionID: "S", aiTitle: "AI", customTitle: nil)])
+        try await store.upsertTitles([IndexedTitle(agent: "claude", sessionID: "S", aiTitle: nil, customTitle: "Custom")])
+        #expect(try await store.sessionTitle(agent: "claude", sessionID: "S") == "AI", "ai-title wins over custom-title")
+
+        try await store.upsertTitles([IndexedTitle(agent: "claude", sessionID: "T", aiTitle: nil, customTitle: "Only custom")])
+        #expect(try await store.sessionTitle(agent: "claude", sessionID: "T") == "Only custom")
+        try await store.upsertTitles([])
+    }
+
+    @Test("sessionTitle falls back to the first typed user message, on one line")
+    func sessionTitleFallsBackToFirstMessage() async throws {
+        let store = try makeStore()
+        func entry(_ text: String, role: String = "user", seed: Int, session: String = "S") -> HistoryEntry {
+            HistoryEntry(
+                id: nil, agent: "claude", role: role, sessionID: session, project: "/p",
+                timestamp: Double(seed), text: text, textHash: HistoryEntry.textHash(for: text)
+            )
+        }
+        let long = String(repeating: "word ", count: 60)
+        _ = try await store.insertText(entries: [
+            entry("assistant goes first", role: "assistant", seed: 0),
+            entry("<command-name>/foo</command-name>", seed: 1),
+            entry("fix the\n  reaper   bug", seed: 2),
+            entry("later ask", seed: 3),
+            entry(long, seed: 1, session: "L"),
+        ])
+        #expect(try await store.sessionTitle(agent: "claude", sessionID: "S") == "fix the reaper bug")
+
+        let longTitle = try await store.sessionTitle(agent: "claude", sessionID: "L")
+        #expect(longTitle?.count == VectorStore.firstMessageTitleLength)
+        #expect(longTitle?.hasSuffix("…") == true)
+
+        #expect(try await store.sessionTitle(agent: "claude", sessionID: "missing") == nil)
+        #expect(try await store.sessionTitle(agent: "codex", sessionID: "S") == nil, "keyed by agent too")
+    }
+
 }
 
 private func makeTextEntry(_ text: String, seed: Int, sessionID: String) -> HistoryEntry {
