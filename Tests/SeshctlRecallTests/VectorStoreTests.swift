@@ -289,6 +289,31 @@ struct VectorStoreTests {
         #expect(try await store.keywordHits(match: #""sparkle"*"#, limit: 10).isEmpty)
     }
 
+    @Test("entries(agent:sessionID:) returns one session's messages oldest first")
+    func entriesForSessionOrdered() async throws {
+        let store = try makeStore()
+        _ = try await store.insertText(entries: [
+            makeEntry(seed: 3, role: "assistant"),
+            makeEntry(seed: 1),
+            makeEntry(seed: 2, sessionID: "session-B"),
+            makeEntry(seed: 4, agent: "codex"),
+        ])
+        let entries = try await store.entries(agent: "claude", sessionID: "session-A")
+        #expect(entries.map(\.text) == ["entry-1", "entry-3"])
+        #expect(try await store.entries(agent: "claude", sessionID: "missing").isEmpty)
+    }
+
+    @Test("HistoryEntry.conversationTurn maps user and assistant, drops other roles")
+    func historyEntryConversationTurn() {
+        let date = Date(timeIntervalSince1970: 1_700_000_001)
+        #expect(makeEntry(seed: 1).conversationTurn == .userMessage(text: "entry-1", timestamp: date))
+        #expect(
+            makeEntry(seed: 1, role: "assistant").conversationTurn
+                == .assistantMessage(text: "entry-1", toolCalls: [], timestamp: date)
+        )
+        #expect(makeEntry(seed: 1, role: "system").conversationTurn == nil)
+    }
+
     @Test("Migration backfills the FTS index from entries stored before it existed")
     func migrationBackfillsExistingEntries() async throws {
         let db = try SeshctlDatabase.temporary()

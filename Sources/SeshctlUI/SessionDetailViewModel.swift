@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import SeshctlCore
+import SeshctlRecall
 
 @MainActor
 public final class SessionDetailViewModel: ObservableObject {
@@ -15,8 +16,21 @@ public final class SessionDetailViewModel: ObservableObject {
     @Published public private(set) var isLoading: Bool = false
     @Published public private(set) var error: String?
     /// The matched message from the history index, shown under `error` when
-    /// a history result's transcript has been deleted from disk.
+    /// a history result's transcript is deleted and the index has nothing
+    /// else for the session.
     @Published public private(set) var indexedMessage: String?
+    /// True when `turns` were rebuilt from the history index because the
+    /// transcript file is gone. The view shows a banner saying so.
+    @Published public private(set) var isRebuiltFromHistory: Bool = false
+    /// Turn to scroll to when the transcript first appears, instead of the
+    /// bottom: the matched message of a rebuilt history session.
+    @Published public private(set) var initialScrollTurnId: String?
+
+    /// Loads a session's indexed messages by agent and session id. Tests
+    /// swap it to avoid the shared recall stack.
+    var historyProvider: @Sendable (String, String) async throws -> [ConversationTurn] = { agent, sessionID in
+        try await RecallService.sessionHistory(agent: agent, sessionID: sessionID)
+    }
     @Published public var scrollCommand: ScrollCommand?
     @Published public var scrollToTurnId: String?
     public var scrollAnchor: UnitPoint = .center
@@ -103,6 +117,40 @@ public final class SessionDetailViewModel: ObservableObject {
         self.projectsRoot = projectsRoot
     }
 
+    /// Rebuild a deleted transcript from the history index, scrolled to the
+    /// matched message. Falls back to showing just that message when the
+    /// index has nothing for the session.
+    private func loadFromHistory(_ result: RecallResult) {
+        isLoading = true
+        let provider = historyProvider
+        Task {
+            let turns = (try? await provider(result.agent, result.sessionId)) ?? []
+            if turns.isEmpty {
+                self.error = Self.deletedTranscriptMessage
+                self.indexedMessage = result.text
+            } else {
+                self.isRebuiltFromHistory = true
+                self.initialScrollTurnId = Self.matchedTurnId(in: turns, for: result)
+                self.turns = turns
+            }
+            self.isLoading = false
+        }
+    }
+
+    /// The turn holding a history result's matched message, if present.
+    nonisolated static func matchedTurnId(in turns: [ConversationTurn], for result: RecallResult) -> String? {
+        turns.first { turn in
+            switch turn {
+            case .userMessage(let text, _), .assistantMessage(let text, _, _), .awaySummary(let text, _):
+                return text == result.text
+            }
+        }?.id
+    }
+
+    /// Shown above a transcript rebuilt from the history index.
+    public static let rebuiltFromHistoryMessage =
+        "Transcript deleted by Claude Code. Rebuilt from search history: messages only, no tool calls, and it can't be resumed."
+
     /// Shown for a history result whose transcript file is gone. Claude Code
     /// deletes transcripts older than `cleanupPeriodDays` (30 by default);
     /// seshctl's history index keeps their text.
@@ -127,8 +175,7 @@ public final class SessionDetailViewModel: ObservableObject {
                 directory: recallResult.project,
                 projectsRoot: projectsRoot
             ) else {
-                error = Self.deletedTranscriptMessage
-                indexedMessage = recallResult.text
+                loadFromHistory(recallResult)
                 return
             }
             url = resolved

@@ -117,6 +117,18 @@ public struct RecallService: Sendable {
         return try await stack.keywordSearch(query: query, limit: limit)
     }
 
+    /// Every message the index kept for one session, oldest first, as
+    /// conversation turns. Rebuilds a conversation whose transcript file
+    /// has been deleted. Tool calls aren't indexed, so turns carry none.
+    public static func sessionHistory(
+        agent: String,
+        sessionID: String
+    ) async throws -> [ConversationTurn] {
+        let stack = try await sharedStack()
+        return try await stack.sessionHistory(agent: agent, sessionID: sessionID)
+            .compactMap(\.conversationTurn)
+    }
+
     // MARK: - Shared-state plumbing.
 
     // `NSLock` (not an actor) so the synchronous `configure(_:)` entry
@@ -476,6 +488,10 @@ final actor RecallStack {
             )
         }
         return RecallSearchResponse(results: results, indexingCount: nil)
+    }
+
+    func sessionHistory(agent: String, sessionID: String) async throws -> [HistoryEntry] {
+        try await vectorStore.entries(agent: agent, sessionID: sessionID)
     }
 
     /// Mirror the Python pipeline's per-agent resume command. Exhaustive

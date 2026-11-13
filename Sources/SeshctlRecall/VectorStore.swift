@@ -208,6 +208,25 @@ public actor VectorStore {
         }
     }
 
+    /// Every stored message of one session, oldest first. The index keeps
+    /// one copy of each distinct message text per session, so a repeated
+    /// message ("yes") appears once, at its first occurrence.
+    public func entries(agent: String, sessionID: String) throws -> [HistoryEntry] {
+        try database.dbPool.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT id, agent, role, session_id, project, timestamp, text, text_hash
+                    FROM recall_entries
+                    WHERE agent = ? AND session_id = ?
+                    ORDER BY timestamp ASC, id ASC
+                """,
+                arguments: [agent, sessionID]
+            )
+            return rows.map(Self.entry(from:))
+        }
+    }
+
     /// Up to `limit` entries that have no embedding yet, oldest id first.
     public func entriesMissingEmbeddings(limit: Int) throws -> [HistoryEntry] {
         try database.dbPool.read { db in

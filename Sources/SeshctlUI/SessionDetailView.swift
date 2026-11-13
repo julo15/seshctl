@@ -56,6 +56,17 @@ public struct SessionDetailView: View {
                 }
             }
 
+            if viewModel.isRebuiltFromHistory {
+                Label(SessionDetailViewModel.rebuiltFromHistoryMessage, systemImage: "clock.arrow.circlepath")
+                    .font(.system(.footnote, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.orange.opacity(0.1))
+                Divider()
+            }
+
             // Content
             if viewModel.isLoading {
                 Spacer()
@@ -141,8 +152,13 @@ public struct SessionDetailView: View {
                         }
                     }
                     .onAppear {
-                        // Start at bottom
-                        proxy.scrollTo("bottom-anchor", anchor: .bottom)
+                        // Start at the matched message of a rebuilt history
+                        // session, otherwise at the bottom.
+                        if let turnId = viewModel.initialScrollTurnId {
+                            proxy.scrollTo(turnId, anchor: .center)
+                        } else {
+                            proxy.scrollTo("bottom-anchor", anchor: .bottom)
+                        }
                     }
                     .onChange(of: viewModel.scrollCommand) { command in
                         guard let command else { return }

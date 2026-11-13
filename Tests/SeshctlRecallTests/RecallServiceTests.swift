@@ -363,6 +363,23 @@ struct RecallServiceTests {
         #expect(embedded == 0, "keyword search must never embed")
     }
 
+    @Test("sessionHistory returns a session's indexed messages as turns")
+    func sessionHistoryReturnsTurns() async throws {
+        RecallService._resetForTests()
+        let db = try SeshctlDatabase.temporary()
+        let entries: [HistoryEntry] = [
+            makeEntry(text: "first ask", sessionID: "S1"),
+            makeEntry(text: "other session", sessionID: "S2"),
+        ]
+        let mock = MockAdapter(name: "claude", entries: entries, cursor: Data("v1".utf8))
+        RecallService.configureForTesting(database: db, adapters: [mock], embedder: NeverEmbedder())
+        // Index the text the way a search would.
+        _ = try await RecallService.keywordSearch(query: "first")
+
+        let turns = try await RecallService.sessionHistory(agent: "claude", sessionID: "S1")
+        #expect(turns == [.userMessage(text: "first ask", timestamp: Date(timeIntervalSince1970: 1))])
+    }
+
     @Test("keywordSearch with nothing searchable returns empty without building the stack")
     func keywordSearchShortQuery() async throws {
         RecallService._resetForTests()

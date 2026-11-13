@@ -64,7 +64,7 @@ public struct RecallResultRowView: View {
                     Label("transcript deleted", systemImage: "trash")
                         .font(.system(.footnote, design: .monospaced))
                         .foregroundStyle(.secondary)
-                        .help("Claude Code deleted this transcript (it removes them after 30 days by default), so it can't be resumed. Enter shows the matched message.")
+                        .help("Claude Code deleted this transcript (it removes them after 30 days by default), so it can't be resumed. Enter shows what search history kept.")
                 }
             }
 
