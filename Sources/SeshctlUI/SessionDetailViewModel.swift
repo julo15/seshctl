@@ -6,6 +6,7 @@ import SeshctlCore
 public final class SessionDetailViewModel: ObservableObject {
     public let session: Session?
     public let recallResult: RecallResult?
+    private let projectsRoot: URL
 
     @Published public internal(set) var turns: [ConversationTurn] = [] {
         didSet { displayItems = TranscriptDisplay.build(turns) }
@@ -13,6 +14,9 @@ public final class SessionDetailViewModel: ObservableObject {
     @Published public internal(set) var displayItems: [DisplayItem] = []
     @Published public private(set) var isLoading: Bool = false
     @Published public private(set) var error: String?
+    /// The matched message from the history index, shown under `error` when
+    /// a history result's transcript has been deleted from disk.
+    @Published public private(set) var indexedMessage: String?
     @Published public var scrollCommand: ScrollCommand?
     @Published public var scrollToTurnId: String?
     public var scrollAnchor: UnitPoint = .center
@@ -86,12 +90,25 @@ public final class SessionDetailViewModel: ObservableObject {
     public init(session: Session) {
         self.session = session
         self.recallResult = nil
+        self.projectsRoot = TranscriptParser.defaultProjectsRoot
     }
 
-    public init(recallResult: RecallResult, session: Session?) {
+    public init(
+        recallResult: RecallResult,
+        session: Session?,
+        projectsRoot: URL = TranscriptParser.defaultProjectsRoot
+    ) {
         self.session = session
         self.recallResult = recallResult
+        self.projectsRoot = projectsRoot
     }
+
+    /// Shown for a history result whose transcript file is gone. Claude Code
+    /// deletes transcripts older than `cleanupPeriodDays` (30 by default);
+    /// seshctl's history index keeps their text.
+    public static let deletedTranscriptMessage =
+        "This transcript was deleted, so it can't be opened or resumed. Claude Code removes transcripts after 30 days by default. Only the matched message was kept in search history:"
+
 
     public func load() {
         let url: URL
@@ -107,9 +124,11 @@ public final class SessionDetailViewModel: ObservableObject {
         } else if let recallResult {
             guard let resolved = TranscriptParser.resolveExistingTranscript(
                 conversationId: recallResult.sessionId,
-                directory: recallResult.project
+                directory: recallResult.project,
+                projectsRoot: projectsRoot
             ) else {
-                error = "No transcript available"
+                error = Self.deletedTranscriptMessage
+                indexedMessage = recallResult.text
                 return
             }
             url = resolved

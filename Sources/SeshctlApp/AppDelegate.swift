@@ -778,6 +778,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else if let session = vm.selectedSession {
             target = session.isActive ? .activeSession(session) : .inactiveSession(session)
         } else if let result = vm.selectedRecallResult {
+            // A deleted transcript can't be resumed (`claude --resume` fails
+            // with "No conversation found"). Open the detail view instead,
+            // which explains why and shows the message the index kept.
+            if vm.isTranscriptDeleted(result) {
+                openDetailForSelected(vm: vm)
+                return
+            }
             target = .recallResult(result, matchedSession: vm.session(for: result))
         } else {
             return

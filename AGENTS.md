@@ -276,6 +276,10 @@ Typing in the panel runs two searches:
 
 **Ranking** (`KeywordRanking.rankSessions`): each session's best message by `bm25`, scaled by a recency bonus (up to 2×, halving every 21 days). Snippets come from FTS5's `snippet()` with `\u{1}`/`\u{2}` around matched terms; `RecallResult.snippetSegments` parses them, so the row highlights exactly what matched rather than re-searching the text.
 
+**Deleted transcripts.** Claude Code deletes transcripts older than `cleanupPeriodDays` (30 by default), but the index keeps their text, so most of what history search finds may no longer be on disk, and `claude --resume` on it fails with "No conversation found". After each search, `SessionListViewModel` checks each Claude result's transcript (`transcriptExists(for:projectsRoot:)`) and records the missing ones in `deletedTranscriptSessionIds`. Those rows render a hollow dot and "transcript deleted", and Enter opens the detail view instead of resuming. The detail view explains the deletion and shows the indexed message. Other agents' results aren't checked, so they're never marked deleted.
+
+**No results.** `showsNoSearchResults` is true only once the current query's history search has finished (`recallCompletedQuery == searchQuery`) and found nothing while no panel row matches. Gating on the finished query keeps "No matches" from flashing between keystrokes. Queries too short for history search (`searchedHistory == false`) get different subtext.
+
 **Semantic search** is not wired to the panel. It stays for a future LLM tier (embeddings as candidate retrieval). Its fixed cutoff (`RecallService.minimumScore`) is a stopgap: cosine scores from MiniLM aren't comparable across queries, and vague queries score noise above it.
 
 ## Title Suggestions (`t`)

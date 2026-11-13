@@ -63,11 +63,31 @@ public struct SessionDetailView: View {
                     .progressViewStyle(.circular)
                 Spacer()
             } else if let error = viewModel.error {
-                Spacer()
-                Text(error)
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                Spacer()
+                if let message = viewModel.indexedMessage {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(error)
+                                .font(.system(.body, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                            Text(message)
+                                .font(.body)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(12)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(Color.primary.opacity(0.06))
+                                )
+                        }
+                        .padding(16)
+                    }
+                } else {
+                    Spacer()
+                    Text(error)
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
             } else if viewModel.turns.isEmpty {
                 Spacer()
                 Text("No messages")

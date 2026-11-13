@@ -6,11 +6,15 @@ public struct RecallResultRowView: View {
     let isActive: Bool
     let hostApp: HostAppInfo?
     var searchQuery: String?
+    /// The transcript is gone from disk: the row can't be resumed, so it
+    /// says so and renders hollow.
+    var isTranscriptDeleted: Bool
     var onDetail: (() -> Void)?
 
-    public init(result: RecallResult, isActive: Bool = false, hostApp: HostAppInfo? = nil, searchQuery: String? = nil, onDetail: (() -> Void)? = nil) {
+    public init(result: RecallResult, isActive: Bool = false, hostApp: HostAppInfo? = nil, searchQuery: String? = nil, isTranscriptDeleted: Bool = false, onDetail: (() -> Void)? = nil) {
         self.result = result
         self.isActive = isActive
+        self.isTranscriptDeleted = isTranscriptDeleted
         self.hostApp = hostApp
         self.searchQuery = searchQuery
         self.onDetail = onDetail
@@ -28,9 +32,15 @@ public struct RecallResultRowView: View {
 
     @ViewBuilder
     private var statusIndicator: some View {
-        Circle()
-            .fill(isActive ? .green : .gray)
-            .frame(width: 8, height: 8)
+        if isTranscriptDeleted {
+            Circle()
+                .strokeBorder(Color.gray, lineWidth: 1.5)
+                .frame(width: 8, height: 8)
+        } else {
+            Circle()
+                .fill(isActive ? .green : .gray)
+                .frame(width: 8, height: 8)
+        }
     }
 
     @ViewBuilder
@@ -48,6 +58,13 @@ public struct RecallResultRowView: View {
                     Text(scoreLabel)
                         .font(.system(.body, design: .monospaced))
                         .foregroundStyle(.secondary)
+                }
+
+                if isTranscriptDeleted {
+                    Label("transcript deleted", systemImage: "trash")
+                        .font(.system(.footnote, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .help("Claude Code deleted this transcript (it removes them after 30 days by default), so it can't be resumed. Enter shows the matched message.")
                 }
             }
 

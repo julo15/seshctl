@@ -3576,4 +3576,108 @@ struct SessionListViewModelTests {
         // so the user gets actionable copy instead of a blank tree.
         #expect(vm.emptyState == .filteredOut)
     }
+
+    // MARK: - History: deleted transcripts and no-results state
+
+    private func historyResult(_ sessionId: String, agent: String = "claude") -> RecallResult {
+        RecallResult(
+            agent: agent, role: "user", sessionId: sessionId,
+            project: "/tmp/history-project", timestamp: Date().timeIntervalSince1970,
+            score: 1, resumeCmd: "claude --resume \(sessionId)", text: "matched text",
+            snippet: "matched text"
+        )
+    }
+
+    @Test("History results whose Claude transcript is gone are marked deleted")
+    @MainActor
+    func historyResultsMarkDeletedTranscripts() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("seshctl-history-\(UUID().uuidString)")
+        let projectDir = root.appendingPathComponent("-tmp-history-project")
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data().write(to: projectDir.appendingPathComponent("kept.jsonl"))
+
+        let db = try SeshctlDatabase.temporary()
+        let vm = SessionListViewModel(database: db, enableGC: false, projectsRoot: root)
+        let kept = historyResult("kept")
+        let gone = historyResult("gone")
+        let codex = historyResult("codex-thread", agent: "codex")
+        vm.recallSearchProvider = { _, _ in
+            RecallSearchResponse(results: [kept, gone, codex], indexingCount: nil)
+        }
+        vm.enterSearch()
+        vm.appendSearchCharacter("ma")
+
+        await waitForRecall { vm.recallResults.count == 3 }
+
+        #expect(vm.isTranscriptDeleted(gone))
+        #expect(!vm.isTranscriptDeleted(kept))
+        // Only Claude transcripts can be located; others aren't flagged.
+        #expect(!vm.isTranscriptDeleted(codex))
+
+        vm.exitSearch()
+        #expect(vm.deletedTranscriptSessionIds.isEmpty)
+    }
+
+    @Test("showsNoSearchResults waits for the search, then reports nothing found")
+    @MainActor
+    func showsNoSearchResultsAfterEmptySearch() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.recallSearchProvider = { _, _ in
+            RecallSearchResponse(results: [], indexingCount: nil)
+        }
+        vm.enterSearch()
+        vm.appendSearchCharacter("zq")
+        // Debounce pending: no answer for this query yet.
+        #expect(!vm.showsNoSearchResults)
+
+        await waitForRecall { vm.recallCompletedQuery == "zq" }
+        #expect(vm.showsNoSearchResults)
+        #expect(vm.searchedHistory)
+
+        // A new keystroke hides it again until that query's answer lands.
+        vm.appendSearchCharacter("x")
+        #expect(!vm.showsNoSearchResults)
+        await waitForRecall { vm.recallCompletedQuery == "zqx" }
+        #expect(vm.showsNoSearchResults)
+
+        vm.exitSearch()
+        #expect(!vm.showsNoSearchResults)
+        #expect(vm.recallCompletedQuery == nil)
+    }
+
+    @Test("showsNoSearchResults is false when history finds something or fails")
+    @MainActor
+    func showsNoSearchResultsFalseWithResultsOrError() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        let hit = historyResult("hit")
+        vm.recallSearchProvider = { query, _ in
+            if query == "bo" { throw RecallError.searchFailed("boom") }
+            return RecallSearchResponse(results: [hit], indexingCount: nil)
+        }
+        vm.enterSearch()
+        vm.appendSearchCharacter("hi")
+        await waitForRecall { vm.recallCompletedQuery == "hi" }
+        #expect(!vm.showsNoSearchResults)
+
+        vm.clearSearchQuery()
+        vm.appendSearchCharacter("bo")
+        await waitForRecall { vm.recallErrorMessage != nil }
+        #expect(!vm.showsNoSearchResults)
+    }
+
+    @Test("searchedHistory is false for queries too short for history search")
+    @MainActor
+    func searchedHistoryFalseForShortQuery() throws {
+        let db = try SeshctlDatabase.temporary()
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.enterSearch()
+        vm.appendSearchCharacter("a")
+        #expect(!vm.searchedHistory)
+        vm.appendSearchCharacter("b")
+        #expect(vm.searchedHistory)
+    }
 }

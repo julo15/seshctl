@@ -154,6 +154,15 @@ public final class SessionListViewModel: ObservableObject {
     /// path defensively.)
     @Published public private(set) var recallErrorMessage: String?
     @Published public private(set) var recallGeneration: Int = 0
+    /// History results whose transcript is gone from disk, by session id.
+    /// Claude Code deletes transcripts after `cleanupPeriodDays` (30 by
+    /// default) but the history index keeps their text, so these can be
+    /// found but not resumed. See `isTranscriptDeleted(_:)`.
+    @Published public private(set) var deletedTranscriptSessionIds: Set<String> = []
+    /// The query whose history search last finished without error. Lets
+    /// `showsNoSearchResults` wait for the current query's answer instead
+    /// of flashing "no matches" between keystrokes.
+    @Published public private(set) var recallCompletedQuery: String?
     /// One-time toast flag: set to `true` when the user presses `x` with a
     /// cloud row selected. The view observes this, renders a toast, then
     /// calls `acknowledgeCloudKillToast()` to reset.
@@ -1540,6 +1549,8 @@ public final class SessionListViewModel: ObservableObject {
         recallSearchTask?.cancel()
         recallResults = []
         recallErrorMessage = nil
+        recallCompletedQuery = nil
+        deletedTranscriptSessionIds = []
         clearRecallSearchState()
     }
 
@@ -1688,6 +1699,43 @@ public final class SessionListViewModel: ObservableObject {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(command, forType: .string)
     }
+    /// True when a history result's transcript has been deleted from disk,
+    /// so it can't be resumed or opened — only its indexed text remains.
+    public func isTranscriptDeleted(_ result: RecallResult) -> Bool {
+        deletedTranscriptSessionIds.contains(result.sessionId)
+    }
+
+    /// True once the current query's searches have both come back empty:
+    /// no panel row matches and history found nothing.
+    public var showsNoSearchResults: Bool {
+        isSearching
+            && !searchQuery.isEmpty
+            && recallCompletedQuery == searchQuery
+            && !isRecallSearching
+            && recallResults.isEmpty
+            && recallErrorMessage == nil
+            && orderedRows.isEmpty
+    }
+
+    /// Whether the current query is long enough for history search to run
+    /// (see `KeywordQuery.matchExpression`). Too-short queries only filter
+    /// panel rows, and the empty state says so.
+    public var searchedHistory: Bool {
+        KeywordQuery.matchExpression(for: searchQuery) != nil
+    }
+
+    /// Whether a history result's transcript is still on disk. Only Claude
+    /// transcripts can be located from a result (by conversation id);
+    /// other agents are assumed present rather than wrongly marked deleted.
+    nonisolated static func transcriptExists(for result: RecallResult, projectsRoot: URL) -> Bool {
+        guard SessionTool(rawValue: result.agent) == .claude else { return true }
+        return TranscriptParser.resolveExistingTranscript(
+            conversationId: result.sessionId,
+            directory: result.project,
+            projectsRoot: projectsRoot
+        ) != nil
+    }
+
     /// Find any session (active or inactive) matching a recall result's session ID.
     public func session(for result: RecallResult) -> Session? {
         sessions.first { $0.conversationId == result.sessionId }
@@ -1704,9 +1752,11 @@ public final class SessionListViewModel: ObservableObject {
         recallSearchTask?.cancel()
 
         let query = searchQuery
+        recallCompletedQuery = nil
         guard !query.isEmpty else {
             recallResults = []
             recallErrorMessage = nil
+            deletedTranscriptSessionIds = []
             isRecallSearching = false
             return
         }
@@ -1762,9 +1812,17 @@ public final class SessionListViewModel: ObservableObject {
                 let shownIds = Set((self?.orderedRows ?? []).compactMap { row -> String? in
                     if case .local(let session) = row { return session.conversationId } else { return nil }
                 })
-                self?.recallResults = response.results.filter { !shownIds.contains($0.sessionId) }
-                self?.recallGeneration += 1
-                self?.clearRecallSearchState()
+                guard let self else { return }
+                let results = response.results.filter { !shownIds.contains($0.sessionId) }
+                self.deletedTranscriptSessionIds = Set(
+                    results
+                        .filter { !Self.transcriptExists(for: $0, projectsRoot: self.projectsRoot) }
+                        .map(\.sessionId)
+                )
+                self.recallResults = results
+                self.recallCompletedQuery = query
+                self.recallGeneration += 1
+                self.clearRecallSearchState()
             } catch let recallError as RecallError {
                 guard !Task.isCancelled else { return }
                 switch recallError {

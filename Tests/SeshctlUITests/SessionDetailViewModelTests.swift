@@ -92,13 +92,30 @@ struct SessionDetailViewModelTests {
         #expect(vm.toolName == "claude")
     }
 
-    @Test("RecallResult with missing transcript file shows error")
+    @Test("RecallResult with deleted transcript explains why and keeps the matched message")
     func recallResultMissingTranscript() {
         let result = makeRecallResult(sessionId: "nonexistent-\(UUID().uuidString)")
         let vm = SessionDetailViewModel(recallResult: result, session: nil)
         vm.load()
-        #expect(vm.error == "No transcript available")
+        #expect(vm.error == SessionDetailViewModel.deletedTranscriptMessage)
+        #expect(vm.indexedMessage == "test recall text")
         #expect(!vm.isLoading)
+    }
+
+    @Test("RecallResult resolves its transcript under the injected projects root")
+    func recallResultResolvesUnderProjectsRoot() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("seshctl-detail-\(UUID().uuidString)")
+        let projectDir = root.appendingPathComponent("-somewhere-else")
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data().write(to: projectDir.appendingPathComponent("conv-found.jsonl"))
+
+        let result = makeRecallResult(sessionId: "conv-found")
+        let vm = SessionDetailViewModel(recallResult: result, session: nil, projectsRoot: root)
+        vm.load()
+        #expect(vm.error == nil)
+        #expect(vm.indexedMessage == nil)
     }
 
     // MARK: - Search Tests
