@@ -138,17 +138,17 @@ struct TitleSuggestionTests {
         let session = try db.startSession(tool: .claude, directory: "/tmp/a", pid: 1, conversationId: "conv-a")
         let vm = makeViewModel(db)
         let firstRelease = DispatchSemaphore(value: 0)
-        let calls = Counter()
+        // Each request captures the generator installed when it's made, so
+        // give each its own. Telling them apart by call order raced: the
+        // two runs start on detached tasks in no guaranteed order.
         vm.titleSuggestionGenerator = { _ in
-            if calls.next() == 1 {
-                firstRelease.wait()
-                return .success("Stale")
-            }
-            return .success("Fresh")
+            firstRelease.wait()
+            return .success("Stale")
         }
-
         vm.requestTitleSuggestion()
         #expect(vm.dismissTitleSuggestion())
+
+        vm.titleSuggestionGenerator = { _ in .success("Fresh") }
         vm.requestTitleSuggestion()
         await waitForSuggestions(vm, id: session.id)
         #expect(vm.titleSuggestionsById[session.id] == .ready("Fresh"))

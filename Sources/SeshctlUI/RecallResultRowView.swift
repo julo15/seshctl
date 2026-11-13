@@ -10,10 +10,21 @@ public struct RecallResultRowView: View {
     /// The transcript is gone from disk: the row can't be resumed, so it
     /// says so and renders hollow.
     var isTranscriptDeleted: Bool
+    /// Whether this row is the list's keyboard selection: expands the
+    /// message onto up to three lines, like the live rows.
+    var isSelected: Bool
+    /// The matching session's git repo name, when there is one. Picks the
+    /// repo accent; falls back to the folder label, which is usually the
+    /// same name.
+    var repoName: String?
     var onDetail: (() -> Void)?
 
-    public init(result: RecallResult, liveStatus: SessionStatus? = nil, hostApp: HostAppInfo? = nil, searchQuery: String? = nil, isTranscriptDeleted: Bool = false, onDetail: (() -> Void)? = nil) {
+    @AppStorage(AppearanceDefaults.repoAccentBarKey) private var repoAccentBarEnabled: Bool = AppearanceDefaults.repoAccentBarDefault
+
+    public init(result: RecallResult, liveStatus: SessionStatus? = nil, hostApp: HostAppInfo? = nil, searchQuery: String? = nil, isTranscriptDeleted: Bool = false, isSelected: Bool = false, repoName: String? = nil, onDetail: (() -> Void)? = nil) {
         self.result = result
+        self.isSelected = isSelected
+        self.repoName = repoName
         self.liveStatus = liveStatus
         self.isTranscriptDeleted = isTranscriptDeleted
         self.hostApp = hostApp
@@ -38,74 +49,90 @@ public struct RecallResultRowView: View {
         )
     }
 
+    /// Mirrors `SessionRowView`'s compact layout (fonts, spacing, colors) so
+    /// History rows read as the same kind of row as the live list. The
+    /// headline is the checkout folder in its repo accent: a past session
+    /// has no title to show, and the folder is what identifies it.
     @ViewBuilder
     private var mainContent: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                Text(projectName)
-                    .font(.system(.body, design: .monospaced, weight: .semibold))
-                    .foregroundStyle(.primary)
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(folderLabel)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(headlineColor)
                     .lineLimit(1)
-
-                // Keyword relevance isn't a percentage; only semantic
-                // results show a score.
-                if result.snippet == nil {
-                    Text(scoreLabel)
-                        .font(.system(.body, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                }
+                    .layoutPriority(1)
+                    .help(result.project)
 
                 if isTranscriptDeleted {
                     Label("transcript deleted", systemImage: "trash")
-                        .font(.system(.footnote, design: .monospaced))
+                        .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.secondary)
+                        .fixedSize()
                         .help("This transcript was deleted, so it can't be resumed. \(SessionDetailViewModel.claudeRetentionNote) Enter shows what search history kept.")
+                }
+
+                if !isSelected {
+                    messageText(singleLine: true)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
             }
 
-            HStack(spacing: 4) {
-                Text(roleTag)
-                    .font(.body.weight(.bold))
-                    .foregroundStyle(.primary.opacity(0.8))
-                snippetText
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(.primary.opacity(0.8))
-                    .lineLimit(1)
+            if isSelected {
+                messageText(singleLine: false)
+                    .lineLimit(3)
                     .truncationMode(.tail)
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(.easeOut(duration: 0.15), value: isSelected)
     }
 
-    /// Keyword results highlight exactly the terms FTS matched; semantic
-    /// results fall back to highlighting the query's words.
-    private var snippetText: Text {
-        guard let marked = result.snippet else {
-            return highlightedText(snippet, query: searchQuery, perWord: true)
-        }
-        var attributed = AttributedString()
-        for segment in RecallResult.snippetSegments(marked) {
-            var run = AttributedString(segment.text)
-            if segment.isMatch {
-                run.backgroundColor = .yellow.opacity(0.25)
+    /// The matched message, styled like a live row's preview: 14pt
+    /// secondary, user prompts italic with a `You: ` prefix. Keyword results
+    /// highlight exactly the terms FTS matched; semantic results fall back to
+    /// highlighting the query's words.
+    private func messageText(singleLine: Bool) -> some View {
+        let isUser = result.role == "user"
+        let body: Text
+        if let marked = result.snippet {
+            var attributed = AttributedString(isUser ? "You: " : "")
+            for segment in RecallResult.snippetSegments(marked) {
+                var run = AttributedString(segment.text)
+                if segment.isMatch {
+                    run.backgroundColor = .yellow.opacity(0.25)
+                    run.foregroundColor = .primary
+                }
+                attributed += run
             }
-            attributed += run
+            body = Text(attributed)
+        } else {
+            let text = singleLine ? firstLine : result.text
+            body = Text(isUser ? "You: " : "") + highlightedText(text, query: searchQuery, perWord: true)
         }
-        return Text(attributed)
+        return body
+            .italic(isUser)
+            .font(.system(size: 14))
+            .foregroundStyle(.secondary)
     }
 
-    private var projectName: String {
-        (result.project as NSString).lastPathComponent
+    private var folderLabel: String {
+        Session.folderLabel(forDirectory: result.project)
     }
 
-    private var scoreLabel: String {
-        "\(Int(round(result.score * 100)))%"
+    /// The repo accent when color coding is on, like the live rows' folder
+    /// label; otherwise the dimmed primary of a read compact headline.
+    private var headlineColor: Color {
+        if repoAccentBarEnabled, let color = repoAccentColor(for: repoName ?? folderLabel) {
+            return color
+        }
+        return Color.primary.opacity(0.62)
     }
 
-    private var roleTag: String {
-        result.role == "user" ? "[you]" : "[bot]"
-    }
-
-    private var snippet: String {
+    private var firstLine: String {
         let cleaned = result.text
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .components(separatedBy: .newlines)

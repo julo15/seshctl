@@ -263,6 +263,8 @@ public struct SessionListView: View {
                                             hostApp: matchedSession.map { hostAppResolver.resolve(session: $0) },
                                             searchQuery: viewModel.searchQuery,
                                             isTranscriptDeleted: viewModel.isTranscriptDeleted(result),
+                                            isSelected: isSelected,
+                                            repoName: matchedSession?.gitRepoName,
                                             onDetail: onOpenRecallDetail.map { handler in
                                                 {
                                                     if let session = matchedSession {
@@ -282,7 +284,7 @@ public struct SessionListView: View {
                                                     ? Color.accentColor.opacity(0.2)
                                                     : Color.clear)
                                         )
-                                        .opacity(isSelected ? 0.9 : 0.6)
+                                        .opacity(rowOpacity(isActive: false, isSelected: isSelected))
                                         .id("recall-\(viewModel.recallGeneration)-\(recallIndex)")
                                     }
                                 }
