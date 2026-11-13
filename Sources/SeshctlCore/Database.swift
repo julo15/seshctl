@@ -376,6 +376,43 @@ public struct SeshctlDatabase: Sendable {
                 """)
         }
 
+        // Names for sessions with no real title: the first message the user
+        // typed, on one line. History rows show it as the headline, so it
+        // goes into title_fts too; otherwise searching for a name you saw
+        // ranks it as just another message, often outside the top 20. A
+        // real title replaces it: inserting into recall_titles deletes the
+        // fallback (and, via its trigger, its title_fts row). The indexer
+        // fills the table (`VectorStore.fillFallbackTitles`), since picking
+        // the "typed" message needs Swift's filter.
+        migrator.registerMigration("v20_create_recall_fallback_titles") { db in
+            try db.execute(sql: """
+                CREATE TABLE recall_fallback_titles (
+                    agent TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    PRIMARY KEY (agent, session_id)
+                );
+                CREATE TRIGGER recall_fallback_titles_fts_ai AFTER INSERT ON recall_fallback_titles BEGIN
+                    INSERT INTO title_fts (title, agent, session_id, source)
+                        VALUES (new.title, new.agent, new.session_id, 'first');
+                END;
+                CREATE TRIGGER recall_fallback_titles_fts_au AFTER UPDATE ON recall_fallback_titles BEGIN
+                    DELETE FROM title_fts
+                        WHERE agent = old.agent AND session_id = old.session_id AND source = 'first';
+                    INSERT INTO title_fts (title, agent, session_id, source)
+                        VALUES (new.title, new.agent, new.session_id, 'first');
+                END;
+                CREATE TRIGGER recall_fallback_titles_fts_ad AFTER DELETE ON recall_fallback_titles BEGIN
+                    DELETE FROM title_fts
+                        WHERE agent = old.agent AND session_id = old.session_id AND source = 'first';
+                END;
+                CREATE TRIGGER recall_titles_replace_fallback AFTER INSERT ON recall_titles BEGIN
+                    DELETE FROM recall_fallback_titles
+                        WHERE agent = new.agent AND session_id = new.session_id;
+                END;
+                """)
+        }
+
         try migrator.migrate(dbPool)
     }
 

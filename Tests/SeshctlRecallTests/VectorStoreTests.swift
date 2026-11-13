@@ -490,6 +490,40 @@ struct VectorStoreTests {
         #expect(try await store.latestEntry(agent: "claude", sessionID: "S")?.text == "newer")
         #expect(try await store.latestEntry(agent: "claude", sessionID: "missing") == nil)
     }
+
+    @Test("fillFallbackTitles names untitled sessions by their first typed message; a real title replaces it")
+    func fillFallbackTitlesLifecycle() async throws {
+        let store = try makeStore()
+        func userEntry(_ text: String, seed: Int, session: String) -> HistoryEntry {
+            HistoryEntry(
+                id: nil, agent: "claude", role: "user", sessionID: session, project: "/p",
+                timestamp: Double(seed), text: text, textHash: HistoryEntry.textHash(for: text)
+            )
+        }
+        _ = try await store.insertText(entries: [
+            userEntry("messenger bag research", seed: 1, session: "U"),
+            userEntry("<command-name>/x</command-name>", seed: 1, session: "LATER"),
+            userEntry("already titled", seed: 1, session: "T"),
+        ])
+        try await store.upsertTitles([IndexedTitle(agent: "claude", sessionID: "T", aiTitle: "Real title", customTitle: nil)])
+        try await store.fillFallbackTitles()
+
+        #expect(try await store.titleMatches(match: #""messenger"*"#, limit: 10).map(\.sessionID) == ["U"])
+        #expect(try await store.titleMatches(match: #""already"*"#, limit: 10).isEmpty, "titled sessions get no fallback")
+        #expect(try await store.sessionTitle(agent: "claude", sessionID: "LATER") == nil)
+
+        // A session with no typed message yet is picked up once it has one.
+        _ = try await store.insertText(entries: [userEntry("typed at last", seed: 2, session: "LATER")])
+        try await store.fillFallbackTitles()
+        #expect(try await store.sessionTitle(agent: "claude", sessionID: "LATER") == "typed at last")
+        #expect(try await store.titleMatches(match: #""typed"*"#, limit: 10).map(\.sessionID) == ["LATER"])
+
+        // A real title arriving later replaces the fallback, in display and search.
+        try await store.upsertTitles([IndexedTitle(agent: "claude", sessionID: "U", aiTitle: "Bag shopping", customTitle: nil)])
+        #expect(try await store.sessionTitle(agent: "claude", sessionID: "U") == "Bag shopping")
+        #expect(try await store.titleMatches(match: #""messenger"*"#, limit: 10).isEmpty)
+        #expect(try await store.titleMatches(match: #""shopping"*"#, limit: 10).map(\.sessionID) == ["U"])
+    }
 }
 
 private func makeTextEntry(_ text: String, seed: Int, sessionID: String) -> HistoryEntry {

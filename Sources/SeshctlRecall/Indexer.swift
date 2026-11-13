@@ -67,6 +67,9 @@ public actor Indexer {
             try Task.checkCancellation()
             try await store.writeCursor(adapterName: adapter.name, cursor: load.newCursor)
         }
+        // After titles land, so a session that just got a real title isn't
+        // given a fallback.
+        try await store.fillFallbackTitles()
     }
 
     /// Phase 2: embed every stored entry that has no vector yet, in chunks

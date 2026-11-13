@@ -397,6 +397,9 @@ struct RecallServiceTests {
         RecallService._resetForTests()
         let db = try SeshctlDatabase.temporary()
         let entries: [HistoryEntry] = [
+            // MSG's first message names it, so it must not mention the
+            // query: this session should match by message only.
+            makeEntry(text: "unrelated opener", sessionID: "MSG"),
             makeEntry(text: "talk about the reaper", sessionID: "MSG"),
             makeEntry(text: "nothing relevant", sessionID: "TITLED"),
         ]
@@ -414,6 +417,25 @@ struct RecallServiceTests {
         #expect(titled.snippet == nil, "matched by title only; its newest message stands in")
         #expect(titled.text == "nothing relevant")
         #expect(resp.results[1].titleMatch == nil)
+    }
+
+    @Test("Searching an untitled session's first-message name ranks it as a title match")
+    func keywordSearchMatchesFallbackTitles() async throws {
+        RecallService._resetForTests()
+        let db = try SeshctlDatabase.temporary()
+        let entries: [HistoryEntry] = [
+            makeEntry(text: "messenger bag research", sessionID: "NAMED"),
+            // Mentions the words more often, so it out-ranks NAMED as a message.
+            makeEntry(text: "opening line", sessionID: "CHATTY"),
+            makeEntry(text: "messenger bag messenger bag messenger bag", sessionID: "CHATTY"),
+        ]
+        let mock = MockAdapter(name: "claude", entries: entries, cursor: Data("v1".utf8))
+        RecallService.configureForTesting(database: db, adapters: [mock], embedder: NeverEmbedder())
+
+        let resp = try await RecallService.keywordSearch(query: "messenger bag")
+        #expect(resp.results.first?.sessionId == "NAMED")
+        #expect(resp.results.first?.title == "messenger bag research")
+        #expect(resp.results.first?.titleMatch?.contains(KeywordHit.matchStart) == true)
     }
 
     @Test("sessionHistory returns a session's indexed messages as turns")

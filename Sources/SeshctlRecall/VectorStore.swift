@@ -299,21 +299,59 @@ public actor VectorStore {
             ), let title = (row["ai_title"] as String?) ?? (row["custom_title"] as String?) {
                 return title
             }
-            let texts = try String.fetchAll(
+            if let fallback = try String.fetchOne(
                 db,
-                sql: """
-                    SELECT text FROM recall_entries
-                    WHERE agent = ? AND session_id = ? AND role = 'user'
-                    ORDER BY timestamp ASC, id ASC
-                    LIMIT ?
-                """,
-                arguments: [agent, sessionID, Self.firstMessageScanLimit]
-            )
-            guard let typed = texts.lazy.compactMap(TitleSuggester.typedRequest).first else { return nil }
-            let line = typed.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-            guard line.count > Self.firstMessageTitleLength else { return line }
-            return String(line.prefix(Self.firstMessageTitleLength - 1)) + "…"
+                sql: "SELECT title FROM recall_fallback_titles WHERE agent = ? AND session_id = ?",
+                arguments: [agent, sessionID]
+            ) {
+                return fallback
+            }
+            return try Self.firstMessageTitle(db, agent: agent, sessionID: sessionID)
         }
+    }
+
+    /// Store a first-message name for every session that has neither a real
+    /// title nor one yet, so title search matches the name History rows
+    /// show. Sessions with no typed message yet are retried on the next
+    /// call. Cheap after the first run: only new sessions lack a row.
+    public func fillFallbackTitles() throws {
+        try database.dbPool.write { db in
+            let sessions = try Row.fetchAll(db, sql: """
+                SELECT DISTINCT e.agent, e.session_id
+                FROM recall_entries e
+                WHERE e.role = 'user'
+                  AND NOT EXISTS (SELECT 1 FROM recall_titles t WHERE t.agent = e.agent AND t.session_id = e.session_id)
+                  AND NOT EXISTS (SELECT 1 FROM recall_fallback_titles f WHERE f.agent = e.agent AND f.session_id = e.session_id)
+            """)
+            for row in sessions {
+                let agent: String = row["agent"]
+                let sessionID: String = row["session_id"]
+                guard let title = try Self.firstMessageTitle(db, agent: agent, sessionID: sessionID) else { continue }
+                try db.execute(
+                    sql: "INSERT INTO recall_fallback_titles (agent, session_id, title) VALUES (?, ?, ?)",
+                    arguments: [agent, sessionID, title]
+                )
+            }
+        }
+    }
+
+    /// The session's first typed user message on one line, cut to
+    /// `firstMessageTitleLength`, or `nil` when it has none.
+    private static func firstMessageTitle(_ db: Database, agent: String, sessionID: String) throws -> String? {
+        let texts = try String.fetchAll(
+            db,
+            sql: """
+                SELECT text FROM recall_entries
+                WHERE agent = ? AND session_id = ? AND role = 'user'
+                ORDER BY timestamp ASC, id ASC
+                LIMIT ?
+            """,
+            arguments: [agent, sessionID, Self.firstMessageScanLimit]
+        )
+        guard let typed = texts.lazy.compactMap(TitleSuggester.typedRequest).first else { return nil }
+        let line = typed.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard line.count > Self.firstMessageTitleLength else { return line }
+        return String(line.prefix(Self.firstMessageTitleLength - 1)) + "…"
     }
 
     /// Every stored message of one session, oldest first. The index keeps
