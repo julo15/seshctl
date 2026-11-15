@@ -3,7 +3,7 @@ import SeshctlCore
 
 /// Returns a stable accent color for a repository. Used to tint the per-row
 /// accent bar, the row's repo-name (sender) field, and the tree-view
-/// group-header dot, so sessions from the same repo visually cluster across
+/// group-header chip, so sessions from the same repo visually cluster across
 /// local and remote rows. Worktree/dir labels and branch names stay monotone
 /// so only one token on the row carries the accent.
 ///
@@ -69,7 +69,7 @@ func srgbToLab(_ rgb: (Double, Double, Double)) -> (Double, Double, Double) {
 /// repos came out some shade of orange and read as indistinguishable.
 /// Colliding with a status hue is the lesser evil: the status dot is a
 /// small circle in its own column and the repo accent is a 2pt bar plus
-/// the repo-name text, so they're never confused for one another.
+/// a tinted repo-name chip, so they're never confused for one another.
 ///
 /// **Except for the two loudest status hues.** The working dot is system
 /// green (~135°) and the waiting dot is vivid amber #FFA500 (~39°), and the

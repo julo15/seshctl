@@ -142,16 +142,9 @@ private struct GroupHeaderView: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            if let dotColor {
-                Circle()
-                    .fill(dotColor)
-                    .frame(width: 7, height: 7)
-            }
-            Text(name)
-                .font(.system(.body, design: .monospaced, weight: .semibold))
-                .foregroundStyle(.secondary)
+            RepoChip(text: name, color: chipColor, size: .header)
             Text("\(count)")
-                .font(.system(.body, design: .monospaced))
+                .font(.system(size: RepoChip.Size.header.fontSize, weight: .medium))
                 .foregroundStyle(.tertiary)
             Spacer()
         }
@@ -160,14 +153,12 @@ private struct GroupHeaderView: View {
         .padding(.bottom, 4)
     }
 
-    /// Dot color for the group header. Returns `nil` to hide the dot
-    /// entirely when:
-    ///   - the toggle is off (consistent with rows, which hide the
-    ///     accent bar rather than falling back to grey), or
+    /// Chip color for the group header: the repo accent, or gray when
+    ///   - the toggle is off (matching the rows' gray chip), or
     ///   - the group is a synthetic non-repo bucket (e.g. "Cloud — no
-    ///     repo") where a confident repo-color dot would be misleading.
-    private var dotColor: Color? {
-        guard repoAccentBarEnabled, isRepo else { return nil }
-        return repoAccentColor(for: name)
+    ///     repo") where a confident repo color would be misleading.
+    private var chipColor: Color {
+        guard repoAccentBarEnabled, isRepo, let color = repoAccentColor(for: name) else { return .secondary }
+        return color
     }
 }
