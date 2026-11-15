@@ -3,6 +3,48 @@
     <channel>
         <title>Seshctl</title>
         <item>
+            <title>0.8.0</title>
+            <pubDate>Sat, 14 Nov 2026 20:28:16 -0500</pubDate>
+            <sparkle:version>10</sparkle:version>
+            <sparkle:shortVersionString>0.8.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h1>Seshctl 0.8.0</h1>
+
+<h2>Search your whole history</h2>
+
+<p>Typing in the panel now also searches every message from every past session, not just the rows on screen. Matches show up in a <strong>History</strong> section, one row per session, with the matched words highlighted. Each word you type matches as a prefix, and <code>"quoted text"</code> matches a phrase. Sessions whose title matches rank first.</p>
+
+<p>Claude Code deletes transcripts after 30 days, but Seshctl keeps the text. Those rows are marked <strong>transcript deleted</strong>, and Enter shows the conversation rebuilt from search history instead of trying to resume it.</p>
+
+<h2>Retitle a session with <code>t</code></h2>
+
+<p>Claude Code titles a session once, from its first prompt, so a long session keeps the name of its first task. Press <strong>t</strong> to have Claude suggest a title for what the session is doing now. <strong>y</strong> keeps it, <strong>n</strong> or Esc declines it. It needs the <code>claude</code> CLI installed.</p>
+
+<h2>See each session&rsquo;s model</h2>
+
+<p>Rows show a small pill with the session&rsquo;s model, like &ldquo;Opus 5.5&rdquo; or &ldquo;GPT-5.6 Terra&rdquo;. It turns amber when a session isn&rsquo;t on the model you usually use for that agent.</p>
+
+<h2>Codex rows get titles</h2>
+
+<p>Codex sessions now show their thread names as row titles, instead of falling back to the branch or folder.</p>
+
+<h2>Sessions in the Claude app&rsquo;s Code tab</h2>
+
+<p>Enter on a session you started in the Claude desktop app&rsquo;s Code tab now opens that session in the app, instead of just bringing the app forward. It also reopens sessions that have finished.</p>
+
+<h2>Fixes</h2>
+
+<ul>
+<li><strong>Agent badges</strong> use the real Codex mark and Claude&rsquo;s brand color.</li>
+<li><strong>VoiceOver</strong> reads rows as &ldquo;Ghostty, Claude Code&rdquo;.</li>
+</ul>
+
+
+<p>Thanks to @patoms for the model pill and agent naming work in this release.</p>
+]]></description>
+            <enclosure url="https://github.com/julo15/seshctl/releases/download/v0.8.0/Seshctl-0.8.0.dmg" length="39562354" type="application/octet-stream" sparkle:edSignature="0PnCTG5YPoHum6Usld0GcI/WYfz77tmyQhlREsXJK2rlvAd+rI0f2FoXjc1HyA7ttkBtF6qC8k6nLUT5b32ZBw=="/>
+        </item>
+        <item>
             <title>0.7.0</title>
             <pubDate>Thu, 22 Oct 2026 14:15:32 -0400</pubDate>
             <sparkle:version>9</sparkle:version>
@@ -98,24 +140,6 @@
 
 ]]></description>
             <enclosure url="https://github.com/julo15/seshctl/releases/download/v0.6.0/Seshctl-0.6.0.dmg" length="38659590" type="application/octet-stream" sparkle:edSignature="6ppoP69Vb8Z15CV1xip+vVPT3RXJvd07j+v4VTe/Uo3zDP4nS5uBgyx6f/LkWvay+BIc089osYb2TOUfGUC/Bg=="/>
-        </item>
-        <item>
-            <title>0.5.1</title>
-            <pubDate>Wed, 27 May 2026 21:49:32 -0400</pubDate>
-            <sparkle:version>7</sparkle:version>
-            <sparkle:shortVersionString>0.5.1</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h1>Seshctl 0.5.1</h1>
-
-<h2>Held-key transcript scroll, actually fixed this time</h2>
-
-<p>0.5.0 claimed the transcript-view hang on held <code>Ctrl+B</code> (and <code>Ctrl+F</code>/<code>D</code>/<code>U</code>, <code>j</code>/<code>k</code>) was resolved. It wasn&rsquo;t — the May fix removed two contributing factors (per-keystroke <code>NSView</code> walk, overlapping 80 ms animations) but left the dominant one untouched: each page-jump materializes 15–30 rows in one tick, and each row synchronously re-parses its markdown through cmark-gfm with no cache. A single burst could exceed the ~33 ms macOS key-repeat interval, so events queued faster than they drained and the main thread pegged at 100% CPU.</p>
-
-<p>0.5.1 throttles keyboard scroll commands to ~20 Hz so the run loop has breathing room between bursts. A brief 40 ms ease-out animation is restored on each scroll — kept strictly shorter than the throttle window so animations can&rsquo;t queue. <code>g</code>/<code>G</code> and <code>gg</code> are now throttled too (previously they fired a SwiftUI animation tick on every key-repeat, even though the anchor target is idempotent). Trackpad scrolling is unchanged — it never used this path.</p>
-
-<p>The fix is a backpressure bound, not a per-row speedup; transcripts with very heavy markdown will still feel each scroll. A future release will cache parsed markdown per turn so the underlying cost goes away.</p>
-]]></description>
-            <enclosure url="https://github.com/julo15/seshctl/releases/download/v0.5.1/Seshctl-0.5.1.dmg" length="38492793" type="application/octet-stream" sparkle:edSignature="hqqTGExJzCCZ2qvDA5a3e72WExsvhG51wVIp2rzAqP5k74JzxbVygtYpjQdo3f0KHZcuzP7TQm3GdVenK86gAw=="/>
         </item>
     </channel>
 </rss>
