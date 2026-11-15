@@ -37,7 +37,7 @@ struct ResultRowLayout<Status: View, Content: View>: View {
     /// The compact layout passes nil and draws the pill beside its headline.
     /// Nil leaves no gap.
     var modelPill: ModelPill? = nil
-    /// A short monospaced label (the compact layout's repo name) shown just
+    /// A short tinted chip (the compact layout's repo name) shown just
     /// left of the host-app icon, where the stacked layouts put the model
     /// pill. Nil leaves no gap.
     var trailingLabel: (text: String, color: Color)? = nil
@@ -99,11 +99,7 @@ struct ResultRowLayout<Status: View, Content: View>: View {
             }
 
             if let trailingLabel {
-                Text(trailingLabel.text)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(trailingLabel.color)
-                    .lineLimit(1)
-                    .fixedSize()
+                RepoChip(text: trailingLabel.text, color: trailingLabel.color)
                     .frame(height: 24)
             }
 
@@ -183,5 +179,35 @@ struct ResultRowLayout<Status: View, Content: View>: View {
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 12)
+    }
+}
+
+/// A repo (or folder) name in a filled capsule tinted with its color: the
+/// compact rows' trailing label and the tree view's group headers. Filled
+/// rather than outlined so it stays distinct from the model pill. Section
+/// headers (a repo group in the tree view) use the larger `.header` size.
+struct RepoChip: View {
+    enum Size {
+        case row, header
+
+        var fontSize: CGFloat { self == .row ? 12.5 : 14.5 }
+        var weight: Font.Weight { self == .row ? .medium : .semibold }
+        var horizontalPadding: CGFloat { self == .row ? 8 : 10 }
+        var verticalPadding: CGFloat { self == .row ? 3 : 4 }
+    }
+
+    let text: String
+    let color: Color
+    var size: Size = .row
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: size.fontSize, weight: size.weight))
+            .foregroundStyle(color)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, size.horizontalPadding)
+            .padding(.vertical, size.verticalPadding)
+            .background(Capsule().fill(color.opacity(0.15)))
     }
 }

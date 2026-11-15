@@ -3,7 +3,7 @@ import SeshctlCore
 
 /// Returns a stable accent color for a repository. Used to tint the per-row
 /// accent bar, the row's repo-name (sender) field, and the tree-view
-/// group-header dot, so sessions from the same repo visually cluster across
+/// group-header chip, so sessions from the same repo visually cluster across
 /// local and remote rows. Worktree/dir labels and branch names stay monotone
 /// so only one token on the row carries the accent.
 ///

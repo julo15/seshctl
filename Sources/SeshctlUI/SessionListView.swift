@@ -474,7 +474,7 @@ public struct SessionListView: View {
     private func sectionHeader(_ title: String) -> some View {
         HStack {
             Text(title.uppercased())
-                .font(.system(.callout, design: .monospaced, weight: .semibold))
+                .font(.system(.callout, weight: .semibold))
                 .foregroundStyle(.tertiary)
             Spacer()
         }
