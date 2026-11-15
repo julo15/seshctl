@@ -1,20 +1,49 @@
 import SwiftUI
 import SeshctlCore
 
-/// Returns a stable accent color for a repository, derived by hashing the
-/// repo name into a curated palette. Used to tint the per-row accent bar,
-/// the row's repo-name (sender) field, and the tree-view group-header
-/// dot, so sessions from the same repo visually cluster across local and
-/// remote rows. Worktree/dir labels and branch names stay monotone so
-/// only one token on the row carries the accent.
+/// Returns a stable accent color for a repository. Used to tint the per-row
+/// accent bar, the row's repo-name (sender) field, and the tree-view
+/// group-header dot, so sessions from the same repo visually cluster across
+/// local and remote rows. Worktree/dir labels and branch names stay monotone
+/// so only one token on the row carries the accent.
+///
+/// The slot comes from `RepoColorAssigner`, not a bare `hash % count`: the
+/// hash is only the repo's preferred slot, and a repo whose slot is already
+/// held by another recently seen repo gets the free slot that looks most
+/// different. The choice is saved, so a repo keeps its color across launches.
 ///
 /// Returns `nil` for `nil`/empty input so callers can fall back to their
 /// default foreground style — rows without a repo identity (e.g., non-git
 /// directories) stay unstyled rather than picking an arbitrary color.
 public func repoAccentColor(for name: String?) -> Color? {
     guard let name, !name.isEmpty else { return nil }
-    let index = Int(StableHash.djb2(name) % UInt64(repoAccentPalette.count))
-    return repoAccentPalette[index]
+    return repoAccentPalette[repoColorAssigner.slot(for: name)]
+}
+
+let repoColorAssigner = RepoColorAssigner(
+    slotCount: repoAccentPaletteRGB.count,
+    distance: repoAccentSlotDistance
+)
+
+/// CIE76 ΔE between two palette slots. Coarser than CIEDE2000, but only used
+/// to rank fallback slots, where it's plenty.
+func repoAccentSlotDistance(_ a: Int, _ b: Int) -> Double {
+    let la = repoAccentPaletteLab[a], lb = repoAccentPaletteLab[b]
+    let dl = la.0 - lb.0, da = la.1 - lb.1, db = la.2 - lb.2
+    return (dl * dl + da * da + db * db).squareRoot()
+}
+
+private let repoAccentPaletteLab = repoAccentPaletteRGB.map(srgbToLab)
+
+/// sRGB → CIE L*a*b* (D65).
+private func srgbToLab(_ rgb: (Double, Double, Double)) -> (Double, Double, Double) {
+    func linear(_ u: Double) -> Double { u <= 0.04045 ? u / 12.92 : pow((u + 0.055) / 1.055, 2.4) }
+    let r = linear(rgb.0), g = linear(rgb.1), b = linear(rgb.2)
+    let x = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047
+    let y = 0.2126 * r + 0.7152 * g + 0.0722 * b
+    let z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883
+    func f(_ t: Double) -> Double { t > 0.008856 ? cbrt(t) : 7.787 * t + 16.0 / 116.0 }
+    return (116 * f(y) - 16, 500 * (f(x) - f(y)), 200 * (f(y) - f(z)))
 }
 
 /// Curated 12-color dark-mode palette: hues spread around the wheel, starting
@@ -63,20 +92,22 @@ public func repoAccentColor(for name: String?) -> Color? {
 /// The panel forces `.darkAqua` (see `FloatingPanel`), so these are tuned
 /// for a dark background only and need no light-mode variant.
 ///
-/// Changing the count reshuffles every repo's color, since assignment is
-/// `hash % count`. That's a one-time reassignment, not a stability bug —
-/// a given name still maps to the same slot on every launch.
-let repoAccentPalette: [Color] = [
-    Color(red: 0.93, green: 0.50, blue: 0.35),  // coral      15°
-    Color(red: 0.82, green: 0.75, blue: 0.41),  // mustard    50° (off the waiting amber)
-    Color(red: 0.75, green: 0.90, blue: 0.38),  // lime       75°
-    Color(red: 0.60, green: 0.45, blue: 0.00),  // bronze     45° (replaced git-like green)
-    Color(red: 0.47, green: 0.85, blue: 0.62),  // mint      144° (off the working green)
-    Color(red: 0.33, green: 0.78, blue: 0.68),  // teal      165°
-    Color(red: 0.36, green: 0.75, blue: 0.90),  // cyan      195°
-    Color(red: 0.33, green: 0.49, blue: 0.82),  // azure     225°
-    Color(red: 1.00, green: 0.80, blue: 0.90),  // blush     330° (replaced merged-like indigo)
-    Color(red: 0.00, green: 0.55, blue: 0.55),  // deep teal 180° (replaced merged-like violet)
-    Color(red: 0.92, green: 0.40, blue: 0.78),  // magenta   315°
-    Color(red: 0.84, green: 0.35, blue: 0.49),  // rose      345°
+/// Changing the count shifts every repo's preferred slot, but saved
+/// assignments still in range keep their color; only out-of-range ones are
+/// reassigned.
+let repoAccentPalette: [Color] = repoAccentPaletteRGB.map { Color(red: $0.0, green: $0.1, blue: $0.2) }
+
+let repoAccentPaletteRGB: [(Double, Double, Double)] = [
+    (0.93, 0.50, 0.35),  // coral      15°
+    (0.82, 0.75, 0.41),  // mustard    50° (off the waiting amber)
+    (0.75, 0.90, 0.38),  // lime       75°
+    (0.60, 0.45, 0.00),  // bronze     45° (replaced git-like green)
+    (0.47, 0.85, 0.62),  // mint      144° (off the working green)
+    (0.33, 0.78, 0.68),  // teal      165°
+    (0.36, 0.75, 0.90),  // cyan      195°
+    (0.33, 0.49, 0.82),  // azure     225°
+    (1.00, 0.80, 0.90),  // blush     330° (replaced merged-like indigo)
+    (0.00, 0.55, 0.55),  // deep teal 180° (replaced merged-like violet)
+    (0.92, 0.40, 0.78),  // magenta   315°
+    (0.84, 0.35, 0.49),  // rose      345°
 ]

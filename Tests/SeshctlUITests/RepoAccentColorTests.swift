@@ -174,9 +174,8 @@ struct RepoAccentColorTests {
     func distribution() {
         let names = ["seshctl", "mozi-app", "dashboard", "infra", "api", "web", "cli", "docs"]
         let colors = Set(names.compactMap { repoAccentColor(for: $0) })
-        // With 10 palette slots and 8 inputs, at least 4 distinct colors is a
-        // reasonable floor — guards against a buggy hash that collapses into
-        // one bucket. Exact count is allowed to drift if we tune the palette.
-        #expect(colors.count >= 4)
+        // Repos are now assigned distinct slots until the palette fills, so 8
+        // names in 12 slots must get 8 distinct colors.
+        #expect(colors.count == names.count)
     }
 }
