@@ -25,10 +25,16 @@ struct RepoColorAssignerTests {
     }
 
     private func hashSlot(_ name: String, _ count: Int = 12) -> Int {
-        Int(StableHash.djb2(name) % UInt64(count))
+        RepoColorAssigner.preferredSlot(for: name, slotCount: count)
     }
 
     private let start = Date(timeIntervalSince1970: 1_800_000_000)
+
+    /// Renaming the key would silently drop every saved color.
+    @Test("Defaults key is pinned")
+    func defaultsKeyPinned() {
+        #expect(RepoColorAssigner.defaultsKey == "seshctl.repoColorAssignments")
+    }
 
     @Test("A repo whose hash slot is free gets that slot")
     func usesPreferredSlot() {
@@ -124,5 +130,94 @@ struct RepoColorAssignerTests {
 
         let narrow = makeAssigner(slotCount: 4, defaults: defaults)
         #expect((0..<4).contains(narrow.slot(for: "assistant", now: start)))
+    }
+
+    // MARK: - Throttle, tie-break, corrupt data, peek, full-palette share
+
+    private func storedLastSeen(_ name: String, in defaults: UserDefaults) throws -> Date {
+        let data = try #require(defaults.data(forKey: RepoColorAssigner.defaultsKey))
+        let decoded = try JSONDecoder().decode([String: RepoColorAssigner.Assignment].self, from: data)
+        return try #require(decoded[name]).lastSeen
+    }
+
+    /// A name other than `name` whose preferred slot is the same.
+    private func collidingName(with name: String, slotCount: Int = 12) -> String {
+        let target = hashSlot(name, slotCount)
+        return (0...).lazy.map { "collide-\($0)" }.first { $0 != name && hashSlot($0, slotCount) == target }!
+    }
+
+    @Test("lastSeen is rewritten at most once per touch interval")
+    func touchThrottle() throws {
+        let defaults = makeDefaults()
+        let assigner = makeAssigner(defaults: defaults)
+        _ = assigner.slot(for: "assistant", now: start)
+
+        _ = assigner.slot(for: "assistant", now: start.addingTimeInterval(23 * 60 * 60))
+        #expect(try storedLastSeen("assistant", in: defaults) == start)
+
+        let dayLater = start.addingTimeInterval(RepoColorAssigner.touchInterval)
+        _ = assigner.slot(for: "assistant", now: dayLater)
+        #expect(try storedLastSeen("assistant", in: defaults) == dayLater)
+    }
+
+    @Test("Equally distant free slots go to the first one after the preferred slot")
+    func tieBreakFollowsPreferred() {
+        let constant: @Sendable (Int, Int) -> Double = { _, _ in 1 }
+        let assigner = RepoColorAssigner(slotCount: 12, distance: constant, defaults: makeDefaults())
+        _ = assigner.slot(for: "seshctl", now: start)
+        let preferred = hashSlot("seshctl")
+        #expect(assigner.slot(for: collidingName(with: "seshctl"), now: start) == (preferred + 1) % 12)
+    }
+
+    @Test("The tie-break wraps past the last slot")
+    func tieBreakWraps() {
+        let constant: @Sendable (Int, Int) -> Double = { _, _ in 1 }
+        let assigner = RepoColorAssigner(slotCount: 12, distance: constant, defaults: makeDefaults())
+        #expect(assigner.slot(for: "assistant", now: start) == 11)
+        #expect(assigner.slot(for: "qbk-scheduler", now: start) == 0)
+    }
+
+    @Test("Unreadable saved data is discarded, not fatal")
+    func corruptDefaults() {
+        let defaults = makeDefaults()
+        defaults.set(Data("not json".utf8), forKey: RepoColorAssigner.defaultsKey)
+        let assigner = makeAssigner(defaults: defaults)
+        #expect(assigner.slot(for: "assistant", now: start) == 11)
+    }
+
+    @Test("peekSlot returns a saved slot without claiming one for new names")
+    func peekDoesNotClaim() {
+        let defaults = makeDefaults()
+        let assigner = makeAssigner(defaults: defaults)
+        let assistant = assigner.slot(for: "assistant", now: start)
+
+        // Saved slot comes back as-is.
+        #expect(assigner.peekSlot(for: "assistant", now: start) == assistant)
+        // An unsaved name gets its hash slot even though that slot is taken...
+        #expect(assigner.peekSlot(for: "qbk-scheduler", now: start) == hashSlot("qbk-scheduler"))
+        // ...and nothing was saved, so a later claim still avoids the collision.
+        #expect(assigner.slot(for: "qbk-scheduler", now: start) != assistant)
+    }
+
+    @Test("peekSlot ignores an expired assignment")
+    func peekIgnoresExpired() {
+        let expiry: TimeInterval = 60
+        let assigner = makeAssigner(defaults: makeDefaults(), expiry: expiry)
+        _ = assigner.slot(for: "assistant", now: start)
+        _ = assigner.slot(for: "qbk-scheduler", now: start)  // moved off 11
+        #expect(assigner.peekSlot(for: "qbk-scheduler", now: start.addingTimeInterval(expiry + 1)) == 11)
+    }
+
+    @Test("With every slot taken, the slot with the fewest holders wins over the oldest")
+    func fullPalettePrefersFewestHolders() {
+        let assigner = makeAssigner(slotCount: 2, defaults: makeDefaults())
+        let a = assigner.slot(for: "a", now: start)
+        let b = assigner.slot(for: "b", now: start.addingTimeInterval(1000))
+        #expect(a != b)
+        // c shares a's slot (both slots have one holder; a's is older).
+        #expect(assigner.slot(for: "c", now: start.addingTimeInterval(1)) == a)
+        // a's slot now has two holders, b's one, so d shares b's slot even
+        // though b was seen more recently.
+        #expect(assigner.slot(for: "d", now: start.addingTimeInterval(2000)) == b)
     }
 }

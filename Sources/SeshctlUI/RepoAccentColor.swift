@@ -12,18 +12,29 @@ import SeshctlCore
 /// held by another recently seen repo gets the free slot that looks most
 /// different. The choice is saved, so a repo keeps its color across launches.
 ///
+/// Pass `claimsSlot: false` from surfaces that list repos the user isn't
+/// working in (History search results): they get a repo's saved color if it
+/// has one and its hash color otherwise, without taking a slot. Otherwise a
+/// few searches would fill the palette and live repos would share colors.
+///
 /// Returns `nil` for `nil`/empty input so callers can fall back to their
 /// default foreground style — rows without a repo identity (e.g., non-git
 /// directories) stay unstyled rather than picking an arbitrary color.
-public func repoAccentColor(for name: String?) -> Color? {
-    guard let name, !name.isEmpty else { return nil }
-    return repoAccentPalette[repoColorAssigner.slot(for: name)]
+public func repoAccentColor(for name: String?, claimsSlot: Bool = true) -> Color? {
+    repoAccentColor(for: name, claimsSlot: claimsSlot, assigner: repoColorAssigner)
 }
 
-let repoColorAssigner = RepoColorAssigner(
-    slotCount: repoAccentPaletteRGB.count,
-    distance: repoAccentSlotDistance
-)
+func repoAccentColor(for name: String?, claimsSlot: Bool, assigner: RepoColorAssigner) -> Color? {
+    guard let name, !name.isEmpty else { return nil }
+    let slot = claimsSlot ? assigner.slot(for: name) : assigner.peekSlot(for: name)
+    return repoAccentPalette[slot]
+}
+
+let repoColorAssigner = makeRepoColorAssigner()
+
+func makeRepoColorAssigner(defaults: UserDefaults = .standard) -> RepoColorAssigner {
+    RepoColorAssigner(slotCount: repoAccentPaletteRGB.count, distance: repoAccentSlotDistance, defaults: defaults)
+}
 
 /// CIE76 ΔE between two palette slots. Coarser than CIEDE2000, but only used
 /// to rank fallback slots, where it's plenty.
@@ -36,7 +47,7 @@ func repoAccentSlotDistance(_ a: Int, _ b: Int) -> Double {
 private let repoAccentPaletteLab = repoAccentPaletteRGB.map(srgbToLab)
 
 /// sRGB → CIE L*a*b* (D65).
-private func srgbToLab(_ rgb: (Double, Double, Double)) -> (Double, Double, Double) {
+func srgbToLab(_ rgb: (Double, Double, Double)) -> (Double, Double, Double) {
     func linear(_ u: Double) -> Double { u <= 0.04045 ? u / 12.92 : pow((u + 0.055) / 1.055, 2.4) }
     let r = linear(rgb.0), g = linear(rgb.1), b = linear(rgb.2)
     let x = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047
@@ -95,9 +106,7 @@ private func srgbToLab(_ rgb: (Double, Double, Double)) -> (Double, Double, Doub
 /// Changing the count shifts every repo's preferred slot, but saved
 /// assignments still in range keep their color; only out-of-range ones are
 /// reassigned.
-let repoAccentPalette: [Color] = repoAccentPaletteRGB.map { Color(red: $0.0, green: $0.1, blue: $0.2) }
-
-let repoAccentPaletteRGB: [(Double, Double, Double)] = [
+private let repoAccentPaletteRGB: [(Double, Double, Double)] = [
     (0.93, 0.50, 0.35),  // coral      15°
     (0.82, 0.75, 0.41),  // mustard    50° (off the waiting amber)
     (0.75, 0.90, 0.38),  // lime       75°
@@ -111,3 +120,5 @@ let repoAccentPaletteRGB: [(Double, Double, Double)] = [
     (0.92, 0.40, 0.78),  // magenta   315°
     (0.84, 0.35, 0.49),  // rose      345°
 ]
+
+let repoAccentPalette: [Color] = repoAccentPaletteRGB.map { Color(red: $0.0, green: $0.1, blue: $0.2) }
