@@ -148,6 +148,7 @@ This re-fires whenever the hook scripts change, because Codex tracks them as *"M
 | cmux | Full | Two-level focus (workspace + surface). Same-pane fork requires opt-in — see [cmux setup](#cmux-setup) |
 | VS Code | Full | Companion extension auto-installed from **Editor Integrations** |
 | Cursor | Full | Companion extension auto-installed from **Editor Integrations** |
+| Claude desktop app | Full | Code sessions started in the app's Code tab focus that session via an undocumented `claude://` deep link; resume isn't supported |
 | Conductor.build | None | No AppleScript / URI / extension API exposed |
 | Other | Basic | Window-name matching via System Events fallback |
 

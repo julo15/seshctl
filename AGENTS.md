@@ -135,6 +135,14 @@ Rungs 1-2 are each wrapped in `try` because `tty` and `focus` are absent from ol
 
 `open -b` brings the app forward, then a URI handler (e.g. `vscode://julo15.seshctl/focus-terminal?pid=<pid>`) triggers the companion extension.
 
+**Pattern 2b: Claude desktop app deep link** (Code sessions started in the desktop app's Code tab)
+
+The desktop app runs the `claude` CLI itself, so the hooks record these sessions like any Claude session, with `com.anthropic.claudefordesktop` as the host app. It isn't a `TerminalApp`: there's no shell, TTY or tab to match, and the generic fallback below could only raise the app. `TerminalController.focus` checks for `ClaudeDesktopApp.bundleId` before the `TerminalApp` dispatch and calls `focusClaudeDesktopSession`. That resolves the app's own `local_<uuid>` id from the session's `conversationId` and opens `claude://code/continue?session=local_<uuid>`, which switches the app's window to that session.
+
+- **The id mapping comes from the app's session files.** `ClaudeDesktopApp.localSessionId(forCliSessionId:)` scans `~/Library/Application Support/Claude/claude-code-sessions/<account>/<org>/local_*.json` for the file whose `cliSessionId` (or `lastAssistantCliSessionId`) equals the conversation id, and skips archived sessions (the app ignores the link for those).
+- **Undocumented, like the cloud deep link.** The route and its `^local_[A-Za-z0-9-]{1,64}$` validator were found in `Claude.app/Contents/Resources/app.asar` and verified on desktop 5.11492.5; the app logs `LocalSessions.setFocusedSession` in `~/Library/Logs/Claude/main.log` when it lands. If the id can't be resolved, focus falls back to raising the app, which is the old behavior. If desktop focus "stops working", check that a session file still maps the conversation id before touching the routing.
+- **Resume isn't supported.** A closed desktop session has no shell to resume into, so Enter on one falls through to the clipboard fallback.
+
 **Pattern 3: Generic AppleScript fallback** (unknown apps)
 
 System Events script searches window names for the session's directory name and raises the matching window.

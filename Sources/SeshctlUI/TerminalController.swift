@@ -190,6 +190,13 @@ public enum TerminalController {
         let env = env ?? Self.environment
         guard let bundleId = knownBundleId ?? findAppBundleId(for: pid, env: env) else { return }
 
+        // A Code session the Claude desktop app runs itself: deep-link to it,
+        // since the app has no shell or tab to match.
+        if bundleId == ClaudeDesktopApp.bundleId {
+            focusClaudeDesktopSession(conversationId: conversationId, env: env)
+            return
+        }
+
         if let app = TerminalApp.from(bundleId: bundleId) {
             if app.supportsURIHandler {
                 // Precedence: hostWorkspaceFolder > launchDirectory > directory.
@@ -222,6 +229,24 @@ public enum TerminalController {
         } else {
             env.activateApp(bundleId: bundleId)
         }
+    }
+
+    /// Where `focusClaudeDesktopSession` looks up the desktop app's session
+    /// files. Tests point it at a temp directory.
+    nonisolated(unsafe) static var claudeDesktopSessionsRoot: URL = ClaudeDesktopApp.defaultLocalSessionsRoot
+
+    /// Switch the Claude desktop app to the local Code session whose CLI
+    /// conversation id is `conversationId`, via `claude://code/continue`.
+    /// When the session can't be resolved (no id, archived, or a desktop
+    /// update moved the files), just bring the app forward.
+    static func focusClaudeDesktopSession(conversationId: String?, env: SystemEnvironment) {
+        if let conversationId,
+           let localId = ClaudeDesktopApp.localSessionId(forCliSessionId: conversationId, sessionsRoot: claudeDesktopSessionsRoot),
+           let url = ClaudeDesktopApp.continueURL(localSessionId: localId) {
+            env.openURL(url)
+            return
+        }
+        env.activateApp(bundleId: ClaudeDesktopApp.bundleId)
     }
 
     // MARK: - Resume

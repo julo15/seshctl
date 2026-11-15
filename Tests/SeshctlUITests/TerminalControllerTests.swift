@@ -635,6 +635,74 @@ struct EscapingTests {
 
 @Suite("TerminalController - Focus Routing", .serialized)
 struct FocusRoutingTests {
+    /// Points `claudeDesktopSessionsRoot` at a temp folder holding one
+    /// session file mapping `conversationId` to `localId`, runs `body`, then
+    /// restores the default.
+    private func withClaudeDesktopSession(conversationId: String, localId: String, _ body: () -> Void) throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("claude-desktop-focus-\(UUID().uuidString)", isDirectory: true)
+        let dir = root.appendingPathComponent("acct/org", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let json = try JSONSerialization.data(withJSONObject: ["sessionId": localId, "cliSessionId": conversationId])
+        try json.write(to: dir.appendingPathComponent("\(localId).json"))
+        let saved = TerminalController.claudeDesktopSessionsRoot
+        TerminalController.claudeDesktopSessionsRoot = root
+        defer {
+            TerminalController.claudeDesktopSessionsRoot = saved
+            try? FileManager.default.removeItem(at: root)
+        }
+        body()
+    }
+
+    @Test("Claude desktop session focus deep-links to the local session")
+    func claudeDesktopRouting() throws {
+        let env = MockSystemEnvironment()
+        try withClaudeDesktopSession(conversationId: "conv-1", localId: "local_abc-123") {
+            TerminalController.focus(
+                pid: 54915, directory: "/tmp/project", launchDirectory: nil,
+                bundleId: ClaudeDesktopApp.bundleId, tool: .claude, conversationId: "conv-1",
+                environment: env
+            )
+        }
+
+        #expect(env.openedURLs == [URL(string: "claude://code/continue?session=local_abc-123")!])
+        #expect(env.activatedApps.isEmpty)
+        #expect(env.executedScripts.isEmpty)
+        #expect(env.shellCommands.isEmpty)
+    }
+
+    @Test("Claude desktop focus is detected from the PID walk too")
+    func claudeDesktopRoutingViaPid() throws {
+        let env = MockSystemEnvironment()
+        env.guiApps = [54915: ClaudeDesktopApp.bundleId]
+        try withClaudeDesktopSession(conversationId: "conv-1", localId: "local_abc") {
+            TerminalController.focus(pid: 54915, directory: "/tmp/project", launchDirectory: nil, conversationId: "conv-1", environment: env)
+        }
+
+        #expect(env.openedURLs == [URL(string: "claude://code/continue?session=local_abc")!])
+    }
+
+    @Test("Claude desktop focus only raises the app when the session can't be resolved")
+    func claudeDesktopFallback() throws {
+        let env = MockSystemEnvironment()
+        try withClaudeDesktopSession(conversationId: "conv-1", localId: "local_abc") {
+            TerminalController.focus(
+                pid: 54915, directory: "/tmp/project", launchDirectory: nil,
+                bundleId: ClaudeDesktopApp.bundleId, conversationId: "conv-other",
+                environment: env
+            )
+            TerminalController.focus(
+                pid: 54915, directory: "/tmp/project", launchDirectory: nil,
+                bundleId: ClaudeDesktopApp.bundleId, conversationId: nil,
+                environment: env
+            )
+        }
+
+        #expect(env.openedURLs.isEmpty)
+        #expect(env.activatedApps == [ClaudeDesktopApp.bundleId, ClaudeDesktopApp.bundleId])
+        #expect(env.executedScripts.isEmpty)
+    }
+
     @Test("Terminal.app focus uses open -b then AppleScript")
     func terminalRouting() {
         let env = MockSystemEnvironment()
