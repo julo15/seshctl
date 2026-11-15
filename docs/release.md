@@ -53,9 +53,11 @@ Back up the EdDSA private key (one-line base64) and the `.p12` code-signing key 
 
 ## Cutting a release
 
-1. **Bump version** in [`Resources/Info.plist`](../Resources/Info.plist):
-   - `CFBundleShortVersionString`: human-facing (e.g., `0.3.0` → `0.4.0`).
-   - `CFBundleVersion`: monotonically-increasing integer that Sparkle compares (`3` → `4`). **Sparkle ignores releases that don't strictly bump this.**
+1. **Bump version**: `make bump-version VERSION=<x.y.z>`. It sets two keys in [`Resources/Info.plist`](../Resources/Info.plist):
+   - `CFBundleShortVersionString`: human-facing (e.g., `0.3.0` → `0.4.0`), set to `VERSION`.
+   - `CFBundleVersion`: monotonically-increasing integer that Sparkle compares (`3` → `4`), incremented by one. **Sparkle ignores releases that don't strictly bump this.**
+
+   Don't edit these with PlistBuddy or `plutil -replace`: both rewrite the whole plist in their own formatting. The script edits only the two values, so the diff is two lines.
 2. **Write release notes** at `docs/release-notes/<VERSION>.md`. Used as both Sparkle's update prompt body and the GitHub Release body — single source of truth.
 3. **Verify tests pass**: `swift test` (via a subagent per [`AGENTS.md`](../AGENTS.md)).
 4. **Build**:

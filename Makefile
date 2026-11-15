@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help build build-release bundle icon sign make-dmg dist appcast publish publish-docs publish-release install cert-setup run-app run-cli test test-core test-ui clean resolve kill-build install-vscode install-cursor uninstall
+.PHONY: bump-version help build build-release bundle icon sign make-dmg dist appcast publish publish-docs publish-release install cert-setup run-app run-cli test test-core test-ui clean resolve kill-build install-vscode install-cursor uninstall
 
 # Colors
 CYAN   := \033[36m
@@ -19,6 +19,7 @@ help:
 	@printf "  $(CYAN)%-14s$(RESET) %s\n" "install" "Build + sign + drop Seshctl.app into /Applications and relaunch"
 	@echo ""
 	@printf "  $(DIM)release$(RESET)\n"
+	@printf "  $(CYAN)%-16s$(RESET) %s\n" "bump-version" "Set VERSION=x.y.z in Info.plist, +1 the build number"
 	@printf "  $(CYAN)%-16s$(RESET) %s\n" "appcast" "EdDSA-sign DMG + regenerate docs/appcast.xml"
 	@printf "  $(CYAN)%-16s$(RESET) %s\n" "publish" "publish-docs + publish-release (end-to-end release)"
 	@printf "  $(CYAN)%-16s$(RESET) %s\n" "publish-docs" "Commit + push metadata, poll Pages until appcast is live"
@@ -86,6 +87,10 @@ appcast:
 # `publish-docs` is idempotent and `make publish` will skip it the
 # second time if Pages already serves the version.
 publish: publish-docs publish-release
+
+bump-version:
+	@test -n "$(VERSION)" || { echo "Usage: make bump-version VERSION=x.y.z"; exit 1; }
+	bash scripts/bump-version.sh $(VERSION)
 
 publish-docs:
 	bash scripts/publish-docs.sh
