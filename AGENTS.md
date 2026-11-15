@@ -236,6 +236,10 @@ The palette follows the activity-monitor convention: green = the agent is runnin
 - **`repeatForever` animations can't be cancelled by resetting state.** The animated body is keyed with `.id(kind)` so a status change rebuilds it; without that, a session that went working → idle kept pulsing in gray.
 - **`drawingGroup()` rasterizes into the view's bounds.** The fixed 40pt frame must fit the largest effect (the working halo), or kinds without a halo clip to an 8×8 square. The frame doesn't affect layout — `ResultRowLayout` hosts the dot as an overlay.
 
+## Repo Colors
+
+`repoAccentColor(for:)` (`Sources/SeshctlUI/RepoAccentColor.swift`) tints a row's repo label, accent bar and tree header. The slot comes from `RepoColorAssigner` (`Sources/SeshctlCore/RepoColorAssigner.swift`), not a bare `djb2 % count`. Hashing alone collides by the birthday problem (12 slots: ~40% at 4 repos, ~78% at 6; `assistant` and `qbk-scheduler` both hashed to slot 11), and growing the palette can't fix that while keeping the colors distinguishable. The hash is only the preferred slot. When a repo's preferred slot is taken, it gets the free slot farthest (CIE76 ΔE) from the slots in use. Assignments are saved in UserDefaults (`seshctl.repoColorAssignments`) and kept while the repo is seen within 30 days, so a color never changes because another repo appeared. Once all 12 are in use, a new repo shares the slot with the fewest holders (then the least recently seen). History rows pass `claimsSlot: false`: they show a repo's saved color or its hash color but never take a slot, since search results list many repos the user isn't working in and would otherwise fill the palette. `lastSeen` is rewritten at most once a day (`touchInterval`) so row renders don't write UserDefaults, and expired entries are pruned only when a new repo is assigned.
+
 ## Bridged Sessions (local CLI <-> claude.ai)
 
 A CLI session started with `/remote-control` exists on both sides. `BridgeMatcher` pairs them so the list shows one row, not two, and the row exposes both halves: **Enter** focuses the terminal, **w** (or clicking the row's `cloud.fill` glyph) opens claude.ai.

@@ -3,6 +3,7 @@ import Foundation
 import SwiftUI
 import Testing
 
+import SeshctlCore
 @testable import SeshctlUI
 
 @Suite("RepoAccentColor")
@@ -19,8 +20,10 @@ struct RepoAccentColorTests {
 
     @Test("Same repo name always returns the same color")
     func deterministic() {
-        #expect(repoAccentColor(for: "seshctl") == repoAccentColor(for: "seshctl"))
-        #expect(repoAccentColor(for: "mozi-app") == repoAccentColor(for: "mozi-app"))
+        let assigner = isolatedAssigner()
+        func color(_ name: String) -> Color? { repoAccentColor(for: name, claimsSlot: true, assigner: assigner) }
+        #expect(color("seshctl") == color("seshctl"))
+        #expect(color("mozi-app") == color("mozi-app"))
     }
 
     @Test("Palette contains exactly 12 colors")
@@ -116,19 +119,9 @@ struct RepoAccentColorTests {
         try #require(NSColor(color).usingColorSpace(.deviceRGB))
     }
 
-    /// sRGB → CIE L*a*b* (D65).
     private func lab(of color: Color) throws -> (Double, Double, Double) {
         let ns = try #require(NSColor(color).usingColorSpace(.sRGB))
-        func linear(_ u: CGFloat) -> Double {
-            let u = Double(u)
-            return u <= 0.04045 ? u / 12.92 : pow((u + 0.055) / 1.055, 2.4)
-        }
-        let r = linear(ns.redComponent), g = linear(ns.greenComponent), b = linear(ns.blueComponent)
-        let x = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047
-        let y = 0.2126 * r + 0.7152 * g + 0.0722 * b
-        let z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883
-        func f(_ t: Double) -> Double { t > 0.008856 ? cbrt(t) : 7.787 * t + 16.0 / 116.0 }
-        return (116 * f(y) - 16, 500 * (f(x) - f(y)), 200 * (f(y) - f(z)))
+        return srgbToLab((Double(ns.redComponent), Double(ns.greenComponent), Double(ns.blueComponent)))
     }
 
     /// CIEDE2000 color difference.
@@ -170,13 +163,59 @@ struct RepoAccentColorTests {
         return terms.squareRoot()
     }
 
-    @Test("Common repo names distribute across the palette (no single-bucket collapse)")
+    /// An assigner on throwaway defaults, so tests never touch (or depend
+    /// on) the shared assigner's saved state.
+    private func isolatedAssigner() -> RepoColorAssigner {
+        let name = "RepoAccentColorTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        return makeRepoColorAssigner(defaults: defaults)
+    }
+
+    @Test("Common repo names get distinct colors until the palette fills")
     func distribution() {
+        let assigner = isolatedAssigner()
         let names = ["seshctl", "mozi-app", "dashboard", "infra", "api", "web", "cli", "docs"]
-        let colors = Set(names.compactMap { repoAccentColor(for: $0) })
-        // With 10 palette slots and 8 inputs, at least 4 distinct colors is a
-        // reasonable floor — guards against a buggy hash that collapses into
-        // one bucket. Exact count is allowed to drift if we tune the palette.
-        #expect(colors.count >= 4)
+        let colors = Set(names.compactMap { repoAccentColor(for: $0, claimsSlot: true, assigner: assigner) })
+        #expect(colors.count == names.count)
+    }
+
+    @Test("Repos whose hash slots collide get different colors")
+    func collidingReposDiffer() {
+        let assigner = isolatedAssigner()
+        let first = repoAccentColor(for: "assistant", claimsSlot: true, assigner: assigner)
+        let second = repoAccentColor(for: "qbk-scheduler", claimsSlot: true, assigner: assigner)
+        #expect(first != nil && second != nil)
+        #expect(first != second)
+    }
+
+    @Test("A non-claiming lookup shows the hash color and leaves the slot free")
+    func nonClaimingLookup() {
+        let assigner = isolatedAssigner()
+        let assistant = repoAccentColor(for: "assistant", claimsSlot: true, assigner: assigner)
+        // History-style lookup: same hash slot as assistant, so same color...
+        #expect(repoAccentColor(for: "qbk-scheduler", claimsSlot: false, assigner: assigner) == assistant)
+        // ...but it didn't claim, so a live row still gets a distinct one.
+        #expect(repoAccentColor(for: "qbk-scheduler", claimsSlot: true, assigner: assigner) != assistant)
+    }
+
+    @Test("sRGB to Lab matches reference values")
+    func labReference() {
+        let white = srgbToLab((1, 1, 1))
+        #expect(abs(white.0 - 100) < 0.1 && abs(white.1) < 0.1 && abs(white.2) < 0.1)
+        let red = srgbToLab((1, 0, 0))
+        #expect(abs(red.0 - 53.24) < 0.1 && abs(red.1 - 80.09) < 0.2 && abs(red.2 - 67.20) < 0.2)
+    }
+
+    @Test("Slot distance is zero to itself, symmetric, and positive between slots")
+    func slotDistance() {
+        let n = repoAccentPalette.count
+        for a in 0..<n {
+            #expect(repoAccentSlotDistance(a, a) == 0)
+            for b in 0..<n where b != a {
+                #expect(repoAccentSlotDistance(a, b) == repoAccentSlotDistance(b, a))
+                #expect(repoAccentSlotDistance(a, b) > 0)
+            }
+        }
     }
 }

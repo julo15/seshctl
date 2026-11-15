@@ -147,7 +147,7 @@ public struct RecallResultRowView: View {
     /// The repo accent when color coding is on, like the live rows' folder
     /// label; otherwise `.secondary`.
     private var folderLabelColor: Color {
-        if repoAccentBarEnabled, let color = repoAccentColor(for: repoName ?? folderLabel) {
+        if repoAccentBarEnabled, let color = repoAccentColor(for: repoName ?? folderLabel, claimsSlot: false) {
             return color
         }
         return .secondary
