@@ -85,11 +85,29 @@ struct KeywordRankingTests {
         let ranked = KeywordRanking.rankSessions(
             hits, now: now, limit: 10,
             titleMatches: [
-                KeywordRanking.sessionKey(agent: "claude", sessionID: "titled"),
-                KeywordRanking.sessionKey(agent: "claude", sessionID: "titled-and-message"),
+                KeywordRanking.sessionKey(agent: "claude", sessionID: "titled"): -1,
+                KeywordRanking.sessionKey(agent: "claude", sessionID: "titled-and-message"): -1,
             ]
         )
+        // Equal title ranks fall back to the message score.
         #expect(ranked.map(\.candidate.sessionID) == ["titled-and-message", "titled", "strong-message"])
+    }
+
+    @Test("Within the title tier the better title match goes first, even with no message match")
+    func titleRankOrdersTitleTier() {
+        let hits = [
+            hit(session: "strong-message", rank: -50, timestamp: now),
+            hit(session: "title-only", rank: 0, timestamp: now - 90 * 86_400),
+            hit(session: "weak-title-and-message", rank: -20, timestamp: now),
+        ]
+        let ranked = KeywordRanking.rankSessions(
+            hits, now: now, limit: 10,
+            titleMatches: [
+                KeywordRanking.sessionKey(agent: "claude", sessionID: "title-only"): -3,
+                KeywordRanking.sessionKey(agent: "claude", sessionID: "weak-title-and-message"): -1,
+            ]
+        )
+        #expect(ranked.map(\.candidate.sessionID) == ["title-only", "weak-title-and-message", "strong-message"])
     }
 
     @Test("Same session id under different agents stays separate")

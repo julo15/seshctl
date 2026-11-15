@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import Testing
 
 @testable import SeshctlCore
@@ -1169,5 +1170,79 @@ struct DatabaseTests {
             ConversationTitleKey(conversationId: "c1", tool: .claude): "Second",
             ConversationTitleKey(conversationId: "c1", tool: .codex): "Codex one",
         ])
+    }
+
+    /// Upgrading from a pre-v18 database: v18 must clear only the Claude
+    /// cursor (so the next text pass backfills titles), and v19 must index
+    /// every title stored before `title_fts` existed.
+    @Test("Migrating from v17 backfills title_fts and clears only the Claude cursor")
+    func migrationFromV17BackfillsTitleIndex() throws {
+        let queue = try DatabaseQueue()
+        let migrator = SeshctlDatabase.makeMigrator()
+
+        try migrator.migrate(queue, upTo: "v17_truncate_oversized_recall_text")
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO conversation_titles (conversation_id, tool, title, updated_at) VALUES
+                    ('conv-a', 'claude', 'Picked alpha', 1),
+                    ('conv-b', 'codex', 'Picked beta', 2);
+                INSERT INTO recall_cursors (adapter_name, cursor_json, updated_at) VALUES
+                    ('claude', '{}', 1),
+                    ('codex', '{"offset":42}', 1);
+                INSERT INTO recall_entries (agent, role, session_id, project, timestamp, text, text_hash) VALUES
+                    ('claude', 'user', 's1', '/p', 1, 'hello there', 'h1');
+                """)
+        }
+
+        try migrator.migrate(queue, upTo: "v18_create_recall_titles")
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO recall_titles (agent, session_id, ai_title, custom_title) VALUES
+                    ('claude', 's1', 'AI one', 'Custom one'),
+                    ('claude', 's2', 'AI two', NULL),
+                    ('claude', 's3', NULL, 'Custom three'),
+                    ('claude', 's4', NULL, NULL);
+                """)
+        }
+
+        try migrator.migrate(queue)
+
+        struct TitleRow: Hashable {
+            let title: String
+            let agent: String
+            let sessionId: String
+            let source: String
+        }
+        let fetched = try queue.read { db in
+            try GRDB.Row.fetchAll(
+                db, sql: "SELECT title, agent, session_id, source FROM title_fts"
+            ).map { r in
+                TitleRow(title: r["title"], agent: r["agent"], sessionId: r["session_id"], source: r["source"])
+            }
+        }
+        let cursors = try queue.read { db in
+            try String.fetchAll(
+                db, sql: "SELECT adapter_name FROM recall_cursors ORDER BY adapter_name")
+        }
+
+        #expect(fetched.count == 6)
+        #expect(Set(fetched) == [
+            TitleRow(title: "AI one", agent: "claude", sessionId: "s1", source: "ai"),
+            TitleRow(title: "Custom one", agent: "claude", sessionId: "s1", source: "custom"),
+            TitleRow(title: "AI two", agent: "claude", sessionId: "s2", source: "ai"),
+            TitleRow(title: "Custom three", agent: "claude", sessionId: "s3", source: "custom"),
+            TitleRow(title: "Picked alpha", agent: "claude", sessionId: "conv-a", source: "picked"),
+            TitleRow(title: "Picked beta", agent: "codex", sessionId: "conv-b", source: "picked"),
+        ])
+        #expect(cursors == ["codex"])
+        let codexCursor = try queue.read { db in
+            try String.fetchOne(
+                db, sql: "SELECT cursor_json FROM recall_cursors WHERE adapter_name = 'codex'")
+        }
+        #expect(codexCursor == #"{"offset":42}"#)
+        let entryCount = try queue.read { db in
+            try Int.fetchOne(db, sql: "SELECT count(*) FROM recall_entries")
+        }
+        #expect(entryCount == 1, "upgrading keeps the indexed messages")
     }
 }

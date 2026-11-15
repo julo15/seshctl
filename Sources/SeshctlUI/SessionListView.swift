@@ -260,7 +260,6 @@ public struct SessionListView: View {
                                         RecallResultRowView(
                                             result: result,
                                             liveStatus: matchedSession.flatMap { $0.isActive ? $0.status : nil },
-                                            hostApp: matchedSession.map { hostAppResolver.resolve(session: $0) },
                                             searchQuery: viewModel.searchQuery,
                                             isTranscriptDeleted: viewModel.isTranscriptDeleted(result),
                                             isSelected: isSelected,

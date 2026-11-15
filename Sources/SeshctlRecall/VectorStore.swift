@@ -218,46 +218,77 @@ public actor VectorStore {
         }
     }
 
-    /// Sessions whose title (indexed `ai-title`/`custom-title`, or one picked
-    /// with `t`) matches an FTS5 MATCH expression, best match first, one
-    /// per session.
+    /// Display priority of a `title_fts.source`, lowest first: a picked
+    /// title beats the `ai-title`, which beats the `custom-title`, which
+    /// beats the first-message fallback. Mirrors `sessionTitle` and
+    /// `SessionListViewModel.historyTitle`.
+    private static func titleSourcePriority(_ column: String) -> String {
+        "CASE \(column) WHEN 'picked' THEN 0 WHEN 'ai' THEN 1 WHEN 'custom' THEN 2 ELSE 3 END"
+    }
+
+    /// Sessions whose displayed title matches an FTS5 MATCH expression,
+    /// best match first, one per session.
+    ///
+    /// `title_fts` holds one row per title source (picked with `t`,
+    /// indexed `ai-title`/`custom-title`, first-message fallback), but a
+    /// row shows only the highest-priority one. A session counts only when
+    /// that shown title matches, so a hidden `custom-title` or a replaced
+    /// `ai-title` can't lift it into the title tier. That leaves at most one
+    /// row per session, so the LIMIT counts sessions.
     public func titleMatches(match: String, limit: Int) throws -> [TitleMatch] {
         try database.dbPool.read { db in
             let rows = try Row.fetchAll(
                 db,
                 sql: """
-                    SELECT agent, session_id, highlight(title_fts, 0, ?, ?) AS marked
+                    SELECT title_fts.agent, title_fts.session_id,
+                           highlight(title_fts, 0, ?, ?) AS marked, rank,
+                           (SELECT MAX(e.timestamp) FROM recall_entries e
+                            WHERE e.agent = title_fts.agent AND e.session_id = title_fts.session_id) AS latest
                     FROM title_fts
                     WHERE title_fts MATCH ?
+                      AND NOT EXISTS (
+                          SELECT 1 FROM title_fts o
+                          WHERE o.agent = title_fts.agent AND o.session_id = title_fts.session_id
+                            AND \(Self.titleSourcePriority("o.source")) < \(Self.titleSourcePriority("title_fts.source"))
+                      )
                     ORDER BY rank
                     LIMIT ?
                 """,
                 arguments: [KeywordHit.matchStart, KeywordHit.matchEnd, match, limit]
             )
+            // Guard: the priority filter already leaves one row per session.
             var seen: Set<String> = []
             var matches: [TitleMatch] = []
             for row in rows {
-                let match = TitleMatch(agent: row["agent"], sessionID: row["session_id"], marked: row["marked"])
-                if seen.insert(match.sessionKey).inserted { matches.append(match) }
+                let title = TitleMatch(
+                    agent: row["agent"],
+                    sessionID: row["session_id"],
+                    marked: row["marked"],
+                    rank: row["rank"],
+                    latest: row["latest"]
+                )
+                if seen.insert(title.sessionKey).inserted { matches.append(title) }
             }
             return matches
         }
     }
 
     /// A session's newest stored message, the stand-in hit for a session
-    /// that matched only by title.
-    public func latestEntry(agent: String, sessionID: String) throws -> HistoryEntry? {
+    /// that matched only by title. `textLimit` caps the returned text, in
+    /// characters; the stand-in has no snippet, so the row draws from it.
+    public func latestEntry(agent: String, sessionID: String, textLimit: Int? = nil) throws -> HistoryEntry? {
         try database.dbPool.read { db in
             try Row.fetchOne(
                 db,
                 sql: """
-                    SELECT id, agent, role, session_id, project, timestamp, text, text_hash
+                    SELECT id, agent, role, session_id, project, timestamp,
+                           substr(text, 1, ?) AS text, text_hash
                     FROM recall_entries
                     WHERE agent = ? AND session_id = ?
                     ORDER BY timestamp DESC, id DESC
                     LIMIT 1
                 """,
-                arguments: [agent, sessionID]
+                arguments: [Int64(textLimit ?? Int(Int64.max)), agent, sessionID]
             ).map(Self.entry(from:))
         }
     }
@@ -310,28 +341,56 @@ public actor VectorStore {
         }
     }
 
+    /// Rows per write transaction in `fillFallbackTitles`.
+    static let fallbackTitleBatchSize = 500
+
     /// Store a first-message name for every session that has neither a real
     /// title nor one yet, so title search matches the name History rows
     /// show. Sessions with no typed message yet are retried on the next
     /// call. Cheap after the first run: only new sessions lack a row.
+    ///
+    /// The scan and the name computation run in a read, off the write lock
+    /// (the database has no busy timeout, so a long write fails hook
+    /// writes). The inserts follow in `fallbackTitleBatchSize`-row
+    /// transactions, each skipping a session that gained a real title or a
+    /// fallback since the read. `INSERT OR REPLACE` is off limits here: it
+    /// wouldn't fire the delete triggers that keep `title_fts` in step.
     public func fillFallbackTitles() throws {
-        try database.dbPool.write { db in
+        let pending: [(agent: String, sessionID: String, title: String)] = try database.dbPool.read { db in
             let sessions = try Row.fetchAll(db, sql: """
                 SELECT DISTINCT e.agent, e.session_id
                 FROM recall_entries e
-                WHERE e.role = 'user'
+                WHERE e.role = 'user' AND e.session_id != ''
                   AND NOT EXISTS (SELECT 1 FROM recall_titles t WHERE t.agent = e.agent AND t.session_id = e.session_id)
                   AND NOT EXISTS (SELECT 1 FROM recall_fallback_titles f WHERE f.agent = e.agent AND f.session_id = e.session_id)
             """)
+            var pending: [(agent: String, sessionID: String, title: String)] = []
             for row in sessions {
                 let agent: String = row["agent"]
                 let sessionID: String = row["session_id"]
                 guard let title = try Self.firstMessageTitle(db, agent: agent, sessionID: sessionID) else { continue }
-                try db.execute(
-                    sql: "INSERT INTO recall_fallback_titles (agent, session_id, title) VALUES (?, ?, ?)",
-                    arguments: [agent, sessionID, title]
-                )
+                pending.append((agent, sessionID, title))
             }
+            return pending
+        }
+
+        var start = pending.startIndex
+        while start < pending.endIndex {
+            let end = min(start + Self.fallbackTitleBatchSize, pending.endIndex)
+            let batch = pending[start..<end]
+            try database.dbPool.write { db in
+                for item in batch {
+                    try db.execute(
+                        sql: """
+                            INSERT OR IGNORE INTO recall_fallback_titles (agent, session_id, title)
+                            SELECT ?, ?, ?
+                            WHERE NOT EXISTS (SELECT 1 FROM recall_titles WHERE agent = ? AND session_id = ?)
+                        """,
+                        arguments: [item.agent, item.sessionID, item.title, item.agent, item.sessionID]
+                    )
+                }
+            }
+            start = end
         }
     }
 

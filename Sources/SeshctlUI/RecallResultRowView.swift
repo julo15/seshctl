@@ -5,7 +5,6 @@ public struct RecallResultRowView: View {
     let result: RecallResult
     /// The matching session's status, when that session is active.
     let liveStatus: SessionStatus?
-    let hostApp: HostAppInfo?
     var searchQuery: String?
     /// The transcript is gone from disk: the row can't be resumed, so it
     /// says so and renders hollow.
@@ -24,14 +23,13 @@ public struct RecallResultRowView: View {
 
     @AppStorage(AppearanceDefaults.repoAccentBarKey) private var repoAccentBarEnabled: Bool = AppearanceDefaults.repoAccentBarDefault
 
-    public init(result: RecallResult, liveStatus: SessionStatus? = nil, hostApp: HostAppInfo? = nil, searchQuery: String? = nil, isTranscriptDeleted: Bool = false, isSelected: Bool = false, repoName: String? = nil, title: String? = nil, onDetail: (() -> Void)? = nil) {
+    public init(result: RecallResult, liveStatus: SessionStatus? = nil, searchQuery: String? = nil, isTranscriptDeleted: Bool = false, isSelected: Bool = false, repoName: String? = nil, title: String? = nil, onDetail: (() -> Void)? = nil) {
         self.result = result
         self.title = title
         self.isSelected = isSelected
         self.repoName = repoName
         self.liveStatus = liveStatus
         self.isTranscriptDeleted = isTranscriptDeleted
-        self.hostApp = hostApp
         self.searchQuery = searchQuery
         self.onDetail = onDetail
     }
@@ -41,7 +39,7 @@ public struct RecallResultRowView: View {
             status: { statusIndicator },
             ageDisplay: ageDisplay,
             content: { mainContent },
-            hostApp: hostApp,
+            hostApp: nil,
             onDetail: onDetail,
             // The folder sits at the far right in its repo color, as on the
             // live rows, unless it's already the headline.

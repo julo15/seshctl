@@ -3705,5 +3705,89 @@ struct SessionListViewModelTests {
         #expect(vm.historyTitle(for: indexed) == "From the index")
         #expect(vm.historyTitle(for: untitled) == nil)
     }
-}
 
+    private func titledHistoryResult(_ sessionId: String, agent: String = "claude", title: String?) -> RecallResult {
+        RecallResult(
+            agent: agent, role: "user", sessionId: sessionId, project: "/tmp/p",
+            timestamp: 1, score: 1, resumeCmd: "", text: "t", snippet: "t", title: title
+        )
+    }
+
+    /// Starts a Claude session for `conversationId` whose transcript carries
+    /// `aiTitle`, so `refresh()` puts it in `titlesById`.
+    private func liveTitledSession(
+        db: SeshctlDatabase, conversationId: String, pid: Int, aiTitle: String
+    ) throws -> (Session, String) {
+        let path = try titleTranscript([#"{"type":"ai-title","aiTitle":"\#(aiTitle)"}"#])
+        let session = try db.startSession(
+            tool: .claude, directory: "/tmp/x", pid: pid, conversationId: conversationId)
+        try db.updateSession(pid: pid, tool: .claude, transcriptPath: path)
+        return (session, path)
+    }
+
+    @Test("historyTitle prefers the live session's title over the index's")
+    @MainActor
+    func historyTitleLiveBeatsIndex() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let (session, path) = try liveTitledSession(
+            db: db, conversationId: "live-conv", pid: 9201, aiTitle: "Live title")
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+        #expect(vm.titlesById[session.id] == "Live title")
+
+        let result = titledHistoryResult("live-conv", title: "From the index")
+        #expect(vm.historyTitle(for: result) == "Live title")
+    }
+
+    @Test("historyTitle prefers a picked title over the live session's title")
+    @MainActor
+    func historyTitlePickedBeatsLive() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let (session, path) = try liveTitledSession(
+            db: db, conversationId: "picked-conv", pid: 9202, aiTitle: "Live title")
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+        #expect(vm.titlesById[session.id] == "Live title")
+
+        // Picked after the refresh, so only the search's read of
+        // conversation_titles (`historyPickedTitles`) can know about it.
+        try db.setConversationTitle(conversationId: "picked-conv", tool: .claude, title: "Picked with t")
+        let result = titledHistoryResult("picked-conv", title: "From the index")
+        vm.recallSearchProvider = { _ in
+            RecallSearchResponse(results: [result], indexingCount: nil)
+        }
+        vm.enterSearch()
+        vm.appendSearchCharacter("zz")
+        await waitForRecall { vm.recallCompletedQuery == "zz" }
+
+        #expect(vm.historyTitle(for: result) == "Picked with t")
+    }
+
+    @Test("historyTitle handles an agent that isn't a SessionTool")
+    @MainActor
+    func historyTitleUnknownAgentFallsBack() async throws {
+        #expect(SessionTool(rawValue: "opencode") == nil)
+        let db = try SeshctlDatabase.temporary()
+        let (_, path) = try liveTitledSession(
+            db: db, conversationId: "foreign-live", pid: 9203, aiTitle: "Live title")
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let vm = SessionListViewModel(database: db, enableGC: false)
+        vm.refresh()
+
+        let live = titledHistoryResult("foreign-live", agent: "opencode", title: "From the index")
+        let indexed = titledHistoryResult("foreign-indexed", agent: "opencode", title: "From the index")
+        let untitled = titledHistoryResult("foreign-untitled", agent: "opencode", title: nil)
+        vm.recallSearchProvider = { _ in
+            RecallSearchResponse(results: [live, indexed, untitled], indexingCount: nil)
+        }
+        vm.enterSearch()
+        vm.appendSearchCharacter("zz")
+        await waitForRecall { vm.recallCompletedQuery == "zz" }
+
+        #expect(vm.historyTitle(for: live) == "Live title")
+        #expect(vm.historyTitle(for: indexed) == "From the index")
+        #expect(vm.historyTitle(for: untitled) == nil)
+    }
+}

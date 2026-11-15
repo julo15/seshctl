@@ -524,6 +524,95 @@ struct VectorStoreTests {
         #expect(try await store.titleMatches(match: #""messenger"*"#, limit: 10).isEmpty)
         #expect(try await store.titleMatches(match: #""shopping"*"#, limit: 10).map(\.sessionID) == ["U"])
     }
+
+    @Test("titleMatches ignores a title the row doesn't show")
+    func titleMatchesOnlyShownTitle() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let store = VectorStore(database: db)
+        // A remote-control custom title hides behind the ai-title.
+        try await store.upsertTitles([
+            IndexedTitle(agent: "claude", sessionID: "A", aiTitle: "Sparkle appcast fix", customTitle: "m5: assistant"),
+        ])
+        #expect(try await store.titleMatches(match: #""assistant"*"#, limit: 10).isEmpty)
+        #expect(try await store.titleMatches(match: #""sparkle"*"#, limit: 10).map(\.sessionID) == ["A"])
+
+        // A title picked with `t` replaces the ai-title.
+        try db.setConversationTitle(conversationId: "A", tool: .claude, title: "Release notes")
+        #expect(try await store.titleMatches(match: #""sparkle"*"#, limit: 10).isEmpty)
+        #expect(try await store.titleMatches(match: #""release"*"#, limit: 10).map(\.sessionID) == ["A"])
+
+        // With only a custom title, it's the one shown.
+        try await store.upsertTitles([IndexedTitle(agent: "claude", sessionID: "B", aiTitle: nil, customTitle: "m5: assistant")])
+        #expect(try await store.titleMatches(match: #""assistant"*"#, limit: 10).map(\.sessionID) == ["B"])
+    }
+
+    @Test("titleMatches counts sessions, not title rows, against the limit")
+    func titleMatchesLimitCountsSessions() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let store = VectorStore(database: db)
+        try await store.upsertTitles([
+            IndexedTitle(agent: "claude", sessionID: "A", aiTitle: "appcast appcast", customTitle: "appcast appcast appcast"),
+            IndexedTitle(agent: "claude", sessionID: "B", aiTitle: "appcast signing work", customTitle: nil),
+        ])
+        try db.setConversationTitle(conversationId: "A", tool: .claude, title: "appcast")
+
+        #expect(try await store.titleMatches(match: #""appc"*"#, limit: 1).count == 1)
+        let two = try await store.titleMatches(match: #""appc"*"#, limit: 2)
+        #expect(Set(two.map(\.sessionID)) == ["A", "B"])
+        #expect(two.first { $0.sessionID == "A" }?.marked == "\(KeywordHit.matchStart)appcast\(KeywordHit.matchEnd)", "the picked title")
+    }
+
+    @Test("titleMatches reports the title's bm25 rank and the session's newest message time")
+    func titleMatchesRankAndLatest() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let store = VectorStore(database: db)
+        _ = try await store.insertText(entries: [
+            makeTextEntry("older", seed: 1, sessionID: "A"),
+            makeTextEntry("newer", seed: 5, sessionID: "A"),
+        ])
+        try await store.upsertTitles([
+            IndexedTitle(agent: "claude", sessionID: "A", aiTitle: "Zombie reaper", customTitle: nil),
+            IndexedTitle(agent: "claude", sessionID: "EMPTY", aiTitle: "Reaper notes", customTitle: nil),
+        ])
+        let matches = try await store.titleMatches(match: #""reaper"*"#, limit: 10)
+        let byID = Dictionary(uniqueKeysWithValues: matches.map { ($0.sessionID, $0) })
+        #expect(byID["A"]?.latest == 1_700_000_005)
+        #expect(byID["EMPTY"] != nil)
+        #expect(byID["EMPTY"]?.latest == nil, "no stored messages")
+        #expect(matches.allSatisfy { $0.rank < 0 })
+        #expect(matches.map(\.rank) == matches.map(\.rank).sorted(), "best first")
+    }
+
+    @Test("latestEntry caps the text when asked")
+    func latestEntryCapsText() async throws {
+        let store = try makeStore()
+        let long = String(repeating: "x", count: 5_000)
+        _ = try await store.insertText(entries: [makeTextEntry(long, seed: 1, sessionID: "S")])
+        #expect(try await store.latestEntry(agent: "claude", sessionID: "S", textLimit: 100)?.text.count == 100)
+        #expect(try await store.latestEntry(agent: "claude", sessionID: "S")?.text == long)
+    }
+
+    @Test("fillFallbackTitles is idempotent")
+    func fillFallbackTitlesIdempotent() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let store = VectorStore(database: db)
+        let text = "messenger bag research"
+        _ = try await store.insertText(entries: [HistoryEntry(
+            id: nil, agent: "claude", role: "user", sessionID: "U", project: "/p",
+            timestamp: 1, text: text, textHash: HistoryEntry.textHash(for: text)
+        )])
+        try await store.fillFallbackTitles()
+        try await store.fillFallbackTitles()
+        let counts = try await db.dbPool.read { rawDB in
+            (
+                try Int.fetchOne(rawDB, sql: "SELECT COUNT(*) FROM recall_fallback_titles") ?? -1,
+                try Int.fetchOne(rawDB, sql: "SELECT COUNT(*) FROM title_fts WHERE source = 'first'") ?? -1
+            )
+        }
+        #expect(counts.0 == 1)
+        #expect(counts.1 == 1)
+        #expect(try await store.titleMatches(match: #""messenger"*"#, limit: 10).map(\.sessionID) == ["U"])
+    }
 }
 
 private func makeTextEntry(_ text: String, seed: Int, sessionID: String) -> HistoryEntry {

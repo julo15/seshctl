@@ -279,4 +279,32 @@ struct ClaudeAdapterTests {
         let (entries, _) = try await adapter.load(cursor: nil)
         #expect(entries.count == 2)
     }
+
+    @Test("Titles are flattened to one line, stripped of control characters and capped")
+    func sanitizesTitles() async throws {
+        #expect(ClaudeAdapter.sanitizedTitle("  fix the\n\treaper \r\n bug  ") == "fix the reaper bug")
+        #expect(ClaudeAdapter.sanitizedTitle("high\u{1}light\u{2}ed\u{0}") == "highlighted")
+        #expect(ClaudeAdapter.sanitizedTitle(" \n\u{1}\t ") == nil)
+
+        let long = ClaudeAdapter.sanitizedTitle(String(repeating: "word ", count: 100))
+        #expect(long?.count == ClaudeAdapter.maxTitleLength)
+        #expect(long?.hasSuffix("…") == true)
+        let exact = String(repeating: "x", count: ClaudeAdapter.maxTitleLength)
+        #expect(ClaudeAdapter.sanitizedTitle(exact) == exact, "a title at the cap is kept whole")
+
+        // And end to end through a transcript.
+        let fx = try ClaudeFixture()
+        defer { fx.cleanup() }
+        _ = try fx.writeTranscript(
+            projectDirName: "-tmp-x",
+            sessionID: "s1",
+            lines: [
+                userLine(cwd: "/tmp/x", text: "hello"),
+                #"{"type":"ai-title","aiTitle":"Two\nlines\u0001","sessionId":"s1"}"#,
+                #"{"type":"custom-title","customTitle":"\u0002\t","sessionId":"s1"}"#,
+            ]
+        )
+        let load = try await ClaudeAdapter(projectsDir: fx.projectsDir).loadWithTitles(cursor: nil)
+        #expect(load.titles == [IndexedTitle(agent: "claude", sessionID: "s1", aiTitle: "Two lines", customTitle: nil)])
+    }
 }

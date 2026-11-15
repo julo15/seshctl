@@ -155,6 +155,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // RecallService.keywordSearch() throws if configure() was never called.
             RecallService.configure(database: db)
 
+            // Store new message text in the History index now, off the main
+            // actor and at low priority, so the first search doesn't pay
+            // for it. After an upgrade that resets an adapter's cursor that
+            // is a re-read of every transcript. Text phase only: no CoreML.
+            Task.detached(priority: .utility) {
+                await RecallService.warmTextIndex()
+            }
+
             let vm = SessionListViewModel(database: db, defaults: .standard)
             viewModel = vm
 

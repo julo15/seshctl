@@ -161,10 +161,31 @@ public struct ClaudeAdapter: Adapter {
         return AdapterLoad(entries: entries, titles: titles, newCursor: newCursor)
     }
 
+    /// Longest stored transcript title, in characters.
+    static let maxTitleLength = 200
+
     private static func nonEmptyTitle(_ value: Any?) -> String? {
-        guard let title = (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !title.isEmpty else { return nil }
-        return title
+        (value as? String).flatMap(sanitizedTitle)
+    }
+
+    /// A transcript title made safe to store and show on one line: every
+    /// whitespace run (newlines included) becomes one space, other C0
+    /// control characters are dropped (`\u{1}`/`\u{2}` are the search
+    /// highlight markers), and the result is trimmed and cut to
+    /// `maxTitleLength`, ending in "…" when cut. `nil` when nothing is left.
+    static func sanitizedTitle(_ raw: String) -> String? {
+        var scalars = String.UnicodeScalarView()
+        for scalar in raw.unicodeScalars {
+            if scalar.properties.isWhitespace {
+                scalars.append(" ")
+            } else if scalar.value >= 0x20 {
+                scalars.append(scalar)
+            }
+        }
+        let line = String(scalars).split(separator: " ").joined(separator: " ")
+        guard !line.isEmpty else { return nil }
+        guard line.count > maxTitleLength else { return line }
+        return String(line.prefix(maxTitleLength - 1)) + "…"
     }
 
     // MARK: - Helpers

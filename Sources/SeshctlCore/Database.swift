@@ -34,6 +34,13 @@ public struct SeshctlDatabase: Sendable {
     }
 
     private func migrate() throws {
+        try Self.makeMigrator().migrate(dbPool)
+    }
+
+    /// Every schema migration, in order. Internal so tests can migrate a
+    /// database part of the way (`migrate(_:upTo:)`), seed it as an older
+    /// build would have left it, and then run the rest.
+    static func makeMigrator() -> DatabaseMigrator {
         var migrator = DatabaseMigrator()
 
         migrator.registerMigration("v1_create_sessions") { db in
@@ -300,8 +307,8 @@ public struct SeshctlDatabase: Sendable {
         // after 30 days, taking their `ai-title` with them, so the indexer
         // keeps a copy. Clearing the Claude cursor makes the next text pass
         // re-read every transcript still on disk to backfill titles;
-        // entries it already holds are skipped by the dedup key. The index
-        // finds each session's first message for rows with no title.
+        // entries it already holds are skipped by the dedup key. Sessions
+        // with no title get a first-message name instead (v20).
         migrator.registerMigration("v18_create_recall_titles") { db in
             try db.execute(sql: """
                 CREATE TABLE recall_titles (
@@ -413,7 +420,7 @@ public struct SeshctlDatabase: Sendable {
                 """)
         }
 
-        try migrator.migrate(dbPool)
+        return migrator
     }
 
     // MARK: - Helpers

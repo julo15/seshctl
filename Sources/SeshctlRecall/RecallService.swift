@@ -136,6 +136,22 @@ public struct RecallService: Sendable {
             .compactMap(\.conversationTurn)
     }
 
+    /// Run the text phase of indexing (no embedding, no CoreML) so new
+    /// message text is searchable before the first keystroke. The app calls
+    /// this at launch: an upgrade that resets an adapter's cursor (v18
+    /// clears Claude's) would otherwise re-read every transcript on the
+    /// first History search. Shares `RecallStack`'s single text pass, so a
+    /// keyword search that arrives mid-pass joins it instead of starting
+    /// another. Errors are logged, never thrown.
+    public static func warmTextIndex(priority: TaskPriority? = .utility) async {
+        do {
+            let stack = try await sharedStack()
+            try await stack.warmTextIndex(priority: priority)
+        } catch {
+            recallLogger.error("Warming the text index failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     // MARK: - Shared-state plumbing.
 
     // `NSLock` (not an actor) so the synchronous `configure(_:)` entry
@@ -465,6 +481,11 @@ final actor RecallStack {
         return RecallSearchResponse(results: results, indexingCount: totalIndexed)
     }
 
+    /// Longest stand-in message text, in characters. A title-only result
+    /// has no snippet, so the row draws from this text; stored messages run
+    /// to `HistoryEntry.maxStoredTextLength`.
+    static let standInTextLength = 2000
+
     /// Keyword search: pick up new message text (unless fresh), run the FTS
     /// query, and collapse hits into one `RecallResult` per session.
     func keywordSearch(query: String, limit: Int) async throws -> RecallSearchResponse {
@@ -485,31 +506,37 @@ final actor RecallStack {
         // sessions even when a few chatty sessions dominate the top.
         let candidates = try await vectorStore.keywordCandidates(match: match, limit: 500)
 
-        // Sessions whose title matched. One that matched only by title has
-        // no message candidate, so its newest message stands in (rank 0,
-        // no snippet); the ranking puts title matches first either way.
+        // Sessions whose shown title matched. One that matched only by title
+        // has no message candidate, so it ranks through a placeholder (a
+        // negative id, which no `recall_entries` row has; rank 0) placed by
+        // its title rank. Its newest message stands in, fetched below only
+        // for the rows shown. Sessions with no stored message can't stand in.
         let titleMatches = try await vectorStore.titleMatches(match: match, limit: 50)
         let markedTitles = Dictionary(uniqueKeysWithValues: titleMatches.map { ($0.sessionKey, $0.marked) })
+        let titleRanks = Dictionary(uniqueKeysWithValues: titleMatches.map { ($0.sessionKey, $0.rank) })
         let messageKeys = Set(candidates.map { KeywordRanking.sessionKey(agent: $0.agent, sessionID: $0.sessionID) })
-        var standIns: [Int64: HistoryEntry] = [:]
-        var titleOnly: [KeywordCandidate] = []
+        var placeholders: [KeywordCandidate] = []
         for title in titleMatches where !messageKeys.contains(title.sessionKey) {
-            guard let entry = try await vectorStore.latestEntry(agent: title.agent, sessionID: title.sessionID),
-                  let id = entry.id else { continue }
-            standIns[id] = entry
-            titleOnly.append(KeywordCandidate(id: id, agent: entry.agent, sessionID: entry.sessionID, timestamp: entry.timestamp, rank: 0))
+            guard let latest = title.latest else { continue }
+            placeholders.append(KeywordCandidate(
+                id: -Int64(placeholders.count + 1),
+                agent: title.agent,
+                sessionID: title.sessionID,
+                timestamp: latest,
+                rank: 0
+            ))
         }
 
         let ranked = KeywordRanking.rankSessions(
-            candidates + titleOnly,
+            candidates + placeholders,
             now: Date().timeIntervalSince1970,
             limit: limit,
-            titleMatches: Set(markedTitles.keys)
+            titleMatches: titleRanks
         )
         // Text and snippets only for the rows shown.
         let hits = try await vectorStore.keywordHits(
             match: match,
-            ids: ranked.map(\.candidate.id).filter { standIns[$0] == nil }
+            ids: ranked.map(\.candidate.id).filter { $0 > 0 }
         )
         let hitsByID = Dictionary(uniqueKeysWithValues: hits.compactMap { hit in hit.entry.id.map { ($0, hit) } })
         var results: [RecallResult] = []
@@ -519,7 +546,12 @@ final actor RecallStack {
             let snippet: String?
             if let hit = hitsByID[candidate.id] {
                 (entry, snippet) = (hit.entry, hit.snippet)
-            } else if let standIn = standIns[candidate.id] {
+            } else if candidate.id < 0,
+                      let standIn = try await vectorStore.latestEntry(
+                          agent: candidate.agent,
+                          sessionID: candidate.sessionID,
+                          textLimit: Self.standInTextLength
+                      ) {
                 (entry, snippet) = (standIn, nil)
             } else {
                 continue
@@ -643,10 +675,20 @@ final actor RecallStack {
         })
     }
 
+    /// Text phase only, for `RecallService.warmTextIndex()`. Same pass and
+    /// freshness rule as keyword search.
+    func warmTextIndex(priority: TaskPriority?) async throws {
+        try await ensureTextIndexed(priority: priority)
+    }
+
     /// Run a text-only indexing pass (or join the in-flight one), unless one
     /// finished within `textIndexFreshness`. Detached for the same reason as
     /// `ensureIndexingComplete`: a cancelled search must not abort the pass.
-    private func ensureTextIndexed() async throws {
+    /// The check and the slot assignment have no suspension point between
+    /// them, so concurrent callers on this actor always share one pass.
+    /// `priority` applies only when this call starts the pass; a
+    /// higher-priority caller that joins escalates it by awaiting it.
+    private func ensureTextIndexed(priority: TaskPriority? = nil) async throws {
         if let existing = textIndexingTask {
             try await existing.value
             return
@@ -655,7 +697,7 @@ final actor RecallStack {
            Date().timeIntervalSince(last) < Self.textIndexFreshness {
             return
         }
-        let task = Task<Void, Error>.detached { [self] in
+        let task = Task<Void, Error>.detached(priority: priority) { [self] in
             do {
                 try await self.indexer.indexText()
                 await self.finishTextIndexing()

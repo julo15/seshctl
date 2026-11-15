@@ -419,6 +419,53 @@ struct RecallServiceTests {
         #expect(resp.results[1].titleMatch == nil)
     }
 
+    @Test("A title-only result carries capped text; a title with no stored message is dropped")
+    func keywordSearchTitleOnlyStandIns() async throws {
+        RecallService._resetForTests()
+        let db = try SeshctlDatabase.temporary()
+        let long = String(repeating: "lorem ipsum ", count: 1_000)
+        let entries: [HistoryEntry] = [makeEntry(text: long, sessionID: "TITLED")]
+        let mock = MockAdapter(name: "claude", entries: entries, cursor: Data("v1".utf8))
+        RecallService.configureForTesting(database: db, adapters: [mock], embedder: NeverEmbedder())
+        try await VectorStore(database: db).upsertTitles([
+            IndexedTitle(agent: "claude", sessionID: "TITLED", aiTitle: "Zombie reaper cleanup", customTitle: nil),
+        ])
+        // A picked title for a conversation the index never saw.
+        try db.setConversationTitle(conversationId: "GHOST", tool: .claude, title: "Reaper ghost")
+
+        let resp = try await RecallService.keywordSearch(query: "reaper")
+        #expect(resp.results.map(\.sessionId) == ["TITLED"])
+        #expect(resp.results.first?.text.count == RecallStack.standInTextLength)
+        #expect(resp.results.first?.snippet == nil)
+    }
+
+    @Test("A better title match outranks a weaker one that also matched a message")
+    func keywordSearchOrdersTitleTierByTitleRank() async throws {
+        RecallService._resetForTests()
+        let db = try SeshctlDatabase.temporary()
+        let entries: [HistoryEntry] = [
+            makeEntry(text: "nothing relevant", sessionID: "EXACT"),
+            makeEntry(text: "opening line", sessionID: "LOOSE"),
+            makeEntry(text: "the reaper came up once", sessionID: "LOOSE"),
+        ]
+        let mock = MockAdapter(name: "claude", entries: entries, cursor: Data("v1".utf8))
+        RecallService.configureForTesting(database: db, adapters: [mock], embedder: NeverEmbedder())
+        try await VectorStore(database: db).upsertTitles([
+            IndexedTitle(agent: "claude", sessionID: "EXACT", aiTitle: "Reaper", customTitle: nil),
+            IndexedTitle(
+                agent: "claude", sessionID: "LOOSE",
+                aiTitle: "Refactor the session list view model and the reaper and the panel layout", customTitle: nil
+            ),
+            // Titles without the term, so bm25's IDF for it stays positive.
+            IndexedTitle(agent: "claude", sessionID: "O1", aiTitle: "Sparkle appcast", customTitle: nil),
+            IndexedTitle(agent: "claude", sessionID: "O2", aiTitle: "Release notes", customTitle: nil),
+            IndexedTitle(agent: "claude", sessionID: "O3", aiTitle: "Model pill colors", customTitle: nil),
+        ])
+
+        let resp = try await RecallService.keywordSearch(query: "reaper")
+        #expect(resp.results.map(\.sessionId) == ["EXACT", "LOOSE"])
+    }
+
     @Test("Searching an untitled session's first-message name ranks it as a title match")
     func keywordSearchMatchesFallbackTitles() async throws {
         RecallService._resetForTests()
@@ -466,6 +513,60 @@ struct RecallServiceTests {
         let resp = try await RecallService.keywordSearch(query: "appcast")
         #expect(resp.results.map(\.sessionId) == ["S1"])
         #expect(await adapter.loadCount == 1)
+    }
+
+    @Test("warmTextIndex makes entries searchable without embedding, and search reuses its pass")
+    func warmTextIndexIndexesText() async throws {
+        RecallService._resetForTests()
+        let db = try SeshctlDatabase.temporary()
+        let adapter = ControllableAdapter(entries: [makeEntry(text: "sparkle appcast", sessionID: "S1")])
+        RecallService.configureForTesting(database: db, adapters: [adapter], embedder: NeverEmbedder())
+
+        await RecallService.warmTextIndex()
+        #expect(await adapter.loadCount == 1)
+
+        let resp = try await RecallService.keywordSearch(query: "appcast")
+        #expect(resp.results.map(\.sessionId) == ["S1"])
+        #expect(await adapter.loadCount == 1, "the search reuses the warm pass")
+    }
+
+    @Test("A keyword search arriving mid-warm joins the same text pass")
+    func keywordSearchJoinsInFlightWarm() async throws {
+        RecallService._resetForTests()
+        let db = try SeshctlDatabase.temporary()
+        let adapter = ControllableAdapter(
+            entries: [makeEntry(text: "sparkle appcast", sessionID: "S1")],
+            delayNanos: 300_000_000
+        )
+        RecallService.configureForTesting(database: db, adapters: [adapter], embedder: NeverEmbedder())
+
+        let warm = Task { await RecallService.warmTextIndex() }
+        // Let the warm pass start (the adapter load is sleeping).
+        while await adapter.loadCount == 0 {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        let resp = try await RecallService.keywordSearch(query: "sparkle")
+        await warm.value
+
+        #expect(resp.results.map(\.sessionId) == ["S1"], "the search waited for the warm pass's text")
+        #expect(await adapter.loadCount == 1)
+    }
+
+    @Test("warmTextIndex swallows indexing failures")
+    func warmTextIndexSwallowsFailures() async throws {
+        RecallService._resetForTests()
+        let db = try SeshctlDatabase.temporary()
+        let adapter = ControllableAdapter(fails: true)
+        RecallService.configureForTesting(database: db, adapters: [adapter], embedder: NeverEmbedder())
+
+        await RecallService.warmTextIndex()
+        #expect(await adapter.loadCount == 1)
+    }
+
+    @Test("warmTextIndex before configure() logs instead of throwing")
+    func warmTextIndexWithoutConfigure() async {
+        RecallService._resetForTests()
+        await RecallService.warmTextIndex()
     }
 
     @Test("Concurrent keyword searches share one in-flight text pass")
