@@ -43,7 +43,7 @@ Press **Cmd+Shift+S** to toggle the session panel.
 - **j / k** or **Arrow keys** — navigate sessions
 - **gg** — jump to top
 - **G** — jump to bottom
-- **Enter** — focus the selected session's terminal (or open a cloud-only session in the Claude desktop app, or on claude.ai if the app isn't installed)
+- **Enter** — focus the selected session's terminal, or the session itself if it runs in the Claude desktop app (or open a cloud-only session in the Claude desktop app, or on claude.ai if the app isn't installed)
 - **w** — open the selected session in the Claude desktop app (or on claude.ai if the app isn't installed). On a bridged row this picks the web half of the pair instead of the terminal
 - **f** — fork the selected Claude session into a new branched session in a new tab (then **y** to confirm, **n** to cancel)
 - **o** — open session detail view
@@ -148,6 +148,7 @@ This re-fires whenever the hook scripts change, because Codex tracks them as *"M
 | cmux | Full | Two-level focus (workspace + surface). Same-pane fork requires opt-in — see [cmux setup](#cmux-setup) |
 | VS Code | Full | Companion extension auto-installed from **Editor Integrations** |
 | Cursor | Full | Companion extension auto-installed from **Editor Integrations** |
+| Claude desktop app | Full | Code sessions started in the app's Code tab focus, or reopen if closed, via an undocumented `claude://` deep link. Fork copies the command to the clipboard |
 | Conductor.build | None | No AppleScript / URI / extension API exposed |
 | Other | Basic | Window-name matching via System Events fallback |
 

@@ -96,7 +96,7 @@ public enum SessionAction {
         let command = TerminalController.buildResumeCommand(session: session)
         let bundleId = TerminalController.resolveAppBundleId(session: session, environment: environment)
 
-        if let command, TerminalController.resume(command: command, directory: session.directory, bundleId: bundleId, environment: environment) {
+        if let command, TerminalController.resume(command: command, directory: session.directory, bundleId: bundleId, conversationId: session.conversationId, environment: environment) {
             dismiss()
         } else if let command {
             // Resume dispatch failed — copy command to clipboard as fallback
@@ -174,7 +174,12 @@ public enum SessionAction {
             bundleId = TerminalController.detectFrontmostTerminal(environment: environment)
         }
 
-        if FileManager.default.fileExists(atPath: result.project),
+        // A Claude desktop session reopens in the app, which doesn't need
+        // the project folder to exist.
+        if bundleId == ClaudeDesktopApp.bundleId,
+           TerminalController.resume(command: result.resumeCmd, directory: result.project, bundleId: bundleId, conversationId: matchedSession?.conversationId ?? result.sessionId, environment: environment) {
+            dismiss()
+        } else if FileManager.default.fileExists(atPath: result.project),
            TerminalController.resume(command: result.resumeCmd, directory: result.project, bundleId: bundleId, environment: environment) {
             dismiss()
         } else {

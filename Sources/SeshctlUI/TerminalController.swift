@@ -53,6 +53,15 @@ public protocol SystemEnvironment: Sendable {
 
     /// Open a URL in the user's default handler (typically the default browser).
     func openURL(_ url: URL)
+
+    /// The Claude desktop app's local-session metadata folder (see
+    /// `ClaudeDesktopApp.defaultLocalSessionsRoot`). Tests point it at a
+    /// temp directory.
+    var claudeDesktopSessionsRoot: URL { get }
+}
+
+extension SystemEnvironment {
+    public var claudeDesktopSessionsRoot: URL { ClaudeDesktopApp.defaultLocalSessionsRoot }
 }
 
 // MARK: - Real System Environment
@@ -190,6 +199,13 @@ public enum TerminalController {
         let env = env ?? Self.environment
         guard let bundleId = knownBundleId ?? findAppBundleId(for: pid, env: env) else { return }
 
+        // A Code session the Claude desktop app runs itself: deep-link to it,
+        // since the app has no shell or tab to match.
+        if bundleId == ClaudeDesktopApp.bundleId {
+            focusClaudeDesktopSession(conversationId: conversationId, env: env)
+            return
+        }
+
         if let app = TerminalApp.from(bundleId: bundleId) {
             if app.supportsURIHandler {
                 // Precedence: hostWorkspaceFolder > launchDirectory > directory.
@@ -224,6 +240,29 @@ public enum TerminalController {
         }
     }
 
+    /// Switch the Claude desktop app to the local Code session whose CLI
+    /// conversation id is `conversationId`, via `claude://code/continue`.
+    /// When the session can't be resolved (no id, archived, or a desktop
+    /// update moved the files), just bring the app forward.
+    static func focusClaudeDesktopSession(conversationId: String?, env: SystemEnvironment) {
+        if !openClaudeDesktopSession(conversationId: conversationId, env: env) {
+            env.activateApp(bundleId: ClaudeDesktopApp.bundleId)
+        }
+    }
+
+    /// Open `claude://code/continue?session=<local id>` for the desktop
+    /// session `conversationId` belongs to. The app reopens a session whose
+    /// process has exited too, so this serves both focus and resume. Returns
+    /// false, opening nothing, when the session can't be resolved.
+    static func openClaudeDesktopSession(conversationId: String?, env: SystemEnvironment) -> Bool {
+        guard let conversationId,
+              let localId = ClaudeDesktopApp.localSessionId(forCliSessionId: conversationId, sessionsRoot: env.claudeDesktopSessionsRoot),
+              let url = ClaudeDesktopApp.continueURL(localSessionId: localId)
+        else { return false }
+        env.openURL(url)
+        return true
+    }
+
     // MARK: - Resume
 
     /// CANONICAL ENTRY POINT — all terminal resume actions MUST go through this method.
@@ -233,10 +272,17 @@ public enum TerminalController {
         command: String,
         directory: String,
         bundleId: String?,
+        conversationId: String? = nil,
         environment env: SystemEnvironment? = nil
     ) -> Bool {
         let env = env ?? Self.environment
         guard let bundleId else { return false }
+        // The Claude desktop app reopens its own sessions; there's no shell
+        // to type `command` into. Checked before the directory: the app
+        // doesn't need it to exist.
+        if bundleId == ClaudeDesktopApp.bundleId {
+            return openClaudeDesktopSession(conversationId: conversationId, env: env)
+        }
         guard FileManager.default.fileExists(atPath: directory) else { return false }
 
         if let app = TerminalApp.from(bundleId: bundleId) {

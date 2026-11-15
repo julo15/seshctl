@@ -847,4 +847,87 @@ struct SessionActionTests {
         // BrowserController fell through to opening the original https URL.
         #expect(env.openedURLs == [url])
     }
+
+    // MARK: - Claude desktop app sessions
+
+    private static let desktopLink = URL(string: "claude://code/continue?session=local_abc")!
+
+    private func desktopEnv() throws -> (MockSystemEnvironment, URL) {
+        let env = MockSystemEnvironment()
+        let root = try makeClaudeDesktopSessionsRoot(sessions: [("local_abc", "conv-1")])
+        env.claudeDesktopSessionsRoot = root
+        return (env, root)
+    }
+
+    @Test("Active Claude desktop session focuses via the continue link")
+    func activeDesktopSessionDeepLinks() throws {
+        let (env, root) = try desktopEnv()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let session = makeSession(conversationId: "conv-1", status: .idle, pid: 54915, hostAppBundleId: ClaudeDesktopApp.bundleId)
+
+        let cb = makeCallbacks()
+        SessionAction.execute(target: .activeSession(session), markRead: cb.markRead, rememberFocused: cb.rememberFocused, dismiss: cb.dismiss, environment: env)
+
+        #expect(cb.dismissed() == 1)
+        #expect(cb.remembered() == [session.id])
+        #expect(env.openedURLs == [Self.desktopLink])
+        #expect(env.activatedApps.isEmpty)
+    }
+
+    @Test("Completed Claude desktop session reopens via the continue link, not the clipboard")
+    func inactiveDesktopSessionDeepLinks() throws {
+        let (env, root) = try desktopEnv()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let session = makeSession(conversationId: "conv-1", status: .completed, pid: 54915, hostAppBundleId: ClaudeDesktopApp.bundleId)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("sentinel", forType: .string)
+
+        let cb = makeCallbacks()
+        SessionAction.execute(target: .inactiveSession(session), markRead: cb.markRead, rememberFocused: cb.rememberFocused, dismiss: cb.dismiss, environment: env)
+
+        #expect(cb.dismissed() == 1)
+        #expect(cb.markedRead() == [session.id])
+        #expect(env.openedURLs == [Self.desktopLink])
+        #expect(env.shellCommands.isEmpty)
+        #expect(NSPasteboard.general.string(forType: .string) == "sentinel")
+    }
+
+    @Test("Unresolvable completed Claude desktop session falls back to the clipboard")
+    func inactiveDesktopSessionUnresolvedCopies() throws {
+        let (env, root) = try desktopEnv()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let session = makeSession(conversationId: "conv-gone", directory: "/tmp", status: .completed, pid: nil, hostAppBundleId: ClaudeDesktopApp.bundleId)
+
+        let cb = makeCallbacks()
+        SessionAction.execute(target: .inactiveSession(session), markRead: cb.markRead, rememberFocused: cb.rememberFocused, dismiss: cb.dismiss, environment: env)
+
+        #expect(cb.dismissed() == 1)
+        #expect(env.openedURLs.isEmpty)
+        #expect(NSPasteboard.general.string(forType: .string) == "cd '/tmp' && claude --resume conv-gone")
+    }
+
+    @Test("History result for a closed Claude desktop session reopens via the continue link")
+    func recallResultDesktopSessionDeepLinks() throws {
+        let (env, root) = try desktopEnv()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let session = makeSession(conversationId: "conv-1", status: .completed, pid: nil, hostAppBundleId: ClaudeDesktopApp.bundleId)
+        // The project folder no longer exists; the app doesn't need it.
+        let result = RecallResult(
+            agent: "claude",
+            role: "assistant",
+            sessionId: "conv-1",
+            project: "/nonexistent/project",
+            timestamp: Date().timeIntervalSince1970,
+            score: 0.95,
+            resumeCmd: "claude --resume conv-1",
+            text: "some text"
+        )
+
+        let cb = makeCallbacks()
+        SessionAction.execute(target: .recallResult(result, matchedSession: session), markRead: cb.markRead, rememberFocused: cb.rememberFocused, dismiss: cb.dismiss, environment: env)
+
+        #expect(cb.dismissed() == 1)
+        #expect(env.openedURLs == [Self.desktopLink])
+        #expect(env.shellCommands.isEmpty)
+    }
 }
