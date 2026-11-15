@@ -104,7 +104,7 @@ let repoAccentPaletteRGB: [(Double, Double, Double)] = [
     (0.60, 0.45, 0.00),  // bronze     45° (replaced git-like green)
     (0.47, 0.85, 0.62),  // mint      144° (off the working green)
     (0.33, 0.78, 0.68),  // teal      165°
-    (0.36, 0.75, 0.90),  // cyan      195°
+    (0.30, 0.63, 0.78),  // cyan      198° (dimmed; 0.90 read too bright)
     (0.33, 0.49, 0.82),  // azure     225°
     (1.00, 0.80, 0.90),  // blush     330° (replaced merged-like indigo)
     (0.00, 0.55, 0.55),  // deep teal 180° (replaced merged-like violet)
