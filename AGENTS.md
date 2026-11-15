@@ -31,6 +31,7 @@ Seshctl ships as a self-signed `.app` bundle in a DMG. There is exactly one inst
 | `make sign` | Sign `dist/Seshctl.app` with the self-signed cert |
 | `make make-dmg` | Create `dist/Seshctl-<VERSION>.dmg` |
 | `make dist` | Full pipeline: `bundle → sign → make-dmg` |
+| `make bump-version VERSION=x.y.z` | Set the release version in `Info.plist` and +1 `CFBundleVersion`, editing only those two lines (never PlistBuddy, which reformats the file) |
 | `make appcast` | EdDSA-sign the DMG and regenerate `docs/appcast.xml` for Sparkle (see Sparkle Auto-Updates section) |
 | `make publish` | `publish-docs → publish-release`: commits + pushes metadata, waits for Pages, creates GitHub Release |
 | `make publish-docs` | Stage 1 of publish: commit Info.plist + appcast + release notes, push, poll Pages |
