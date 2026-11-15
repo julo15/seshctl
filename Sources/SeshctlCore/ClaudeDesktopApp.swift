@@ -30,11 +30,18 @@ public enum ClaudeDesktopApp {
     /// interpolated into a URL.
     public static func isValidSessionId(_ id: String) -> Bool {
         guard let prefix = sessionIdPrefixes.first(where: { id.hasPrefix($0) }) else { return false }
+        return isValidSuffix(of: id, prefix: prefix, allowsUnderscore: true, maxLength: nil)
+    }
+
+    /// True when `id` minus `prefix` is non-empty, at most `maxLength`
+    /// scalars, and only ASCII letters, digits, `-`, and `_` if allowed.
+    private static func isValidSuffix(of id: String, prefix: String, allowsUnderscore: Bool, maxLength: Int?) -> Bool {
         let suffix = id.unicodeScalars.dropFirst(prefix.unicodeScalars.count)
-        guard !suffix.isEmpty else { return false }
+        guard !suffix.isEmpty, suffix.count <= (maxLength ?? .max) else { return false }
         return suffix.allSatisfy { scalar in
             switch scalar {
-            case "A"..."Z", "a"..."z", "0"..."9", "_", "-": return true
+            case "A"..."Z", "a"..."z", "0"..."9", "-": return true
+            case "_": return allowsUnderscore
             default: return false
             }
         }
@@ -64,14 +71,7 @@ public enum ClaudeDesktopApp {
     public static func isValidLocalSessionId(_ id: String) -> Bool {
         let prefix = "local_"
         guard id.hasPrefix(prefix) else { return false }
-        let suffix = id.unicodeScalars.dropFirst(prefix.unicodeScalars.count)
-        guard (1...64).contains(suffix.count) else { return false }
-        return suffix.allSatisfy { scalar in
-            switch scalar {
-            case "A"..."Z", "a"..."z", "0"..."9", "-": return true
-            default: return false
-            }
-        }
+        return isValidSuffix(of: id, prefix: prefix, allowsUnderscore: false, maxLength: 64)
     }
 
     /// `claude://code/continue?session=<id>`, which switches the desktop
@@ -84,37 +84,76 @@ public enum ClaudeDesktopApp {
         return URL(string: "\(scheme)://code/continue?session=\(id)")
     }
 
-    /// The desktop app's `local_…` id for the session whose CLI conversation
-    /// id is `cliSessionId`, or `nil` when no live (non-archived) session
-    /// file matches. Matches `cliSessionId` or `lastAssistantCliSessionId`.
-    /// Session files are ~100 KB, so each is checked for the id's bytes
-    /// before it's decoded.
+    /// Session files larger than this are skipped unread. Real ones are
+    /// ~100 KB; the cap bounds the main-thread read on Enter.
+    static let maxSessionFileSize = 5 * 1024 * 1024
+
+    /// The desktop app's `local_…` id for the session that `cliSessionId`
+    /// belongs to, or `nil` when no live (non-archived) session file matches.
+    ///
+    /// A session's current CLI ids (`cliSessionId`, `lastAssistantCliSessionId`)
+    /// win over ids it held earlier (`priorCliSessionIds`, after `/clear` or a
+    /// resume, and `historyOnlyCliSessionId`). Within each tier the most
+    /// recently modified file wins. Files are read newest first and checked
+    /// for the id's bytes before they're decoded, so a current match in a
+    /// recent session usually costs one file read.
     public static func localSessionId(
         forCliSessionId cliSessionId: String,
         sessionsRoot: URL = defaultLocalSessionsRoot
     ) -> String? {
         guard !cliSessionId.isEmpty, let needle = cliSessionId.data(using: .utf8) else { return nil }
-        let fm = FileManager.default
-        let dirs = { (url: URL) -> [URL] in
-            ((try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: [.isDirectoryKey])) ?? [])
-                .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+        var priorMatch: String?
+        for file in sessionFiles(under: sessionsRoot) {
+            guard let data = try? Data(contentsOf: file), data.range(of: needle) != nil,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  json["isArchived"] as? Bool != true,
+                  let id = json["sessionId"] as? String, isValidLocalSessionId(id)
+            else { continue }
+            if json["cliSessionId"] as? String == cliSessionId
+                || json["lastAssistantCliSessionId"] as? String == cliSessionId {
+                return id
+            }
+            if priorMatch == nil, priorCliSessionIds(in: json).contains(cliSessionId) {
+                priorMatch = id
+            }
         }
-        for account in dirs(sessionsRoot) {
-            for org in dirs(account) {
-                let files = (try? fm.contentsOfDirectory(at: org, includingPropertiesForKeys: nil)) ?? []
-                for file in files where file.lastPathComponent.hasPrefix("local_") && file.pathExtension == "json" {
-                    guard let data = try? Data(contentsOf: file), data.range(of: needle) != nil,
-                          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                          json["cliSessionId"] as? String == cliSessionId
-                            || json["lastAssistantCliSessionId"] as? String == cliSessionId,
-                          json["isArchived"] as? Bool != true,
-                          let id = json["sessionId"] as? String, isValidLocalSessionId(id)
+        return priorMatch
+    }
+
+    /// Ids a session held before its current one. `historyOnlyCliSessionId`
+    /// is read as a string or an array, since the app wraps it either way.
+    private static func priorCliSessionIds(in json: [String: Any]) -> [String] {
+        var ids = json["priorCliSessionIds"] as? [String] ?? []
+        if let historyOnly = json["historyOnlyCliSessionId"] as? String {
+            ids.append(historyOnly)
+        } else if let historyOnly = json["historyOnlyCliSessionId"] as? [String] {
+            ids += historyOnly
+        }
+        return ids
+    }
+
+    /// `<root>/<account>/<org>/local_*.json`, regular files no larger than
+    /// `maxSessionFileSize`, most recently modified first.
+    static func sessionFiles(under root: URL) -> [URL] {
+        let fm = FileManager.default
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
+        let children = { (url: URL) -> [URL] in
+            (try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: keys)) ?? []
+        }
+        let isDirectory = { (url: URL) in (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+        var files: [(url: URL, modified: Date)] = []
+        for account in children(root) where isDirectory(account) {
+            for org in children(account) where isDirectory(org) {
+                for file in children(org) where file.lastPathComponent.hasPrefix("local_") && file.pathExtension == "json" {
+                    guard let values = try? file.resourceValues(forKeys: Set(keys)),
+                          values.isRegularFile == true,
+                          (values.fileSize ?? 0) <= maxSessionFileSize
                     else { continue }
-                    return id
+                    files.append((file, values.contentModificationDate ?? .distantPast))
                 }
             }
         }
-        return nil
+        return files.sorted { $0.modified > $1.modified }.map(\.url)
     }
 
     /// Derive the desktop deep link from a claude.ai web URL of the form
