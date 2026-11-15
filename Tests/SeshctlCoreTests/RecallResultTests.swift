@@ -96,4 +96,35 @@ struct RecallResultTests {
         #expect(decoded.resumeCmd == original.resumeCmd)
         #expect(decoded.text == original.text)
     }
+
+    @Test("Decodes without a snippet (semantic and legacy JSON)")
+    func decodesWithoutSnippet() throws {
+        let json = """
+            {"agent": "claude", "role": "user", "session_id": "s", "project": "/p", \
+            "timestamp": 1, "score": 0.5, "resume_cmd": "", "text": "t"}
+            """
+        let r = try JSONDecoder().decode(RecallResult.self, from: Data(json.utf8))
+        #expect(r.snippet == nil)
+    }
+
+    @Test("snippetSegments splits marked runs and collapses whitespace")
+    func snippetSegmentsSplitsRuns() {
+        let s = "…fix the \u{1}appcast\u{2}  and\n\n\u{1}sparkle\u{2} keys…"
+        let segments = RecallResult.snippetSegments(s)
+        #expect(segments.map(\.text) == ["…fix the ", "appcast", " and ", "sparkle", " keys…"])
+        #expect(segments.map(\.isMatch) == [false, true, false, true, false])
+    }
+
+    @Test("snippetSegments trims the ends and handles a snippet that is all match")
+    func snippetSegmentsEdges() {
+        #expect(RecallResult.snippetSegments("  \u{1}appcast\u{2}  ").map(\.text) == ["appcast"])
+        #expect(RecallResult.snippetSegments("plain text").map(\.isMatch) == [false])
+        #expect(RecallResult.snippetSegments("").isEmpty)
+    }
+
+    @Test("snippetSegments merges adjacent matches")
+    func snippetSegmentsMergesAdjacent() {
+        let segments = RecallResult.snippetSegments("\u{1}make\u{2}\u{1}file\u{2} x")
+        #expect(segments.map(\.text) == ["makefile", " x"])
+    }
 }

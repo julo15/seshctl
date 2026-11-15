@@ -1,5 +1,6 @@
 // VectorStoreTests — covers the SQLite-backed embedding store: roundtrip,
-// dedup, FK cascade, drift detection, cursors, and clearAll.
+// dedup, FK cascade, text-only inserts + embedding backfill, the FTS
+// keyword index, cursors, and clearAll.
 //
 // All tests build a fresh `SeshctlDatabase.temporary()` so they're hermetic
 // and parallel-safe (no shared on-disk state).
@@ -142,25 +143,35 @@ struct VectorStoreTests {
         #expect(afterEmbedIDs.isEmpty, "FK cascade should have cleared embeddings")
     }
 
-    @Test("detectDrift is false on balanced store, true when embeddings diverge")
-    func driftDetection() async throws {
-        let db = try SeshctlDatabase.temporary()
-        let store = VectorStore(database: db)
+    @Test("insertText stores entries without embeddings; insertEmbeddings backfills them")
+    func textThenEmbeddings() async throws {
+        let store = try makeStore()
         let entries = (0..<3).map { makeEntry(seed: $0) }
-        let vectors = (0..<3).map { makeVector(seed: $0) }
-        _ = try await store.insert(entries: entries, embeddings: vectors)
 
-        let driftBefore = try await store.detectDrift()
-        #expect(driftBefore == false, "fresh balanced store should not drift")
+        let ids = try await store.insertText(entries: entries)
+        #expect(ids.count == 3)
+        #expect(try await store.entryCount() == 3)
+        #expect(try await store.embeddingCount() == 0)
 
-        // Surgically remove one embedding row (FK doesn't fire — we're
-        // deleting from the child, not the parent).
-        try await db.dbPool.write { rawDB in
-            try rawDB.execute(sql: "DELETE FROM recall_embeddings WHERE entry_id = (SELECT MIN(entry_id) FROM recall_embeddings)")
-        }
+        let pending = try await store.entriesMissingEmbeddings(limit: 10)
+        #expect(pending.map(\.id) == ids, "oldest id first")
 
-        let driftAfter = try await store.detectDrift()
-        #expect(driftAfter == true, "store should report drift after manual embedding deletion")
+        try await store.insertEmbeddings(ids: [ids[0], ids[1]], vectors: [makeVector(seed: 0), makeVector(seed: 1)])
+        #expect(try await store.embeddingCount() == 2)
+        let stillPending = try await store.entriesMissingEmbeddings(limit: 10)
+        #expect(stillPending.map(\.id) == [ids[2]])
+
+        // Re-inserting the same text is a no-op.
+        let again = try await store.insertText(entries: entries)
+        #expect(again.isEmpty)
+    }
+
+    @Test("entriesMissingEmbeddings honors the limit")
+    func missingEmbeddingsLimit() async throws {
+        let store = try makeStore()
+        _ = try await store.insertText(entries: (0..<5).map { makeEntry(seed: $0) })
+        let pending = try await store.entriesMissingEmbeddings(limit: 2)
+        #expect(pending.count == 2)
     }
 
     @Test("Cursor read/write roundtrip + nil for unknown adapters")
@@ -240,66 +251,379 @@ struct VectorStoreTests {
         #expect(h1 != different)
     }
 
-    @Test("filterAlreadyIndexed returns only entries not yet persisted")
-    func filterAlreadyIndexedReturnsOnlyNew() async throws {
+    @Test("keywordHits finds inserted text with marked snippets, best match first")
+    func keywordHitsFindsText() async throws {
         let store = try makeStore()
-        let persisted = (0..<3).map { makeEntry(seed: $0) }
-        let vectors = (0..<3).map { makeVector(seed: $0) }
-        _ = try await store.insert(entries: persisted, embeddings: vectors)
+        _ = try await store.insertText(entries: [
+            makeTextEntry("the sparkle appcast is stale", seed: 1, sessionID: "S1"),
+            makeTextEntry("sparkle appcast generation; regenerate the appcast after every appcast change", seed: 2, sessionID: "S2"),
+            makeTextEntry("nothing relevant here", seed: 3, sessionID: "S3"),
+        ])
 
-        // Mix: 3 already-in-DB + 2 new.
-        let new = (3..<5).map { makeEntry(seed: $0) }
-        let mixed = persisted + new
-        let remaining = try await store.filterAlreadyIndexed(mixed)
-        #expect(remaining.count == 2)
-        #expect(Set(remaining.map(\.text)) == Set(["entry-3", "entry-4"]))
+        let candidates = try await store.keywordCandidates(match: #""appc"*"#, limit: 10)
+        #expect(Set(candidates.map(\.sessionID)) == ["S1", "S2"])
+        #expect(candidates.first?.sessionID == "S2", "more occurrences rank higher")
+        #expect(candidates.allSatisfy { $0.rank < 0 }, "bm25 is negative; lower is better")
+
+        let ids = candidates.map(\.id)
+        let hits = try await store.keywordHits(match: #""appc"*"#, ids: ids)
+        #expect(hits.compactMap(\.entry.id) == ids, "hits come back in the order asked for")
+        let s1 = hits.first { $0.entry.sessionID == "S1" }
+        #expect(s1?.entry.text == "the sparkle appcast is stale")
+        #expect(s1?.snippet.contains("\(KeywordHit.matchStart)appcast\(KeywordHit.matchEnd)") == true)
     }
 
-    @Test("filterAlreadyIndexed treats different sessions as distinct (composite dedup key)")
-    func filterAlreadyIndexedSessionDistinct() async throws {
+    @Test("keywordHits(match:ids:) drops ids that don't match and handles no ids")
+    func keywordHitsDropsNonMatching() async throws {
         let store = try makeStore()
-        // Same text, same agent, different sessions — both should remain
-        // "new" until persisted independently.
-        let aText = "shared"
-        let entryA = HistoryEntry(
-            id: nil, agent: "claude", role: "user",
-            sessionID: "session-A", project: "/p",
-            timestamp: 1.0, text: aText,
-            textHash: HistoryEntry.textHash(for: aText)
+        let ids = try await store.insertText(entries: [
+            makeTextEntry("sparkle appcast", seed: 1, sessionID: "S1"),
+            makeTextEntry("unrelated", seed: 2, sessionID: "S2"),
+        ])
+        let hits = try await store.keywordHits(match: #""sparkle"*"#, ids: ids + [9_999])
+        #expect(hits.map(\.entry.sessionID) == ["S1"])
+        #expect(try await store.keywordHits(match: #""sparkle"*"#, ids: []).isEmpty)
+    }
+
+    @Test("FTS index follows updates: new text matches, old text doesn't")
+    func keywordIndexFollowsUpdates() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let store = VectorStore(database: db)
+        _ = try await store.insertText(entries: [makeTextEntry("sparkle appcast", seed: 1, sessionID: "S1")])
+        try await db.dbPool.write { rawDB in
+            try rawDB.execute(sql: "UPDATE recall_entries SET text = 'zombie reaper'")
+        }
+        #expect(try await store.keywordCandidates(match: #""zombie"*"#, limit: 10).count == 1)
+        #expect(try await store.keywordCandidates(match: #""sparkle"*"#, limit: 10).isEmpty)
+        try await db.dbPool.write { rawDB in
+            try rawDB.execute(sql: "INSERT INTO recall_fts(recall_fts, rank) VALUES ('integrity-check', 1)")
+        }
+    }
+
+    @Test("insertText truncates oversized text but keeps the full-text hash")
+    func insertTextTruncatesOversizedText() async throws {
+        let store = try makeStore()
+        let huge = String(repeating: "x", count: HistoryEntry.maxStoredTextLength) + " tailword"
+        let entry = HistoryEntry(
+            id: nil, agent: "claude", role: "user", sessionID: "S1", project: "/p",
+            timestamp: 1, text: huge, textHash: HistoryEntry.textHash(for: huge)
         )
-        let entryB = HistoryEntry(
-            id: nil, agent: "claude", role: "user",
-            sessionID: "session-B", project: "/p",
-            timestamp: 2.0, text: aText,
-            textHash: HistoryEntry.textHash(for: aText)
-        )
-        _ = try await store.insert(
-            entries: [entryA],
-            embeddings: [makeVector(seed: 0)]
-        )
-        let remaining = try await store.filterAlreadyIndexed([entryA, entryB])
-        #expect(remaining.count == 1, "session-B should still be 'new'")
-        #expect(remaining.first?.sessionID == "session-B")
+        let ids = try await store.insertText(entries: [entry])
+        let stored = try await store.entries(forIDs: ids)
+        #expect(stored.first?.text.count == HistoryEntry.maxStoredTextLength)
+        #expect(stored.first?.textHash == HistoryEntry.textHash(for: huge))
+        #expect(try await store.keywordCandidates(match: #""tailword""#, limit: 10).isEmpty)
+        // Re-inserting the same full text still dedupes.
+        #expect(try await store.insertText(entries: [entry]).isEmpty)
     }
 
-    @Test("filterAlreadyIndexed on empty input returns empty")
-    func filterAlreadyIndexedEmpty() async throws {
+    @Test("insertText spans several write batches")
+    func insertTextSpansBatches() async throws {
         let store = try makeStore()
-        let result = try await store.filterAlreadyIndexed([])
-        #expect(result.isEmpty)
+        let count = VectorStore.insertTextBatchSize * 2 + 7
+        let entries = (0..<count).map { makeTextEntry("row \($0)", seed: $0, sessionID: "S") }
+        let ids = try await store.insertText(entries: entries)
+        #expect(ids.count == count)
+        #expect(try await store.entryCount() == count)
     }
 
-    @Test("filterAlreadyIndexed on empty store returns ALL inputs (fast path)")
-    func filterAlreadyIndexedEmptyStore() async throws {
-        // Exercises the `guard !existing.isEmpty else { return entries }`
-        // fast path added to skip the per-entry Set lookup walk on the
-        // first-ever-refresh case.
-        let store = try makeStore()
-        let entries = (0..<5).map { makeEntry(seed: $0) }
-        let result = try await store.filterAlreadyIndexed(entries)
-        #expect(result.count == 5)
-        // Preserves caller order — guarded against a future refactor that
-        // accidentally sorts or filters.
-        #expect(result.map(\.text) == entries.map(\.text))
+    @Test("v17 migration truncates text stored before the cap")
+    func migrationTruncatesOversizedRows() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let store = VectorStore(database: db)
+        _ = try await store.insertText(entries: [makeTextEntry("short", seed: 1, sessionID: "S1")])
+        // Simulate a pre-cap row, then run the migration's statement.
+        let long = String(repeating: "y", count: 150_000)
+        try await db.dbPool.write { rawDB in
+            try rawDB.execute(sql: "UPDATE recall_entries SET text = ?", arguments: [long])
+            try rawDB.execute(sql: SeshctlDatabase.truncateOversizedRecallTextSQL)
+        }
+        let length = try await db.dbPool.read { rawDB in
+            try Int.fetchOne(rawDB, sql: "SELECT length(text) FROM recall_entries")
+        }
+        #expect(length == HistoryEntry.maxStoredTextLength)
     }
+
+    @Test("keywordHits requires every term")
+    func keywordHitsRequiresAllTerms() async throws {
+        let store = try makeStore()
+        _ = try await store.insertText(entries: [
+            makeTextEntry("zombie process reaper", seed: 1, sessionID: "S1"),
+            makeTextEntry("zombie movie night", seed: 2, sessionID: "S2"),
+        ])
+        let hits = try await store.keywordCandidates(match: #""zombie"* "reaper"*"#, limit: 10)
+        #expect(hits.map(\.sessionID) == ["S1"])
+    }
+
+    @Test("FTS index follows deletes, so cleared entries stop matching")
+    func keywordIndexFollowsDeletes() async throws {
+        let store = try makeStore()
+        _ = try await store.insertText(entries: [makeTextEntry("sparkle appcast", seed: 1, sessionID: "S1")])
+        #expect(try await store.keywordCandidates(match: #""sparkle"*"#, limit: 10).count == 1)
+
+        try await store.clearAllEntriesAndEmbeddings()
+        #expect(try await store.keywordCandidates(match: #""sparkle"*"#, limit: 10).isEmpty)
+    }
+
+    @Test("entries(agent:sessionID:) returns one session's messages oldest first")
+    func entriesForSessionOrdered() async throws {
+        let store = try makeStore()
+        _ = try await store.insertText(entries: [
+            makeEntry(seed: 3, role: "assistant"),
+            makeEntry(seed: 1),
+            makeEntry(seed: 2, sessionID: "session-B"),
+            makeEntry(seed: 4, agent: "codex"),
+        ])
+        let entries = try await store.entries(agent: "claude", sessionID: "session-A")
+        #expect(entries.map(\.text) == ["entry-1", "entry-3"])
+        #expect(try await store.entries(agent: "claude", sessionID: "missing").isEmpty)
+    }
+
+    @Test("HistoryEntry.conversationTurn maps user and assistant, drops other roles")
+    func historyEntryConversationTurn() {
+        let date = Date(timeIntervalSince1970: 1_700_000_001)
+        #expect(makeEntry(seed: 1).conversationTurn == .userMessage(text: "entry-1", timestamp: date))
+        #expect(
+            makeEntry(seed: 1, role: "assistant").conversationTurn
+                == .assistantMessage(text: "entry-1", toolCalls: [], timestamp: date)
+        )
+        #expect(makeEntry(seed: 1, role: "system").conversationTurn == nil)
+    }
+
+    @Test("Migration backfills the FTS index from entries stored before it existed")
+    func migrationBackfillsExistingEntries() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let store = VectorStore(database: db)
+        // Simulate rows written before v16: insert, then wipe the index and
+        // rebuild it the way the migration does.
+        _ = try await store.insertText(entries: [makeTextEntry("legacy appcast row", seed: 1, sessionID: "S1")])
+        try await db.dbPool.write { rawDB in
+            try rawDB.execute(sql: "INSERT INTO recall_fts(recall_fts) VALUES ('delete-all')")
+        }
+        #expect(try await store.keywordCandidates(match: #""legacy"*"#, limit: 10).isEmpty)
+
+        try await db.dbPool.write { rawDB in
+            try rawDB.execute(sql: "INSERT INTO recall_fts(recall_fts) VALUES ('rebuild')")
+        }
+        #expect(try await store.keywordCandidates(match: #""legacy"*"#, limit: 10).count == 1)
+    }
+
+    @Test("upsertTitles keeps stored fields that a later pass leaves nil")
+    func upsertTitlesCoalesces() async throws {
+        let store = try makeStore()
+        try await store.upsertTitles([IndexedTitle(agent: "claude", sessionID: "S", aiTitle: "AI", customTitle: nil)])
+        try await store.upsertTitles([IndexedTitle(agent: "claude", sessionID: "S", aiTitle: nil, customTitle: "Custom")])
+        #expect(try await store.sessionTitle(agent: "claude", sessionID: "S") == "AI", "ai-title wins over custom-title")
+
+        try await store.upsertTitles([IndexedTitle(agent: "claude", sessionID: "T", aiTitle: nil, customTitle: "Only custom")])
+        #expect(try await store.sessionTitle(agent: "claude", sessionID: "T") == "Only custom")
+        try await store.upsertTitles([])
+    }
+
+    @Test("sessionTitle falls back to the first typed user message, on one line")
+    func sessionTitleFallsBackToFirstMessage() async throws {
+        let store = try makeStore()
+        func entry(_ text: String, role: String = "user", seed: Int, session: String = "S") -> HistoryEntry {
+            HistoryEntry(
+                id: nil, agent: "claude", role: role, sessionID: session, project: "/p",
+                timestamp: Double(seed), text: text, textHash: HistoryEntry.textHash(for: text)
+            )
+        }
+        let long = String(repeating: "word ", count: 60)
+        _ = try await store.insertText(entries: [
+            entry("assistant goes first", role: "assistant", seed: 0),
+            entry("<command-name>/foo</command-name>", seed: 1),
+            entry("fix the\n  reaper   bug", seed: 2),
+            entry("later ask", seed: 3),
+            entry(long, seed: 1, session: "L"),
+        ])
+        #expect(try await store.sessionTitle(agent: "claude", sessionID: "S") == "fix the reaper bug")
+
+        let longTitle = try await store.sessionTitle(agent: "claude", sessionID: "L")
+        #expect(longTitle?.count == VectorStore.firstMessageTitleLength)
+        #expect(longTitle?.hasSuffix("…") == true)
+
+        #expect(try await store.sessionTitle(agent: "claude", sessionID: "missing") == nil)
+        #expect(try await store.sessionTitle(agent: "codex", sessionID: "S") == nil, "keyed by agent too")
+    }
+
+
+    @Test("titleMatches finds indexed and picked titles, follows updates, one row per session")
+    func titleMatchesFollowsTitleTables() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let store = VectorStore(database: db)
+        try await store.upsertTitles([
+            IndexedTitle(agent: "claude", sessionID: "A", aiTitle: "Sparkle appcast fix", customTitle: "appcast box"),
+            IndexedTitle(agent: "claude", sessionID: "B", aiTitle: "Zombie reaper", customTitle: nil),
+        ])
+        try db.setConversationTitle(conversationId: "C", tool: .codex, title: "Appcast signing")
+
+        let matches = try await store.titleMatches(match: #""appc"*"#, limit: 10)
+        #expect(Set(matches.map(\.sessionKey)) == ["claude|A", "codex|C"], "one row per session")
+        let marked = matches.first { $0.sessionID == "C" }?.marked
+        #expect(marked == "\(KeywordHit.matchStart)Appcast\(KeywordHit.matchEnd) signing")
+
+        // Renames replace the old title in the index.
+        try await store.upsertTitles([IndexedTitle(agent: "claude", sessionID: "B", aiTitle: "Process cleanup", customTitle: nil)])
+        try db.setConversationTitle(conversationId: "C", tool: .codex, title: "Release notes")
+        #expect(try await store.titleMatches(match: #""zombie"*"#, limit: 10).isEmpty)
+        #expect(try await store.titleMatches(match: #""cleanup"*"#, limit: 10).map(\.sessionID) == ["B"])
+        #expect(try await store.titleMatches(match: #""appc"*"#, limit: 10).map(\.sessionID) == ["A"])
+
+        // Deletes drop out too.
+        try await db.dbPool.write { rawDB in
+            try rawDB.execute(sql: "DELETE FROM recall_titles WHERE session_id = 'A'")
+            try rawDB.execute(sql: "DELETE FROM conversation_titles")
+        }
+        #expect(try await store.titleMatches(match: #""appc"*"#, limit: 10).isEmpty)
+        #expect(try await store.titleMatches(match: #""release"*"#, limit: 10).isEmpty)
+    }
+
+    @Test("latestEntry returns a session's newest message")
+    func latestEntryIsNewest() async throws {
+        let store = try makeStore()
+        _ = try await store.insertText(entries: [
+            makeTextEntry("older", seed: 1, sessionID: "S"),
+            makeTextEntry("newer", seed: 2, sessionID: "S"),
+            makeTextEntry("other session", seed: 3, sessionID: "T"),
+        ])
+        #expect(try await store.latestEntry(agent: "claude", sessionID: "S")?.text == "newer")
+        #expect(try await store.latestEntry(agent: "claude", sessionID: "missing") == nil)
+    }
+
+    @Test("fillFallbackTitles names untitled sessions by their first typed message; a real title replaces it")
+    func fillFallbackTitlesLifecycle() async throws {
+        let store = try makeStore()
+        func userEntry(_ text: String, seed: Int, session: String) -> HistoryEntry {
+            HistoryEntry(
+                id: nil, agent: "claude", role: "user", sessionID: session, project: "/p",
+                timestamp: Double(seed), text: text, textHash: HistoryEntry.textHash(for: text)
+            )
+        }
+        _ = try await store.insertText(entries: [
+            userEntry("messenger bag research", seed: 1, session: "U"),
+            userEntry("<command-name>/x</command-name>", seed: 1, session: "LATER"),
+            userEntry("already titled", seed: 1, session: "T"),
+        ])
+        try await store.upsertTitles([IndexedTitle(agent: "claude", sessionID: "T", aiTitle: "Real title", customTitle: nil)])
+        try await store.fillFallbackTitles()
+
+        #expect(try await store.titleMatches(match: #""messenger"*"#, limit: 10).map(\.sessionID) == ["U"])
+        #expect(try await store.titleMatches(match: #""already"*"#, limit: 10).isEmpty, "titled sessions get no fallback")
+        #expect(try await store.sessionTitle(agent: "claude", sessionID: "LATER") == nil)
+
+        // A session with no typed message yet is picked up once it has one.
+        _ = try await store.insertText(entries: [userEntry("typed at last", seed: 2, session: "LATER")])
+        try await store.fillFallbackTitles()
+        #expect(try await store.sessionTitle(agent: "claude", sessionID: "LATER") == "typed at last")
+        #expect(try await store.titleMatches(match: #""typed"*"#, limit: 10).map(\.sessionID) == ["LATER"])
+
+        // A real title arriving later replaces the fallback, in display and search.
+        try await store.upsertTitles([IndexedTitle(agent: "claude", sessionID: "U", aiTitle: "Bag shopping", customTitle: nil)])
+        #expect(try await store.sessionTitle(agent: "claude", sessionID: "U") == "Bag shopping")
+        #expect(try await store.titleMatches(match: #""messenger"*"#, limit: 10).isEmpty)
+        #expect(try await store.titleMatches(match: #""shopping"*"#, limit: 10).map(\.sessionID) == ["U"])
+    }
+
+    @Test("titleMatches ignores a title the row doesn't show")
+    func titleMatchesOnlyShownTitle() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let store = VectorStore(database: db)
+        // A remote-control custom title hides behind the ai-title.
+        try await store.upsertTitles([
+            IndexedTitle(agent: "claude", sessionID: "A", aiTitle: "Sparkle appcast fix", customTitle: "m5: assistant"),
+        ])
+        #expect(try await store.titleMatches(match: #""assistant"*"#, limit: 10).isEmpty)
+        #expect(try await store.titleMatches(match: #""sparkle"*"#, limit: 10).map(\.sessionID) == ["A"])
+
+        // A title picked with `t` replaces the ai-title.
+        try db.setConversationTitle(conversationId: "A", tool: .claude, title: "Release notes")
+        #expect(try await store.titleMatches(match: #""sparkle"*"#, limit: 10).isEmpty)
+        #expect(try await store.titleMatches(match: #""release"*"#, limit: 10).map(\.sessionID) == ["A"])
+
+        // With only a custom title, it's the one shown.
+        try await store.upsertTitles([IndexedTitle(agent: "claude", sessionID: "B", aiTitle: nil, customTitle: "m5: assistant")])
+        #expect(try await store.titleMatches(match: #""assistant"*"#, limit: 10).map(\.sessionID) == ["B"])
+    }
+
+    @Test("titleMatches counts sessions, not title rows, against the limit")
+    func titleMatchesLimitCountsSessions() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let store = VectorStore(database: db)
+        try await store.upsertTitles([
+            IndexedTitle(agent: "claude", sessionID: "A", aiTitle: "appcast appcast", customTitle: "appcast appcast appcast"),
+            IndexedTitle(agent: "claude", sessionID: "B", aiTitle: "appcast signing work", customTitle: nil),
+        ])
+        try db.setConversationTitle(conversationId: "A", tool: .claude, title: "appcast")
+
+        #expect(try await store.titleMatches(match: #""appc"*"#, limit: 1).count == 1)
+        let two = try await store.titleMatches(match: #""appc"*"#, limit: 2)
+        #expect(Set(two.map(\.sessionID)) == ["A", "B"])
+        #expect(two.first { $0.sessionID == "A" }?.marked == "\(KeywordHit.matchStart)appcast\(KeywordHit.matchEnd)", "the picked title")
+    }
+
+    @Test("titleMatches reports the title's bm25 rank and the session's newest message time")
+    func titleMatchesRankAndLatest() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let store = VectorStore(database: db)
+        _ = try await store.insertText(entries: [
+            makeTextEntry("older", seed: 1, sessionID: "A"),
+            makeTextEntry("newer", seed: 5, sessionID: "A"),
+        ])
+        try await store.upsertTitles([
+            IndexedTitle(agent: "claude", sessionID: "A", aiTitle: "Zombie reaper", customTitle: nil),
+            IndexedTitle(agent: "claude", sessionID: "EMPTY", aiTitle: "Reaper notes", customTitle: nil),
+        ])
+        let matches = try await store.titleMatches(match: #""reaper"*"#, limit: 10)
+        let byID = Dictionary(uniqueKeysWithValues: matches.map { ($0.sessionID, $0) })
+        #expect(byID["A"]?.latest == 1_700_000_005)
+        #expect(byID["EMPTY"] != nil)
+        #expect(byID["EMPTY"]?.latest == nil, "no stored messages")
+        #expect(matches.allSatisfy { $0.rank < 0 })
+        #expect(matches.map(\.rank) == matches.map(\.rank).sorted(), "best first")
+    }
+
+    @Test("latestEntry caps the text when asked")
+    func latestEntryCapsText() async throws {
+        let store = try makeStore()
+        let long = String(repeating: "x", count: 5_000)
+        _ = try await store.insertText(entries: [makeTextEntry(long, seed: 1, sessionID: "S")])
+        #expect(try await store.latestEntry(agent: "claude", sessionID: "S", textLimit: 100)?.text.count == 100)
+        #expect(try await store.latestEntry(agent: "claude", sessionID: "S")?.text == long)
+    }
+
+    @Test("fillFallbackTitles is idempotent")
+    func fillFallbackTitlesIdempotent() async throws {
+        let db = try SeshctlDatabase.temporary()
+        let store = VectorStore(database: db)
+        let text = "messenger bag research"
+        _ = try await store.insertText(entries: [HistoryEntry(
+            id: nil, agent: "claude", role: "user", sessionID: "U", project: "/p",
+            timestamp: 1, text: text, textHash: HistoryEntry.textHash(for: text)
+        )])
+        try await store.fillFallbackTitles()
+        try await store.fillFallbackTitles()
+        let counts = try await db.dbPool.read { rawDB in
+            (
+                try Int.fetchOne(rawDB, sql: "SELECT COUNT(*) FROM recall_fallback_titles") ?? -1,
+                try Int.fetchOne(rawDB, sql: "SELECT COUNT(*) FROM title_fts WHERE source = 'first'") ?? -1
+            )
+        }
+        #expect(counts.0 == 1)
+        #expect(counts.1 == 1)
+        #expect(try await store.titleMatches(match: #""messenger"*"#, limit: 10).map(\.sessionID) == ["U"])
+    }
+}
+
+private func makeTextEntry(_ text: String, seed: Int, sessionID: String) -> HistoryEntry {
+    HistoryEntry(
+        id: nil,
+        agent: "claude",
+        role: "assistant",
+        sessionID: sessionID,
+        project: "/tmp/project",
+        timestamp: 1_700_000_000 + Double(seed),
+        text: text,
+        textHash: HistoryEntry.textHash(for: text)
+    )
 }

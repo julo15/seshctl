@@ -60,6 +60,12 @@ struct SessionFolderLabelTests {
         let s = makeSession(directory: "/Users/me/seshctl/.claude/worktrees/julo-fix-thing/Sources")
         #expect(s.folderLabel == "seshctl")
     }
+
+    @Test("folderLabel(forDirectory:) labels bare paths the same way")
+    func bareDirectory() {
+        #expect(Session.folderLabel(forDirectory: "/Users/me/whisperfast-2") == "whisperfast-2")
+        #expect(Session.folderLabel(forDirectory: "/Users/me/seshctl/.claude/worktrees/julo-x") == "seshctl")
+    }
 }
 
 @Suite("Session.compactHeadline(title:)")

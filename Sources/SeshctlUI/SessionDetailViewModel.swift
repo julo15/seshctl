@@ -1,11 +1,16 @@
 import Foundation
 import SwiftUI
 import SeshctlCore
+import SeshctlRecall
+import os
+
+private let detailLogger = Logger(subsystem: "app.seshctl", category: "detail")
 
 @MainActor
 public final class SessionDetailViewModel: ObservableObject {
     public let session: Session?
     public let recallResult: RecallResult?
+    private let projectsRoot: URL
 
     @Published public internal(set) var turns: [ConversationTurn] = [] {
         didSet { displayItems = TranscriptDisplay.build(turns) }
@@ -13,6 +18,22 @@ public final class SessionDetailViewModel: ObservableObject {
     @Published public internal(set) var displayItems: [DisplayItem] = []
     @Published public private(set) var isLoading: Bool = false
     @Published public private(set) var error: String?
+    /// The matched message from the history index, shown under `error` when
+    /// a history result's transcript is deleted and the index has nothing
+    /// else for the session.
+    @Published public private(set) var indexedMessage: String?
+    /// True when `turns` were rebuilt from the history index because the
+    /// transcript file is gone. The view shows a banner saying so.
+    @Published public private(set) var isRebuiltFromHistory: Bool = false
+    /// Turn to scroll to when the transcript first appears, instead of the
+    /// bottom: the matched message of a rebuilt history session.
+    @Published public private(set) var initialScrollTurnId: String?
+
+    /// Loads a session's indexed messages by agent and session id. Tests
+    /// swap it to avoid the shared recall stack.
+    var historyProvider: @Sendable (String, String) async throws -> [ConversationTurn] = { agent, sessionID in
+        try await RecallService.sessionHistory(agent: agent, sessionID: sessionID)
+    }
     @Published public var scrollCommand: ScrollCommand?
     @Published public var scrollToTurnId: String?
     public var scrollAnchor: UnitPoint = .center
@@ -86,11 +107,82 @@ public final class SessionDetailViewModel: ObservableObject {
     public init(session: Session) {
         self.session = session
         self.recallResult = nil
+        self.projectsRoot = TranscriptParser.defaultProjectsRoot
     }
 
-    public init(recallResult: RecallResult, session: Session?) {
+    public init(
+        recallResult: RecallResult,
+        session: Session?,
+        projectsRoot: URL = TranscriptParser.defaultProjectsRoot
+    ) {
         self.session = session
         self.recallResult = recallResult
+        self.projectsRoot = projectsRoot
+    }
+
+    /// Rebuild a deleted transcript from the history index, scrolled to the
+    /// matched message. Falls back to showing just that message when the
+    /// index has nothing for the session.
+    private func loadFromHistory(_ result: RecallResult) {
+        isLoading = true
+        let provider = historyProvider
+        Task {
+            let turns: [ConversationTurn]
+            do {
+                turns = try await provider(result.agent, result.sessionId)
+            } catch {
+                detailLogger.error("Loading search history for \(result.sessionId, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+                self.error = "Couldn't load search history (\(error.localizedDescription)). The matched message:"
+                self.indexedMessage = result.text
+                self.isLoading = false
+                return
+            }
+            if turns.isEmpty {
+                self.error = Self.historyFallbackMessage(agent: result.agent)
+                self.indexedMessage = result.text
+            } else {
+                self.isRebuiltFromHistory = true
+                self.initialScrollTurnId = Self.matchedTurnId(in: turns, for: result)
+                self.turns = turns
+            }
+            self.isLoading = false
+        }
+    }
+
+    /// The turn holding a history result's matched message, if present.
+    nonisolated static func matchedTurnId(in turns: [ConversationTurn], for result: RecallResult) -> String? {
+        turns.first { turn in
+            switch turn {
+            case .userMessage(let text, _), .assistantMessage(let text, _, _), .awaySummary(let text, _):
+                return text == result.text
+            }
+        }?.id
+    }
+
+    /// Why a Claude history result has no transcript: Claude Code deletes
+    /// transcripts older than `cleanupPeriodDays` (30 by default), while
+    /// seshctl's history index keeps their text. Shared by every surface
+    /// that explains a deleted transcript.
+    nonisolated public static let claudeRetentionNote = "Claude Code removes transcripts after 30 days by default."
+
+    /// Banner above a transcript rebuilt from the history index. Only Claude
+    /// transcripts are known to be deleted; other agents' transcripts are
+    /// just ones the detail view can't locate.
+    public var rebuiltFromHistoryMessage: String {
+        let tail = "Rebuilt from search history: messages only, no tool calls."
+        guard recallResult?.agent == SessionTool.claude.rawValue else {
+            return "Transcript file not found. \(tail)"
+        }
+        return "Transcript deleted, so it can't be resumed. \(Self.claudeRetentionNote) \(tail)"
+    }
+
+    /// Shown with only the matched message, when the index has nothing else
+    /// for the session.
+    nonisolated static func historyFallbackMessage(agent: String) -> String {
+        guard agent == SessionTool.claude.rawValue else {
+            return "Transcript file not found. The matched message from search history:"
+        }
+        return "This transcript was deleted, so it can't be opened or resumed. \(claudeRetentionNote) Only the matched message was kept in search history:"
     }
 
     public func load() {
@@ -107,9 +199,10 @@ public final class SessionDetailViewModel: ObservableObject {
         } else if let recallResult {
             guard let resolved = TranscriptParser.resolveExistingTranscript(
                 conversationId: recallResult.sessionId,
-                directory: recallResult.project
+                directory: recallResult.project,
+                projectsRoot: projectsRoot
             ) else {
-                error = "No transcript available"
+                loadFromHistory(recallResult)
                 return
             }
             url = resolved

@@ -152,8 +152,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             // Wire RecallService to the shared database. Must happen before
             // the first SessionListViewModel.executeRecallSearch call —
-            // RecallService.search() throws if configure() was never called.
+            // RecallService.keywordSearch() throws if configure() was never called.
             RecallService.configure(database: db)
+
+            // Store new message text in the History index now, off the main
+            // actor and at low priority, so the first search doesn't pay
+            // for it. After an upgrade that resets an adapter's cursor that
+            // is a re-read of every transcript. Text phase only: no CoreML.
+            Task.detached(priority: .utility) {
+                await RecallService.warmTextIndex()
+            }
 
             let vm = SessionListViewModel(database: db, defaults: .standard)
             viewModel = vm
@@ -778,6 +786,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else if let session = vm.selectedSession {
             target = session.isActive ? .activeSession(session) : .inactiveSession(session)
         } else if let result = vm.selectedRecallResult {
+            // A deleted transcript can't be resumed (`claude --resume` fails
+            // with "No conversation found"). Open the detail view instead,
+            // which explains why and shows the message the index kept.
+            if vm.isTranscriptDeleted(result) {
+                openDetailForSelected(vm: vm)
+                return
+            }
             target = .recallResult(result, matchedSession: vm.session(for: result))
         } else {
             return

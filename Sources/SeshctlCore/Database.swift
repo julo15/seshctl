@@ -34,6 +34,13 @@ public struct SeshctlDatabase: Sendable {
     }
 
     private func migrate() throws {
+        try Self.makeMigrator().migrate(dbPool)
+    }
+
+    /// Every schema migration, in order. Internal so tests can migrate a
+    /// database part of the way (`migrate(_:upTo:)`), seed it as an older
+    /// build would have left it, and then run the rest.
+    static func makeMigrator() -> DatabaseMigrator {
         var migrator = DatabaseMigrator()
 
         migrator.registerMigration("v1_create_sessions") { db in
@@ -252,10 +259,179 @@ public struct SeshctlDatabase: Sendable {
             }
         }
 
-        try migrator.migrate(dbPool)
+        // Full-text index over recall_entries.text, backing the panel's
+        // keyword history search. External-content table: the text lives
+        // once, in recall_entries; triggers keep the index in step with
+        // inserts, deletes and updates. `prefix='2 3'` makes the
+        // as-you-type prefix queries cheap. The rebuild indexes whatever
+        // the recall indexer already stored.
+        // External-content FTS5 over `recall_entries.text`, kept in step by
+        // triggers. Any future migration that drops or recreates
+        // `recall_entries` must also drop, recreate and 'rebuild'
+        // `recall_fts`: dropping the content table doesn't error, it
+        // silently orphans the index. Builds before v16 still run the old
+        // drift check, so a downgrade wipes the index, deleted-transcript
+        // history included.
+        migrator.registerMigration("v16_create_recall_fts") { db in
+            try db.execute(sql: """
+                CREATE VIRTUAL TABLE recall_fts USING fts5(
+                    text,
+                    content='recall_entries',
+                    content_rowid='id',
+                    tokenize='unicode61 remove_diacritics 2',
+                    prefix='2 3'
+                );
+                CREATE TRIGGER recall_entries_fts_ai AFTER INSERT ON recall_entries BEGIN
+                    INSERT INTO recall_fts(rowid, text) VALUES (new.id, new.text);
+                END;
+                CREATE TRIGGER recall_entries_fts_ad AFTER DELETE ON recall_entries BEGIN
+                    INSERT INTO recall_fts(recall_fts, rowid, text) VALUES ('delete', old.id, old.text);
+                END;
+                CREATE TRIGGER recall_entries_fts_au AFTER UPDATE ON recall_entries BEGIN
+                    INSERT INTO recall_fts(recall_fts, rowid, text) VALUES ('delete', old.id, old.text);
+                    INSERT INTO recall_fts(rowid, text) VALUES (new.id, new.text);
+                END;
+                INSERT INTO recall_fts(recall_fts) VALUES ('rebuild');
+                """)
+        }
+
+        // Truncate messages stored before the index capped text length
+        // (`HistoryEntry.maxStoredTextLength`, 100k characters). A 20 MB
+        // pasted capture made FTS5's `snippet()` take ~40s. The update
+        // trigger re-indexes the shortened rows.
+        migrator.registerMigration("v17_truncate_oversized_recall_text") { db in
+            try db.execute(sql: Self.truncateOversizedRecallTextSQL)
+        }
+
+        // Session titles for History rows. Claude Code deletes transcripts
+        // after 30 days, taking their `ai-title` with them, so the indexer
+        // keeps a copy. Clearing the Claude cursor makes the next text pass
+        // re-read every transcript still on disk to backfill titles;
+        // entries it already holds are skipped by the dedup key. Sessions
+        // with no title get a first-message name instead (v20).
+        migrator.registerMigration("v18_create_recall_titles") { db in
+            try db.execute(sql: """
+                CREATE TABLE recall_titles (
+                    agent TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    ai_title TEXT,
+                    custom_title TEXT,
+                    PRIMARY KEY (agent, session_id)
+                );
+                CREATE INDEX recall_entries_session ON recall_entries (agent, session_id, timestamp);
+                DELETE FROM recall_cursors WHERE adapter_name = 'claude';
+                """)
+        }
+
+        // Full-text index over session titles, so History search matches a
+        // session by its name as well as its messages. One row per title:
+        // Claude's ai-title and custom-title (`recall_titles`) and titles
+        // picked with `t` (`conversation_titles`, whose `tool` values are
+        // the recall `agent` strings). Triggers keep it in step; the
+        // INSERT...SELECTs index titles stored before it existed.
+        migrator.registerMigration("v19_create_title_fts") { db in
+            try db.execute(sql: """
+                CREATE VIRTUAL TABLE title_fts USING fts5(
+                    title,
+                    agent UNINDEXED,
+                    session_id UNINDEXED,
+                    source UNINDEXED,
+                    tokenize='unicode61 remove_diacritics 2',
+                    prefix='2 3'
+                );
+
+                CREATE TRIGGER recall_titles_fts_ai AFTER INSERT ON recall_titles BEGIN
+                    INSERT INTO title_fts (title, agent, session_id, source)
+                        SELECT new.ai_title, new.agent, new.session_id, 'ai' WHERE new.ai_title IS NOT NULL;
+                    INSERT INTO title_fts (title, agent, session_id, source)
+                        SELECT new.custom_title, new.agent, new.session_id, 'custom' WHERE new.custom_title IS NOT NULL;
+                END;
+                CREATE TRIGGER recall_titles_fts_au AFTER UPDATE ON recall_titles BEGIN
+                    DELETE FROM title_fts
+                        WHERE agent = old.agent AND session_id = old.session_id AND source IN ('ai', 'custom');
+                    INSERT INTO title_fts (title, agent, session_id, source)
+                        SELECT new.ai_title, new.agent, new.session_id, 'ai' WHERE new.ai_title IS NOT NULL;
+                    INSERT INTO title_fts (title, agent, session_id, source)
+                        SELECT new.custom_title, new.agent, new.session_id, 'custom' WHERE new.custom_title IS NOT NULL;
+                END;
+                CREATE TRIGGER recall_titles_fts_ad AFTER DELETE ON recall_titles BEGIN
+                    DELETE FROM title_fts
+                        WHERE agent = old.agent AND session_id = old.session_id AND source IN ('ai', 'custom');
+                END;
+
+                CREATE TRIGGER conversation_titles_fts_ai AFTER INSERT ON conversation_titles BEGIN
+                    INSERT INTO title_fts (title, agent, session_id, source)
+                        VALUES (new.title, new.tool, new.conversation_id, 'picked');
+                END;
+                CREATE TRIGGER conversation_titles_fts_au AFTER UPDATE ON conversation_titles BEGIN
+                    DELETE FROM title_fts
+                        WHERE agent = old.tool AND session_id = old.conversation_id AND source = 'picked';
+                    INSERT INTO title_fts (title, agent, session_id, source)
+                        VALUES (new.title, new.tool, new.conversation_id, 'picked');
+                END;
+                CREATE TRIGGER conversation_titles_fts_ad AFTER DELETE ON conversation_titles BEGIN
+                    DELETE FROM title_fts
+                        WHERE agent = old.tool AND session_id = old.conversation_id AND source = 'picked';
+                END;
+
+                INSERT INTO title_fts (title, agent, session_id, source)
+                    SELECT ai_title, agent, session_id, 'ai' FROM recall_titles WHERE ai_title IS NOT NULL;
+                INSERT INTO title_fts (title, agent, session_id, source)
+                    SELECT custom_title, agent, session_id, 'custom' FROM recall_titles WHERE custom_title IS NOT NULL;
+                INSERT INTO title_fts (title, agent, session_id, source)
+                    SELECT title, tool, conversation_id, 'picked' FROM conversation_titles;
+                """)
+        }
+
+        // Names for sessions with no real title: the first message the user
+        // typed, on one line. History rows show it as the headline, so it
+        // goes into title_fts too; otherwise searching for a name you saw
+        // ranks it as just another message, often outside the top 20. A
+        // real title replaces it: inserting into recall_titles deletes the
+        // fallback (and, via its trigger, its title_fts row). The indexer
+        // fills the table (`VectorStore.fillFallbackTitles`), since picking
+        // the "typed" message needs Swift's filter.
+        migrator.registerMigration("v20_create_recall_fallback_titles") { db in
+            try db.execute(sql: """
+                CREATE TABLE recall_fallback_titles (
+                    agent TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    PRIMARY KEY (agent, session_id)
+                );
+                CREATE TRIGGER recall_fallback_titles_fts_ai AFTER INSERT ON recall_fallback_titles BEGIN
+                    INSERT INTO title_fts (title, agent, session_id, source)
+                        VALUES (new.title, new.agent, new.session_id, 'first');
+                END;
+                CREATE TRIGGER recall_fallback_titles_fts_au AFTER UPDATE ON recall_fallback_titles BEGIN
+                    DELETE FROM title_fts
+                        WHERE agent = old.agent AND session_id = old.session_id AND source = 'first';
+                    INSERT INTO title_fts (title, agent, session_id, source)
+                        VALUES (new.title, new.agent, new.session_id, 'first');
+                END;
+                CREATE TRIGGER recall_fallback_titles_fts_ad AFTER DELETE ON recall_fallback_titles BEGIN
+                    DELETE FROM title_fts
+                        WHERE agent = old.agent AND session_id = old.session_id AND source = 'first';
+                END;
+                CREATE TRIGGER recall_titles_replace_fallback AFTER INSERT ON recall_titles BEGIN
+                    DELETE FROM recall_fallback_titles
+                        WHERE agent = new.agent AND session_id = new.session_id;
+                END;
+                """)
+        }
+
+        return migrator
     }
 
     // MARK: - Helpers
+
+    /// Body of migration v17. Internal so tests can run it against rows
+    /// written after the migration already ran.
+    static let truncateOversizedRecallTextSQL = """
+        UPDATE recall_entries
+        SET text = substr(text, 1, 100000)
+        WHERE length(text) > 100000
+        """
 
     private static let activeStatusFilter =
         Column("status") == SessionStatus.idle.rawValue

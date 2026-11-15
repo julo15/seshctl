@@ -11,6 +11,7 @@
 
 import CryptoKit
 import Foundation
+import SeshctlCore
 
 public struct HistoryEntry: Sendable, Equatable {
     /// Row id assigned by SQLite. `nil` before insert; populated by
@@ -67,5 +68,35 @@ public struct HistoryEntry: Sendable, Equatable {
     public static func textHash(for text: String) -> String {
         let digest = SHA256.hash(data: Data(text.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+extension HistoryEntry {
+    /// This message as a transcript turn, or `nil` for a role the detail
+    /// view doesn't render.
+    public var conversationTurn: ConversationTurn? {
+        let date = Date(timeIntervalSince1970: timestamp)
+        switch role {
+        case "user": return .userMessage(text: text, timestamp: date)
+        case "assistant": return .assistantMessage(text: text, toolCalls: [], timestamp: date)
+        default: return nil
+        }
+    }
+}
+
+extension HistoryEntry {
+    /// Longest message text the index stores, in characters. Longer
+    /// messages (pasted logs and network captures, tens of MB) are truncated
+    /// on insert. FTS5's `snippet()` re-tokenizes a message's whole text,
+    /// and took ~40s on a 20 MB one. Search only matches the stored prefix,
+    /// but `textHash` is still computed from the full text, so dedup is
+    /// unchanged.
+    public static let maxStoredTextLength = 100_000
+
+    /// `text`, truncated to `maxStoredTextLength`.
+    public var storedText: String {
+        text.count > Self.maxStoredTextLength
+            ? String(text.prefix(Self.maxStoredTextLength))
+            : text
     }
 }

@@ -1,6 +1,8 @@
 # Native recall (SeshctlRecall) — architecture note
 
-The semantic-search box in Seshctl runs entirely in-app. There is no subprocess, no Python interpreter, no on-demand model download. Everything — tokenization, embedding inference, vector storage, top-K ranking, per-tool transcript scanning — lives inside the `SeshctlRecall` SwiftPM target.
+> **Panel search is keyword-based now.** The panel's History section runs SQLite FTS5 over the same `recall_entries` table (`KeywordSearch.swift`, `VectorStore.keywordHits`), and the semantic path described below isn't wired to the panel. See AGENTS.md "Search" for the current design. This note still describes the embedding side, which a future LLM tier will use for candidate retrieval.
+
+The semantic-search box in Seshctl ran entirely in-app. There is no subprocess, no Python interpreter, no on-demand model download. Everything — tokenization, embedding inference, vector storage, top-K ranking, per-tool transcript scanning — lives inside the `SeshctlRecall` SwiftPM target.
 
 This note covers the parts of that system that matter to a future maintainer.
 
@@ -14,6 +16,7 @@ Sources/SeshctlRecall/
 ├── VectorStore.swift             # GRDB-backed embeddings + entries persistence
 ├── Indexer.swift                 # adapter → embed → persist; chunked + cancellable
 ├── Search.swift                  # top-K cosine via Accelerate vDSP_dotpr
+├── KeywordSearch.swift           # FTS5 query building + per-session ranking (panel History)
 ├── Embedder.swift                # protocol — production = EmbeddingService, tests = MockEmbedder
 ├── Adapter.swift                 # protocol — per-tool transcript walker
 ├── AdapterRegistry.swift         # production wiring (claude, codex, gemini)
@@ -54,9 +57,7 @@ A `passID` (UInt64, monotonically incrementing) guards against cross-talk betwee
 
 ## Resumability
 
-`VectorStore` keeps a composite `UNIQUE (text_hash, agent, session_id)` on `recall_entries`. `Indexer.filterAlreadyIndexed` loads the existing `text_hash` set once per refresh and short-circuits entries that are already persisted. Cancel an in-progress index build, search again, and `Indexer.refresh` only re-embeds the unfinished tail.
-
-The chunked structure of `Indexer.refresh` (64 entries per CoreML batch, written transactionally per batch) means worst-case work lost to a cancel is one batch.
+`VectorStore` keeps a composite `UNIQUE (text_hash, agent, session_id)` on `recall_entries`, and `insertText` is `INSERT OR IGNORE`, so re-walking a transcript never duplicates rows. Indexing has two phases: `Indexer.indexText()` stores new message text (searchable at once), and `Indexer.embedPending()` embeds entries that have no vector yet, 64 per CoreML batch, written per batch. Cancel an in-progress embed and the next pass picks up the entries still missing vectors, so the worst-case work lost is one batch.
 
 ## Sparkle delta cost
 

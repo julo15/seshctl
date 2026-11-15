@@ -8,8 +8,13 @@
 // exists, else insert + embed") that would otherwise need explicit
 // transaction nesting.
 //
-// Schema: see migration `v13_create_recall_tables` in
-// `Sources/SeshctlCore/Database.swift`.
+// Schema: see migrations `v13_create_recall_tables` and
+// `v16_create_recall_fts` in `Sources/SeshctlCore/Database.swift`.
+//
+// Text and embeddings land separately. `insertText` makes a message
+// keyword-searchable immediately (the FTS triggers index it on insert);
+// `insertEmbeddings` fills in its vector later, when semantic search runs.
+// An entry without an embedding is normal, not corruption.
 //
 // Embedding serialization: raw little-endian FP32 byte buffer (no version
 // tag). 384 floats × 4 bytes = 1536 bytes per row. Endianness matches the
@@ -69,7 +74,7 @@ public actor VectorStore {
                     entry.sessionID,
                     entry.project,
                     entry.timestamp,
-                    entry.text,
+                    entry.storedText,
                     entry.textHash,
                 ])
                 // `changes` is 1 if the row landed, 0 if IGNOREd.
@@ -85,6 +90,75 @@ public actor VectorStore {
                 inserted.append(rowID)
             }
             return inserted
+        }
+    }
+
+    /// Rows per write transaction in `insertText`.
+    static let insertTextBatchSize = 500
+
+    /// Insert entries without embeddings. Same dedup rule as
+    /// `insert(entries:embeddings:)`. The FTS triggers index each landed
+    /// row, so it's keyword-searchable as soon as this returns.
+    ///
+    /// Writes in transactions of `insertTextBatchSize` rows. A first run
+    /// inserts the whole history (16k+ rows, each with FTS work), and the
+    /// database has no busy timeout, so one long transaction would make the
+    /// hooks' session-status writes fail for its whole duration.
+    ///
+    /// - Returns: the row ids of the entries that were actually inserted.
+    @discardableResult
+    public func insertText(entries: [HistoryEntry]) throws -> [Int64] {
+        var inserted: [Int64] = []
+        inserted.reserveCapacity(entries.count)
+        var start = entries.startIndex
+        while start < entries.endIndex {
+            let end = min(start + Self.insertTextBatchSize, entries.endIndex)
+            inserted += try insertTextBatch(entries[start..<end])
+            start = end
+        }
+        return inserted
+    }
+
+    private func insertTextBatch(_ entries: ArraySlice<HistoryEntry>) throws -> [Int64] {
+        try database.dbPool.write { db in
+            var inserted: [Int64] = []
+            inserted.reserveCapacity(entries.count)
+            for entry in entries {
+                try db.execute(sql: """
+                    INSERT OR IGNORE INTO recall_entries
+                        (agent, role, session_id, project, timestamp, text, text_hash)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, arguments: [
+                    entry.agent,
+                    entry.role,
+                    entry.sessionID,
+                    entry.project,
+                    entry.timestamp,
+                    entry.storedText,
+                    entry.textHash,
+                ])
+                guard db.changesCount == 1 else { continue }
+                inserted.append(db.lastInsertedRowID)
+            }
+            return inserted
+        }
+    }
+
+    /// Store embeddings for entries already in `recall_entries`. Replaces
+    /// any existing vector for the same id.
+    public func insertEmbeddings(ids: [Int64], vectors: [[Float]]) throws {
+        precondition(
+            ids.count == vectors.count,
+            "VectorStore.insertEmbeddings: ids.count (\(ids.count)) != vectors.count (\(vectors.count))"
+        )
+        guard !ids.isEmpty else { return }
+        try database.dbPool.write { db in
+            for (id, vector) in zip(ids, vectors) {
+                try db.execute(sql: """
+                    INSERT OR REPLACE INTO recall_embeddings (entry_id, vector)
+                    VALUES (?, ?)
+                """, arguments: [id, Self.encode(vector: vector)])
+            }
         }
     }
 
@@ -135,16 +209,7 @@ public actor VectorStore {
             var byID: [Int64: HistoryEntry] = [:]
             byID.reserveCapacity(rows.count)
             for row in rows {
-                let entry = HistoryEntry(
-                    id: row["id"],
-                    agent: row["agent"],
-                    role: row["role"],
-                    sessionID: row["session_id"],
-                    project: row["project"],
-                    timestamp: row["timestamp"],
-                    text: row["text"],
-                    textHash: row["text_hash"]
-                )
+                let entry = Self.entry(from: row)
                 if let entryID = entry.id {
                     byID[entryID] = entry
                 }
@@ -153,53 +218,330 @@ public actor VectorStore {
         }
     }
 
-    /// Return the subset of `entries` whose `(text_hash, agent, session_id)`
-    /// triple is NOT already in `recall_entries`. Used by `Indexer.refresh`
-    /// to make canceled-then-resumed indexing cheap: the adapter still
-    /// re-walks the same transcripts (cheap), but only entries not yet
-    /// persisted go through the expensive embed step.
-    ///
-    /// Loads ALL existing triples into a Set once per call (8k rows × ~80
-    /// bytes = ~640KB resident, trivial). Don't call this in a hot loop.
-    public func filterAlreadyIndexed(_ entries: [HistoryEntry]) throws -> [HistoryEntry] {
-        guard !entries.isEmpty else { return [] }
-        let existing = try loadExistingDedupKeys()
-        // First-ever-refresh fast path: nothing in DB → every input is new.
-        // Skip the filter walk + per-entry Set lookups.
-        guard !existing.isEmpty else { return entries }
-        return entries.filter { entry in
-            !existing.contains(Self.dedupKey(
-                textHash: entry.textHash,
-                agent: entry.agent,
-                sessionID: entry.sessionID
-            ))
-        }
+    /// Display priority of a `title_fts.source`, lowest first: a picked
+    /// title beats the `ai-title`, which beats the `custom-title`, which
+    /// beats the first-message fallback. Mirrors `sessionTitle` and
+    /// `SessionListViewModel.historyTitle`.
+    private static func titleSourcePriority(_ column: String) -> String {
+        "CASE \(column) WHEN 'picked' THEN 0 WHEN 'ai' THEN 1 WHEN 'custom' THEN 2 ELSE 3 END"
     }
 
-    private func loadExistingDedupKeys() throws -> Set<String> {
+    /// Sessions whose displayed title matches an FTS5 MATCH expression,
+    /// best match first, one per session.
+    ///
+    /// `title_fts` holds one row per title source (picked with `t`,
+    /// indexed `ai-title`/`custom-title`, first-message fallback), but a
+    /// row shows only the highest-priority one. A session counts only when
+    /// that shown title matches, so a hidden `custom-title` or a replaced
+    /// `ai-title` can't lift it into the title tier. That leaves at most one
+    /// row per session, so the LIMIT counts sessions.
+    public func titleMatches(match: String, limit: Int) throws -> [TitleMatch] {
         try database.dbPool.read { db in
             let rows = try Row.fetchAll(
                 db,
-                sql: "SELECT text_hash, agent, session_id FROM recall_entries"
+                sql: """
+                    SELECT title_fts.agent, title_fts.session_id,
+                           highlight(title_fts, 0, ?, ?) AS marked, rank,
+                           (SELECT MAX(e.timestamp) FROM recall_entries e
+                            WHERE e.agent = title_fts.agent AND e.session_id = title_fts.session_id) AS latest
+                    FROM title_fts
+                    WHERE title_fts MATCH ?
+                      AND NOT EXISTS (
+                          SELECT 1 FROM title_fts o
+                          WHERE o.agent = title_fts.agent AND o.session_id = title_fts.session_id
+                            AND \(Self.titleSourcePriority("o.source")) < \(Self.titleSourcePriority("title_fts.source"))
+                      )
+                    ORDER BY rank
+                    LIMIT ?
+                """,
+                arguments: [KeywordHit.matchStart, KeywordHit.matchEnd, match, limit]
             )
-            var keys = Set<String>()
-            keys.reserveCapacity(rows.count)
+            // Guard: the priority filter already leaves one row per session.
+            var seen: Set<String> = []
+            var matches: [TitleMatch] = []
             for row in rows {
-                keys.insert(Self.dedupKey(
-                    textHash: row["text_hash"],
+                let title = TitleMatch(
                     agent: row["agent"],
-                    sessionID: row["session_id"]
-                ))
+                    sessionID: row["session_id"],
+                    marked: row["marked"],
+                    rank: row["rank"],
+                    latest: row["latest"]
+                )
+                if seen.insert(title.sessionKey).inserted { matches.append(title) }
             }
-            return keys
+            return matches
         }
     }
 
-    private static func dedupKey(textHash: String, agent: String, sessionID: String) -> String {
-        // `|` is not a valid char in either text_hash (hex SHA-256), agent
-        // (lowercase ASCII), or session_id (uuid-ish), so collisions are
-        // structurally impossible.
-        "\(textHash)|\(agent)|\(sessionID)"
+    /// A session's newest stored message, the stand-in hit for a session
+    /// that matched only by title. `textLimit` caps the returned text, in
+    /// characters; the stand-in has no snippet, so the row draws from it.
+    public func latestEntry(agent: String, sessionID: String, textLimit: Int? = nil) throws -> HistoryEntry? {
+        try database.dbPool.read { db in
+            try Row.fetchOne(
+                db,
+                sql: """
+                    SELECT id, agent, role, session_id, project, timestamp,
+                           substr(text, 1, ?) AS text, text_hash
+                    FROM recall_entries
+                    WHERE agent = ? AND session_id = ?
+                    ORDER BY timestamp DESC, id DESC
+                    LIMIT 1
+                """,
+                arguments: [Int64(textLimit ?? Int(Int64.max)), agent, sessionID]
+            ).map(Self.entry(from:))
+        }
+    }
+
+    /// Store session titles found while indexing. A nil field leaves the
+    /// stored value alone, so a pass that saw only a `custom-title` doesn't
+    /// erase an earlier `ai-title`.
+    public func upsertTitles(_ titles: [IndexedTitle]) throws {
+        guard !titles.isEmpty else { return }
+        try database.dbPool.write { db in
+            for title in titles {
+                try db.execute(sql: """
+                    INSERT INTO recall_titles (agent, session_id, ai_title, custom_title)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT (agent, session_id) DO UPDATE SET
+                        ai_title = COALESCE(excluded.ai_title, ai_title),
+                        custom_title = COALESCE(excluded.custom_title, custom_title)
+                """, arguments: [title.agent, title.sessionID, title.aiTitle, title.customTitle])
+            }
+        }
+    }
+
+    /// How many leading user messages `sessionTitle` checks for one the
+    /// user typed (skill bodies and notifications come first in some
+    /// sessions).
+    static let firstMessageScanLimit = 10
+    /// Longest first-message title, in characters.
+    static let firstMessageTitleLength = 120
+
+    /// A display name for a session: its indexed `ai-title`, else its
+    /// `custom-title`, else its first typed message flattened to one line
+    /// and cut to `firstMessageTitleLength`. `nil` when there's none.
+    public func sessionTitle(agent: String, sessionID: String) throws -> String? {
+        try database.dbPool.read { db in
+            if let row = try Row.fetchOne(
+                db,
+                sql: "SELECT ai_title, custom_title FROM recall_titles WHERE agent = ? AND session_id = ?",
+                arguments: [agent, sessionID]
+            ), let title = (row["ai_title"] as String?) ?? (row["custom_title"] as String?) {
+                return title
+            }
+            if let fallback = try String.fetchOne(
+                db,
+                sql: "SELECT title FROM recall_fallback_titles WHERE agent = ? AND session_id = ?",
+                arguments: [agent, sessionID]
+            ) {
+                return fallback
+            }
+            return try Self.firstMessageTitle(db, agent: agent, sessionID: sessionID)
+        }
+    }
+
+    /// Rows per write transaction in `fillFallbackTitles`.
+    static let fallbackTitleBatchSize = 500
+
+    /// Store a first-message name for every session that has neither a real
+    /// title nor one yet, so title search matches the name History rows
+    /// show. Sessions with no typed message yet are retried on the next
+    /// call. Cheap after the first run: only new sessions lack a row.
+    ///
+    /// The scan and the name computation run in a read, off the write lock
+    /// (the database has no busy timeout, so a long write fails hook
+    /// writes). The inserts follow in `fallbackTitleBatchSize`-row
+    /// transactions, each skipping a session that gained a real title or a
+    /// fallback since the read. `INSERT OR REPLACE` is off limits here: it
+    /// wouldn't fire the delete triggers that keep `title_fts` in step.
+    public func fillFallbackTitles() throws {
+        let pending: [(agent: String, sessionID: String, title: String)] = try database.dbPool.read { db in
+            let sessions = try Row.fetchAll(db, sql: """
+                SELECT DISTINCT e.agent, e.session_id
+                FROM recall_entries e
+                WHERE e.role = 'user' AND e.session_id != ''
+                  AND NOT EXISTS (SELECT 1 FROM recall_titles t WHERE t.agent = e.agent AND t.session_id = e.session_id)
+                  AND NOT EXISTS (SELECT 1 FROM recall_fallback_titles f WHERE f.agent = e.agent AND f.session_id = e.session_id)
+            """)
+            var pending: [(agent: String, sessionID: String, title: String)] = []
+            for row in sessions {
+                let agent: String = row["agent"]
+                let sessionID: String = row["session_id"]
+                guard let title = try Self.firstMessageTitle(db, agent: agent, sessionID: sessionID) else { continue }
+                pending.append((agent, sessionID, title))
+            }
+            return pending
+        }
+
+        var start = pending.startIndex
+        while start < pending.endIndex {
+            let end = min(start + Self.fallbackTitleBatchSize, pending.endIndex)
+            let batch = pending[start..<end]
+            try database.dbPool.write { db in
+                for item in batch {
+                    try db.execute(
+                        sql: """
+                            INSERT OR IGNORE INTO recall_fallback_titles (agent, session_id, title)
+                            SELECT ?, ?, ?
+                            WHERE NOT EXISTS (SELECT 1 FROM recall_titles WHERE agent = ? AND session_id = ?)
+                        """,
+                        arguments: [item.agent, item.sessionID, item.title, item.agent, item.sessionID]
+                    )
+                }
+            }
+            start = end
+        }
+    }
+
+    /// The session's first typed user message on one line, cut to
+    /// `firstMessageTitleLength`, or `nil` when it has none.
+    private static func firstMessageTitle(_ db: Database, agent: String, sessionID: String) throws -> String? {
+        let texts = try String.fetchAll(
+            db,
+            sql: """
+                SELECT text FROM recall_entries
+                WHERE agent = ? AND session_id = ? AND role = 'user'
+                ORDER BY timestamp ASC, id ASC
+                LIMIT ?
+            """,
+            arguments: [agent, sessionID, Self.firstMessageScanLimit]
+        )
+        guard let typed = texts.lazy.compactMap(TitleSuggester.typedRequest).first else { return nil }
+        let line = typed.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard line.count > Self.firstMessageTitleLength else { return line }
+        return String(line.prefix(Self.firstMessageTitleLength - 1)) + "…"
+    }
+
+    /// Every stored message of one session, oldest first. The index keeps
+    /// one copy of each distinct message text per session, so a repeated
+    /// message ("yes") appears once, at its first occurrence.
+    public func entries(agent: String, sessionID: String) throws -> [HistoryEntry] {
+        try database.dbPool.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT id, agent, role, session_id, project, timestamp, text, text_hash
+                    FROM recall_entries
+                    WHERE agent = ? AND session_id = ?
+                    ORDER BY timestamp ASC, id ASC
+                """,
+                arguments: [agent, sessionID]
+            )
+            return rows.map(Self.entry(from:))
+        }
+    }
+
+    /// Up to `limit` entries that have no embedding yet, oldest id first.
+    public func entriesMissingEmbeddings(limit: Int) throws -> [HistoryEntry] {
+        try database.dbPool.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT e.id, e.agent, e.role, e.session_id, e.project, e.timestamp, e.text, e.text_hash
+                    FROM recall_entries e
+                    WHERE NOT EXISTS (SELECT 1 FROM recall_embeddings m WHERE m.entry_id = e.id)
+                    ORDER BY e.id ASC
+                    LIMIT ?
+                """,
+                arguments: [limit]
+            )
+            return rows.map(Self.entry(from:))
+        }
+    }
+
+    /// Number of entries that have an embedding.
+    public func embeddingCount() throws -> Int {
+        try database.dbPool.read { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM recall_embeddings") ?? 0
+        }
+    }
+
+    /// Step 1 of keyword search: messages matching an FTS5 MATCH
+    /// expression, best first, without their text.
+    ///
+    /// - Parameters:
+    ///   - match: an FTS5 query, normally from
+    ///     `KeywordQuery.matchExpression(for:)`. Raw user input can be a
+    ///     syntax error.
+    ///   - limit: cap on message-level matches. Callers group these by session.
+    /// - Returns: matches ordered by FTS5's `bm25` (more negative is better).
+    public func keywordCandidates(match: String, limit: Int) throws -> [KeywordCandidate] {
+        try database.dbPool.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT e.id, e.agent, e.session_id, e.timestamp, bm25(recall_fts) AS rank
+                    FROM recall_fts
+                    JOIN recall_entries e ON e.id = recall_fts.rowid
+                    WHERE recall_fts MATCH ?
+                    ORDER BY rank
+                    LIMIT ?
+                """,
+                arguments: [match, limit]
+            )
+            return rows.map { row in
+                KeywordCandidate(
+                    id: row["id"],
+                    agent: row["agent"],
+                    sessionID: row["session_id"],
+                    timestamp: row["timestamp"],
+                    rank: row["rank"]
+                )
+            }
+        }
+    }
+
+    /// Step 2 of keyword search: full entries and snippets for the chosen
+    /// candidates. `snippet()` costs time in proportion to a message's
+    /// length, which is why it runs only for the rows that get shown.
+    ///
+    /// - Parameters:
+    ///   - match: the same MATCH expression the candidates came from.
+    ///     `snippet()` needs it to find the matched terms.
+    ///   - ids: candidate ids, in display order.
+    /// - Returns: hits in the order of `ids`. Ids that no longer match are
+    ///   dropped. Each snippet wraps matched terms in `KeywordHit.matchStart` /
+    ///   `KeywordHit.matchEnd`.
+    public func keywordHits(match: String, ids: [Int64]) throws -> [KeywordHit] {
+        guard !ids.isEmpty else { return [] }
+        return try database.dbPool.read { db in
+            let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ",")
+            var arguments: StatementArguments = [KeywordHit.matchStart, KeywordHit.matchEnd, match]
+            arguments += StatementArguments(ids)
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT e.id, e.agent, e.role, e.session_id, e.project, e.timestamp, e.text, e.text_hash,
+                           snippet(recall_fts, 0, ?, ?, '…', 16) AS snippet
+                    FROM recall_fts
+                    JOIN recall_entries e ON e.id = recall_fts.rowid
+                    WHERE recall_fts MATCH ? AND recall_fts.rowid IN (\(placeholders))
+                """,
+                arguments: arguments
+            )
+            var byID: [Int64: KeywordHit] = [:]
+            for row in rows {
+                let entry = Self.entry(from: row)
+                if let id = entry.id {
+                    byID[id] = KeywordHit(entry: entry, snippet: row["snippet"])
+                }
+            }
+            return ids.compactMap { byID[$0] }
+        }
+    }
+
+    private static func entry(from row: Row) -> HistoryEntry {
+        HistoryEntry(
+            id: row["id"],
+            agent: row["agent"],
+            role: row["role"],
+            sessionID: row["session_id"],
+            project: row["project"],
+            timestamp: row["timestamp"],
+            text: row["text"],
+            textHash: row["text_hash"]
+        )
     }
 
     /// Total number of rows in `recall_entries`. Used for indexing UX
@@ -243,19 +585,7 @@ public actor VectorStore {
         }
     }
 
-    // MARK: - Drift detection + rebuild.
-
-    /// Returns `true` when `recall_entries.count != recall_embeddings.count`.
-    /// Indexer calls this on every refresh; on drift it wipes both tables
-    /// and resets cursors before re-indexing. Mirrors the same posture as
-    /// the Python recall pipeline (`recall/index.py`).
-    public func detectDrift() throws -> Bool {
-        try database.dbPool.read { db in
-            let entryCount = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM recall_entries") ?? 0
-            let embedCount = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM recall_embeddings") ?? 0
-            return entryCount != embedCount
-        }
-    }
+    // MARK: - Reset.
 
     /// Wipe both `recall_entries` and `recall_embeddings` plus the cursor
     /// table. Cursor wipe ensures the next refresh re-walks from scratch

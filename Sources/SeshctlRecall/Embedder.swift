@@ -33,3 +33,41 @@ public protocol Embedder: Actor {
 }
 
 extension EmbeddingService: Embedder {}
+
+/// Defers building the real embedder until the first `encode`. Keyword
+/// search shares `RecallStack` with semantic search but never embeds, so it
+/// shouldn't pay the CoreML model load.
+actor LazyEmbedder: Embedder {
+    private let make: @Sendable () async throws -> any Embedder
+    private var loading: Task<any Embedder, Error>?
+
+    init(_ make: @escaping @Sendable () async throws -> any Embedder) {
+        self.make = make
+    }
+
+    func encode(
+        _ texts: [String],
+        batchSize: Int,
+        onProgress: (@Sendable (Int, Int) -> Void)?
+    ) async throws -> [[Float]] {
+        let embedder = try await resolve()
+        return try await embedder.encode(texts, batchSize: batchSize, onProgress: onProgress)
+    }
+
+    /// Concurrent first calls share one load. A failed load is retried on
+    /// the next call.
+    private func resolve() async throws -> any Embedder {
+        if let loading {
+            return try await loading.value
+        }
+        let make = self.make
+        let task = Task { try await make() }
+        loading = task
+        do {
+            return try await task.value
+        } catch {
+            loading = nil
+            throw error
+        }
+    }
+}

@@ -39,8 +39,14 @@ public struct ClaudeAdapter: Adapter {
     }
 
     public func load(cursor: Data?) async throws -> (entries: [HistoryEntry], newCursor: Data) {
+        let result = try await loadWithTitles(cursor: cursor)
+        return (result.entries, result.newCursor)
+    }
+
+    public func loadWithTitles(cursor: Data?) async throws -> AdapterLoad {
         var fileCursors = Self.decodeCursor(cursor)
         var entries: [HistoryEntry] = []
+        var titles: [IndexedTitle] = []
 
         let transcripts = transcriptFiles()
         for transcriptURL in transcripts {
@@ -59,6 +65,9 @@ public struct ClaudeAdapter: Adapter {
 
             let sessionID = transcriptURL.deletingPathExtension().lastPathComponent
             var fileEntries: [(role: String, text: String, timestamp: Double)] = []
+            // Last record of each kind wins, as in `TranscriptTitleScanner`.
+            var aiTitle: String?
+            var customTitle: String?
 
             let read: (lines: [String], newOffset: Int64)
             do {
@@ -94,7 +103,11 @@ public struct ClaudeAdapter: Adapter {
                 let timestampString = data["timestamp"] as? String ?? ""
                 let timestamp = AdapterHelpers.parseISO8601(timestampString)
 
-                if entryType == "user" {
+                if entryType == "ai-title", let title = Self.nonEmptyTitle(data["aiTitle"]) {
+                    aiTitle = title
+                } else if entryType == "custom-title", let title = Self.nonEmptyTitle(data["customTitle"]) {
+                    customTitle = title
+                } else if entryType == "user" {
                     if let text = Self.extractUserText(message: message) {
                         let cleaned = Self.stripTags(text)
                         if !cleaned.isEmpty {
@@ -114,6 +127,9 @@ public struct ClaudeAdapter: Adapter {
             }
 
             fileCursor.offset = read.newOffset
+            if aiTitle != nil || customTitle != nil {
+                titles.append(IndexedTitle(agent: name, sessionID: sessionID, aiTitle: aiTitle, customTitle: customTitle))
+            }
 
             // Resolve project: prefer cwd, else decoded dir name.
             let project: String
@@ -142,7 +158,34 @@ public struct ClaudeAdapter: Adapter {
         }
 
         let newCursor = Self.encodeCursor(fileCursors)
-        return (entries, newCursor)
+        return AdapterLoad(entries: entries, titles: titles, newCursor: newCursor)
+    }
+
+    /// Longest stored transcript title, in characters.
+    static let maxTitleLength = 200
+
+    private static func nonEmptyTitle(_ value: Any?) -> String? {
+        (value as? String).flatMap(sanitizedTitle)
+    }
+
+    /// A transcript title made safe to store and show on one line: every
+    /// whitespace run (newlines included) becomes one space, other C0
+    /// control characters are dropped (`\u{1}`/`\u{2}` are the search
+    /// highlight markers), and the result is trimmed and cut to
+    /// `maxTitleLength`, ending in "…" when cut. `nil` when nothing is left.
+    static func sanitizedTitle(_ raw: String) -> String? {
+        var scalars = String.UnicodeScalarView()
+        for scalar in raw.unicodeScalars {
+            if scalar.properties.isWhitespace {
+                scalars.append(" ")
+            } else if scalar.value >= 0x20 {
+                scalars.append(scalar)
+            }
+        }
+        let line = String(scalars).split(separator: " ").joined(separator: " ")
+        guard !line.isEmpty else { return nil }
+        guard line.count > maxTitleLength else { return line }
+        return String(line.prefix(maxTitleLength - 1)) + "…"
     }
 
     // MARK: - Helpers

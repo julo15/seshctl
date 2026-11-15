@@ -235,32 +235,22 @@ public struct SessionListView: View {
                                     .padding(.top, -4) // adjust since ForEach won't insert it
                             }
 
-                            // Semantic search section
+                            // History search section (keyword matches across all transcripts)
                             if viewModel.isSearching {
                                 if viewModel.isRecallSearching {
                                     HStack(spacing: 6) {
                                         ProgressView()
                                             .controlSize(.small)
-                                        Group {
-                                            if let total = viewModel.recallIndexingTotal {
-                                                if let done = viewModel.recallIndexingDone, done > 0 {
-                                                    Text("Indexing \(done)/\(total) entries...")
-                                                } else {
-                                                    Text("Indexing \(total) entries...")
-                                                }
-                                            } else {
-                                                Text("Searching...")
-                                            }
-                                        }
-                                        .font(.system(.footnote, design: .monospaced))
-                                        .foregroundStyle(.tertiary)
+                                        Text("Searching...")
+                                            .font(.system(.footnote, design: .monospaced))
+                                            .foregroundStyle(.tertiary)
                                     }
                                     .padding(.horizontal, 16)
                                     .padding(.vertical, 8)
                                 }
 
                                 if !viewModel.recallResults.isEmpty {
-                                    sectionHeader("Semantic")
+                                    sectionHeader("History")
 
                                     ForEach(Array(viewModel.recallResults.enumerated()), id: \.element.id) { recallIndex, result in
                                         let globalIndex = ordered.count + recallIndex
@@ -269,9 +259,12 @@ public struct SessionListView: View {
 
                                         RecallResultRowView(
                                             result: result,
-                                            isActive: matchedSession?.isActive ?? false,
-                                            hostApp: matchedSession.map { hostAppResolver.resolve(session: $0) },
+                                            liveStatus: matchedSession.flatMap { $0.isActive ? $0.status : nil },
                                             searchQuery: viewModel.searchQuery,
+                                            isTranscriptDeleted: viewModel.isTranscriptDeleted(result),
+                                            isSelected: isSelected,
+                                            repoName: matchedSession?.gitRepoName,
+                                            title: viewModel.historyTitle(for: result),
                                             onDetail: onOpenRecallDetail.map { handler in
                                                 {
                                                     if let session = matchedSession {
@@ -291,9 +284,24 @@ public struct SessionListView: View {
                                                     ? Color.accentColor.opacity(0.2)
                                                     : Color.clear)
                                         )
-                                        .opacity(isSelected ? 0.9 : 0.6)
+                                        .opacity(rowOpacity(isActive: false, isSelected: isSelected))
                                         .id("recall-\(viewModel.recallGeneration)-\(recallIndex)")
                                     }
+                                }
+
+                                if viewModel.showsNoSearchResults {
+                                    VStack(spacing: 8) {
+                                        Text("No matches for \u{201C}\(viewModel.searchQuery)\u{201D}")
+                                            .font(.body)
+                                            .foregroundStyle(.secondary)
+                                        Text(viewModel.searchedHistory
+                                            ? "Searched panel sessions and all saved history."
+                                            : "Type at least two letters to search history.")
+                                            .font(.footnote)
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(24)
                                 }
 
                                 if let errorMessage = viewModel.recallErrorMessage {

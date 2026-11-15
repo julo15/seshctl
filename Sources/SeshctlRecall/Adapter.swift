@@ -30,9 +30,52 @@ public protocol Adapter: Sendable {
     /// constraint silently drops duplicates, but pre-hashing keeps the
     /// caller honest.
     func load(cursor: Data?) async throws -> (entries: [HistoryEntry], newCursor: Data)
+
+    /// `load`, plus any session titles found in the same pass. `Indexer`
+    /// calls this one. The default returns no titles, so only adapters
+    /// whose transcripts carry titles implement it.
+    func loadWithTitles(cursor: Data?) async throws -> AdapterLoad
+}
+
+/// One adapter pass: new entries, session titles seen, and the cursor to
+/// persist with them.
+public struct AdapterLoad: Sendable {
+    public let entries: [HistoryEntry]
+    public let titles: [IndexedTitle]
+    public let newCursor: Data
+
+    public init(entries: [HistoryEntry], titles: [IndexedTitle] = [], newCursor: Data) {
+        self.entries = entries
+        self.titles = titles
+        self.newCursor = newCursor
+    }
+}
+
+/// A session title found in a transcript. Either field may be nil; a nil
+/// never overwrites a stored value.
+public struct IndexedTitle: Sendable, Equatable {
+    public let agent: String
+    public let sessionID: String
+    /// Claude Code's generated title (`{"type":"ai-title"}`).
+    public let aiTitle: String?
+    /// A user-set name (`{"type":"custom-title"}`), often a remote-control
+    /// machine label; `aiTitle` wins when both exist.
+    public let customTitle: String?
+
+    public init(agent: String, sessionID: String, aiTitle: String?, customTitle: String?) {
+        self.agent = agent
+        self.sessionID = sessionID
+        self.aiTitle = aiTitle
+        self.customTitle = customTitle
+    }
 }
 
 extension Adapter {
+    public func loadWithTitles(cursor: Data?) async throws -> AdapterLoad {
+        let (entries, newCursor) = try await load(cursor: cursor)
+        return AdapterLoad(entries: entries, newCursor: newCursor)
+    }
+
     /// Convenience sentinel: empty `Data`. Adapters that have no cursor
     /// state to persist may return this from `load`.
     public static var noCursor: Data { Data() }

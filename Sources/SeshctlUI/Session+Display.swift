@@ -313,7 +313,11 @@ extension Session {
     /// read differently while still sharing the repo's color. Claude Code
     /// worktrees (`<checkout>/.claude/worktrees/<name>`) collapse to their
     /// owning checkout — the worktree name says nothing the title doesn't.
-    var folderLabel: String {
+    var folderLabel: String { Self.folderLabel(forDirectory: directory) }
+
+    /// `folderLabel` for a bare path, for rows without a `Session` (History
+    /// results carry only the project directory).
+    static func folderLabel(forDirectory directory: String) -> String {
         if let range = directory.range(of: "/.claude/worktrees/") {
             return (String(directory[..<range.lowerBound]) as NSString).lastPathComponent
         }
