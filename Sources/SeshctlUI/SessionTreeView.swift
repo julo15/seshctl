@@ -144,7 +144,7 @@ private struct GroupHeaderView: View {
         HStack(spacing: 6) {
             RepoChip(text: name, color: chipColor, size: .header)
             Text("\(count)")
-                .font(.system(size: 14.5, weight: .medium))
+                .font(.system(size: RepoChip.Size.header.fontSize, weight: .medium))
                 .foregroundStyle(.tertiary)
             Spacer()
         }

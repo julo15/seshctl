@@ -184,16 +184,36 @@ struct ResultRowLayout<Status: View, Content: View>: View {
 
 /// A repo (or folder) name in a filled capsule tinted with its color: the
 /// compact rows' trailing label and the tree view's group headers. Filled
-/// rather than outlined so it stays distinct from the model pill. Section
-/// headers (a repo group in the tree view) use the larger `.header` size.
+/// rather than outlined so it stays distinct from the model pill. Tree view
+/// group headers use the larger `.header` size.
 struct RepoChip: View {
     enum Size {
         case row, header
 
-        var fontSize: CGFloat { self == .row ? 12.5 : 14.5 }
-        var weight: Font.Weight { self == .row ? .medium : .semibold }
-        var horizontalPadding: CGFloat { self == .row ? 8 : 10 }
-        var verticalPadding: CGFloat { self == .row ? 3 : 4 }
+        var fontSize: CGFloat {
+            switch self {
+            case .row: 12.5
+            case .header: 14.5
+            }
+        }
+        var weight: Font.Weight {
+            switch self {
+            case .row: .medium
+            case .header: .semibold
+            }
+        }
+        var horizontalPadding: CGFloat {
+            switch self {
+            case .row: 8
+            case .header: 10
+            }
+        }
+        var verticalPadding: CGFloat {
+            switch self {
+            case .row: 3
+            case .header: 4
+            }
+        }
     }
 
     let text: String
