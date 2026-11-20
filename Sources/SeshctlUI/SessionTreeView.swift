@@ -5,9 +5,9 @@ struct SessionTreeView: View {
     @ObservedObject var viewModel: SessionListViewModel
     @ObservedObject var connectionStore: ClaudeCodeConnectionStore
     @StateObject private var hostAppResolver = HostAppResolver()
+    @AppStorage(AppearanceDefaults.rowLayoutKey) private var rowLayout: RowLayout = AppearanceDefaults.rowLayoutDefault
     /// Opens the selected row, exactly as Enter does. See `SessionListView`.
     var onOpenSelected: (() -> Void)?
-    @AppStorage(AppearanceDefaults.rowLayoutKey) private var rowLayout: RowLayout = AppearanceDefaults.rowLayoutDefault
     var onOpenDetail: ((Session) -> Void)?
     /// Handler for opening a bridged local row's claude.ai twin. See the
     /// matching property on `SessionListView`.
@@ -54,10 +54,7 @@ struct SessionTreeView: View {
                             rowView(for: row, showAgentBadge: showAgentBadge, isSelected: isSelected)
                                 .contentShape(Rectangle())
                                 .onTapGesture {
-                                    guard index >= 0 else { return }
-                                    let action = rowLayout.clickAction(rowIsSelected: isSelected)
-                                    viewModel.selectedIndex = index
-                                    if action == .open {
+                                    if viewModel.clickRow(id: row.id, layout: rowLayout) == .open {
                                         onOpenSelected?()
                                     }
                                 }
