@@ -5,8 +5,11 @@ public struct SessionListView: View {
     @ObservedObject var viewModel: SessionListViewModel
     @ObservedObject var connectionStore: ClaudeCodeConnectionStore
     @StateObject private var hostAppResolver = HostAppResolver()
+    @AppStorage(AppearanceDefaults.rowLayoutKey) private var rowLayout: RowLayout = AppearanceDefaults.rowLayoutDefault
     @State private var showingSettings = false
-    var onSessionTap: ((Session) -> Void)?
+    /// Opens the selected row, exactly as Enter does. Row clicks select the
+    /// row first, then call this when `RowLayout.clickAction` says `.open`.
+    var onOpenSelected: (() -> Void)?
     var onOpenDetail: ((Session) -> Void)?
     /// Handler for opening a bridged local row's claude.ai twin. Supplied by
     /// `AppDelegate`; nil in previews/tests leaves the cloud glyph static.
@@ -32,7 +35,7 @@ public struct SessionListView: View {
     public init(
         viewModel: SessionListViewModel,
         connectionStore: ClaudeCodeConnectionStore,
-        onSessionTap: ((Session) -> Void)? = nil,
+        onOpenSelected: (() -> Void)? = nil,
         onOpenDetail: ((Session) -> Void)? = nil,
         onOpenWeb: ((Session) -> Void)? = nil,
         onOpenRecallDetail: ((RecallResult, Session?) -> Void)? = nil,
@@ -43,7 +46,7 @@ public struct SessionListView: View {
     ) {
         self.viewModel = viewModel
         self.connectionStore = connectionStore
-        self.onSessionTap = onSessionTap
+        self.onOpenSelected = onOpenSelected
         self.onOpenDetail = onOpenDetail
         self.onOpenWeb = onOpenWeb
         self.onOpenRecallDetail = onOpenRecallDetail
@@ -170,7 +173,7 @@ public struct SessionListView: View {
                 SessionTreeView(
                     viewModel: viewModel,
                     connectionStore: connectionStore,
-                    onSessionTap: onSessionTap,
+                    onOpenSelected: onOpenSelected,
                     onOpenDetail: onOpenDetail,
                     onOpenWeb: onOpenWeb
                 )
@@ -215,9 +218,8 @@ public struct SessionListView: View {
                                 rowView(for: row, showAgentBadge: showAgentBadge, isSelected: isSelected)
                                     .contentShape(Rectangle())
                                     .onTapGesture {
-                                        viewModel.selectedIndex = index
-                                        if case .local(let session) = row {
-                                            onSessionTap?(session)
+                                        if viewModel.clickRow(id: row.id, layout: rowLayout) == .open {
+                                            onOpenSelected?()
                                         }
                                     }
                                     .background(
@@ -276,7 +278,9 @@ public struct SessionListView: View {
                                         )
                                         .contentShape(Rectangle())
                                         .onTapGesture {
-                                            viewModel.selectedIndex = globalIndex
+                                            if viewModel.clickHistoryResult(id: result.id) == .open {
+                                                onOpenSelected?()
+                                            }
                                         }
                                         .background(
                                             RoundedRectangle(cornerRadius: 6)

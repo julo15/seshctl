@@ -113,4 +113,23 @@ public enum RowLayout: String, CaseIterable, Sendable {
         case .twoColumn: return "Two-column"
         }
     }
+
+    /// What a click on a row does. In compact, the selected row expands its
+    /// message, so the first click on an unselected row selects it (showing
+    /// the full message) and a click on the selected row opens it. The other
+    /// layouts show the whole row already, so one click opens it.
+    public func clickAction(rowIsSelected: Bool) -> RowClickAction {
+        switch self {
+        case .compact: return rowIsSelected ? .open : .select
+        case .stacked, .twoColumn: return .open
+        }
+    }
+}
+
+/// See `RowLayout.clickAction(rowIsSelected:)`.
+public enum RowClickAction: Equatable, Sendable {
+    /// Select the row only.
+    case select
+    /// Select the row and open it, exactly as Enter would.
+    case open
 }

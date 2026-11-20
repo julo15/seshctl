@@ -139,7 +139,7 @@ public final class SessionListViewModel: ObservableObject {
     var titleCachePaths: Set<String> { Set(transcriptTitleCache.keys) }
     /// Codex index paths currently held in the thread-name cache. Test-only.
     var codexThreadNameCachePaths: Set<String> { Set(codexThreadNameCache.keys) }
-    @Published public private(set) var recallResults: [RecallResult] = []
+    @Published public internal(set) var recallResults: [RecallResult] = []
     @Published public private(set) var isRecallSearching: Bool = false
     /// User-facing one-line failure message for the History search
     /// section. Populated on any `RecallError` (the detail is truncated
@@ -881,6 +881,61 @@ public final class SessionListViewModel: ObservableObject {
 
     /// The currently selected row, or nil if selection is out of range or
     /// refers to the recall section.
+    // MARK: - Row clicks
+
+    /// Two opens of the same row closer together than this are one double
+    /// click, not two requests. A pinned panel stays up after opening, so
+    /// without this a double click resumed a History or closed row twice.
+    static let repeatOpenWindow: TimeInterval = 0.5
+
+    /// The last row a click opened, for `repeatOpenWindow`.
+    private var lastClickOpen: (key: String, at: Date)?
+
+    /// Clock for `repeatOpenWindow`; tests replace it.
+    var clickClock: () -> Date = Date.init
+
+    /// Handle a click on a panel row: select it and say whether to open it
+    /// (the caller then opens the selection, exactly as Enter does). Looks
+    /// the row up by id, not by the position it was drawn at, so a list that
+    /// reordered since the last draw can't open the wrong row. Returns nil
+    /// when the row is no longer in the list.
+    @discardableResult
+    public func clickRow(id: String, layout: RowLayout) -> RowClickAction? {
+        guard let index = orderedRows.firstIndex(where: { $0.id == id }) else { return nil }
+        return click(index: index, key: "row:\(id)", layout: layout)
+    }
+
+    /// `clickRow` for a History result. History rows always render compact,
+    /// so they always select first.
+    @discardableResult
+    public func clickHistoryResult(id: String) -> RowClickAction? {
+        guard isSearching, let offset = recallResults.firstIndex(where: { $0.id == id }) else { return nil }
+        return click(index: orderedRows.count + offset, key: "history:\(id)", layout: .compact)
+    }
+
+    private func click(index: Int, key: String, layout: RowLayout) -> RowClickAction {
+        // Like the arrow keys: a pending x / fork / mark-all prompt belongs to
+        // the old selection, so a y after clicking elsewhere mustn't act on it.
+        pendingKillSessionId = nil
+        pendingForkSessionId = nil
+        pendingMarkAllRead = false
+
+        var action = layout.clickAction(rowIsSelected: index == selectedIndex)
+        selectedIndex = index
+        // Keys now navigate from the clicked row instead of typing into the query.
+        if isSearching { isNavigatingSearch = true }
+
+        if action == .open {
+            let now = clickClock()
+            if let last = lastClickOpen, last.key == key, now.timeIntervalSince(last.at) < Self.repeatOpenWindow {
+                action = .select
+            } else {
+                lastClickOpen = (key, now)
+            }
+        }
+        return action
+    }
+
     public var selectedRow: DisplayRow? {
         let rows = orderedRows
         guard !rows.isEmpty, selectedIndex >= 0, selectedIndex < rows.count else {
