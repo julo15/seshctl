@@ -76,3 +76,22 @@ struct RowLayoutTests {
         #expect(RowLayout(rawValue: "grid") == nil)
     }
 }
+
+@Suite("RowLayout.clickAction")
+struct RowClickActionTests {
+    @Test("Compact: a click on an unselected row selects it, so its message expands")
+    func compactSelectsFirst() {
+        #expect(RowLayout.compact.clickAction(rowIsSelected: false) == .select)
+    }
+
+    @Test("Compact: a click on the selected row opens it")
+    func compactOpensSelected() {
+        #expect(RowLayout.compact.clickAction(rowIsSelected: true) == .open)
+    }
+
+    @Test("Stacked and two-column don't collapse, so one click opens", arguments: [RowLayout.stacked, .twoColumn])
+    func nonCompactOpensImmediately(layout: RowLayout) {
+        #expect(layout.clickAction(rowIsSelected: false) == .open)
+        #expect(layout.clickAction(rowIsSelected: true) == .open)
+    }
+}

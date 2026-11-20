@@ -185,11 +185,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 navigationState: nav,
                 listViewModel: vm,
                 connectionStore: store,
-                onSessionTap: { [weak self] session in
+                onOpenSelected: { [weak self] in
+                    // Same path as Enter, so a click opens local, remote and
+                    // History rows alike.
                     guard let self, let vm = self.viewModel else { return }
-                    let target: SessionActionTarget = session.isActive
-                        ? .activeSession(session) : .inactiveSession(session)
-                    self.dispatch(target, vm: vm)
+                    self.executeSessionAction(vm: vm)
                 },
                 onOpenDetail: { [weak nav] session in
                     nav?.openDetail(for: session)
@@ -1364,7 +1364,7 @@ struct RootView: View {
     @ObservedObject var navigationState: NavigationState
     @ObservedObject var listViewModel: SessionListViewModel
     @ObservedObject var connectionStore: ClaudeCodeConnectionStore
-    var onSessionTap: ((Session) -> Void)?
+    var onOpenSelected: (() -> Void)?
     var onOpenDetail: ((Session) -> Void)?
     /// Supplied by `AppDelegate` so a bridged row's cloud glyph can open the
     /// claude.ai half of the pair with the mouse. Same effect as the `w` key.
@@ -1392,7 +1392,7 @@ struct RootView: View {
                 SessionListView(
                     viewModel: listViewModel,
                     connectionStore: connectionStore,
-                    onSessionTap: onSessionTap,
+                    onOpenSelected: onOpenSelected,
                     onOpenDetail: onOpenDetail,
                     onOpenWeb: onOpenWeb,
                     onOpenRecallDetail: onOpenRecallDetail,

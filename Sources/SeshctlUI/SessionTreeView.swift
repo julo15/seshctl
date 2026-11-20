@@ -5,7 +5,9 @@ struct SessionTreeView: View {
     @ObservedObject var viewModel: SessionListViewModel
     @ObservedObject var connectionStore: ClaudeCodeConnectionStore
     @StateObject private var hostAppResolver = HostAppResolver()
-    var onSessionTap: ((Session) -> Void)?
+    /// Opens the selected row, exactly as Enter does. See `SessionListView`.
+    var onOpenSelected: (() -> Void)?
+    @AppStorage(AppearanceDefaults.rowLayoutKey) private var rowLayout: RowLayout = AppearanceDefaults.rowLayoutDefault
     var onOpenDetail: ((Session) -> Void)?
     /// Handler for opening a bridged local row's claude.ai twin. See the
     /// matching property on `SessionListView`.
@@ -14,13 +16,13 @@ struct SessionTreeView: View {
     init(
         viewModel: SessionListViewModel,
         connectionStore: ClaudeCodeConnectionStore,
-        onSessionTap: ((Session) -> Void)? = nil,
+        onOpenSelected: (() -> Void)? = nil,
         onOpenDetail: ((Session) -> Void)? = nil,
         onOpenWeb: ((Session) -> Void)? = nil
     ) {
         self.viewModel = viewModel
         self.connectionStore = connectionStore
-        self.onSessionTap = onSessionTap
+        self.onOpenSelected = onOpenSelected
         self.onOpenDetail = onOpenDetail
         self.onOpenWeb = onOpenWeb
     }
@@ -52,11 +54,11 @@ struct SessionTreeView: View {
                             rowView(for: row, showAgentBadge: showAgentBadge, isSelected: isSelected)
                                 .contentShape(Rectangle())
                                 .onTapGesture {
-                                    if index >= 0 {
-                                        viewModel.selectedIndex = index
-                                    }
-                                    if case .local(let session) = row {
-                                        onSessionTap?(session)
+                                    guard index >= 0 else { return }
+                                    let action = rowLayout.clickAction(rowIsSelected: isSelected)
+                                    viewModel.selectedIndex = index
+                                    if action == .open {
+                                        onOpenSelected?()
                                     }
                                 }
                                 .background(
